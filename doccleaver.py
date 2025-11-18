@@ -1,7 +1,15 @@
 
 #!/usr/bin/env python3
+# ==============================================================================
+# APPLICATION CONFIGURATION - CHANGE THESE TO RENAME THE APPLICATION
+# ==============================================================================
+APP_NAME = "DocCleaver"
+VERSION = "v1.08"
+DB_NAME = "doccleaver.db"  # Database filename (will be created in Resources folder)
+
+# ==============================================================================
 """
-DocCleaver v1.08 - FINAL RELEASE
+{APP_NAME} {VERSION} - FINAL RELEASE
 100% COMPLIANT WITH AUGUST 18, 2025 FEDERAL REGISTER
 Primary Articles: Hard-coded exactly as published
 Derivative Articles: tariff_232 table + official derivative subheadings
@@ -66,9 +74,6 @@ logger = ErrorLogger()
 # ----------------------------------------------------------------------
 # Global Paths
 # ----------------------------------------------------------------------
-APP_NAME = "DocCleaver"
-VERSION = "v1.08"
-
 # Handle PyInstaller frozen executable
 if getattr(sys, 'frozen', False):
     # Running as compiled executable
@@ -93,7 +98,7 @@ SHIPMENT_MAPPING_FILE = BASE_DIR / "shipment_mapping.json"
 for p in (RESOURCES_DIR, INPUT_DIR, OUTPUT_DIR, PROCESSED_DIR):
     p.mkdir(exist_ok=True)
 
-DB_PATH = RESOURCES_DIR / "doccleaver.db"
+DB_PATH = RESOURCES_DIR / DB_NAME
 
 # ----------------------------------------------------------------------
 # OFFICIAL SECTION 232 LOGIC - PRIMARY + DERIVATIVE (August 18, 2025)
@@ -403,7 +408,7 @@ class ProcessWorker(QThread):
 class LoginDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("DocCleaver - Login")
+        self.setWindowTitle(f"{APP_NAME} - Login")
         self.setMinimumWidth(400)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         self.authenticated_user = None
@@ -419,7 +424,7 @@ class LoginDialog(QDialog):
         layout = QVBoxLayout(self)
         
         # Header
-        header = QLabel("<h2>DocCleaver</h2>")
+        header = QLabel(f"<h2>{APP_NAME}</h2>")
         header.setAlignment(Qt.AlignCenter)
         layout.addWidget(header)
         
@@ -496,7 +501,7 @@ class LoginDialog(QDialog):
         layout.addLayout(btn_layout)
         
         # Info
-        info = QLabel("<small>Use your Windows domain credentials to access DocCleaver</small>")
+        info = QLabel(f"<small>Use your Windows domain credentials to access {APP_NAME}</small>")
         info.setAlignment(Qt.AlignCenter)
         info.setStyleSheet("color:#666; margin-top:10px;")
         layout.addWidget(info)
@@ -598,7 +603,7 @@ class LoginDialog(QDialog):
 class DocCleaver(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("DocCleaver v1.08")
+        self.setWindowTitle(f"{APP_NAME} {VERSION}")
         # Compact default size - fully scalable with no minimum constraint
         self.setGeometry(50, 50, 1200, 700)
         
@@ -2363,7 +2368,7 @@ class DocCleaver(QMainWindow):
         layout = QVBoxLayout(self.tab_guide)
         
         # Title
-        title = QLabel("<h1>DocCleaver User Guide</h1>")
+        title = QLabel(f"<h1>{APP_NAME} User Guide</h1>")
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
         
@@ -2384,7 +2389,7 @@ class DocCleaver(QMainWindow):
         </style>
         
         <h2>🚀 Getting Started</h2>
-        <p>DocCleaver is a customs documentation processing system designed to streamline invoice processing, 
+        <p>{APP_NAME} is a customs documentation processing system designed to streamline invoice processing, 
         parts management, and Section 232 tariff compliance.</p>
         
         <h2>📋 First-Time Setup</h2>
@@ -2502,7 +2507,7 @@ class DocCleaver(QMainWindow):
         <h2>📝 Understanding Section 232</h2>
         <div class="step">
             <b>What is Section 232?</b><br>
-            Section 232 refers to tariffs on steel and aluminum imports. DocCleaver automatically:
+            Section 232 refers to tariffs on steel and aluminum imports. {APP_NAME} automatically:
             <ul>
                 <li>Identifies items subject to Section 232 tariffs</li>
                 <li>Marks them with <b>bold formatting</b> in the preview</li>
@@ -2544,7 +2549,7 @@ class DocCleaver(QMainWindow):
         
         <h2>📞 Support</h2>
         <p>For additional help, check the Log View tab for detailed operation logs and error messages.</p>
-        <p><b>Version:</b> DocCleaver v1.08</p>
+        <p><b>Version:</b> {APP_NAME} {VERSION}</p>
         """
         
         guide_text = QLabel(guide_html)
@@ -3020,6 +3025,6 @@ if __name__ == "__main__":
     # Login successful, show main window
     logger.info(f"Application started by user: {login.authenticated_user}")
     win = DocCleaver()
-    win.setWindowTitle(f"DocCleaver v1.08 - User: {login.authenticated_user}")
+    win.setWindowTitle(f"{APP_NAME} {VERSION} - User: {login.authenticated_user}")
     win.show()
     sys.exit(app.exec_())
