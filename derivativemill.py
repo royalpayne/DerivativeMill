@@ -95,10 +95,11 @@ RESOURCES_DIR = BASE_DIR / "Resources"
 INPUT_DIR = BASE_DIR / "Input"
 OUTPUT_DIR = BASE_DIR / "Output"
 PROCESSED_DIR = INPUT_DIR / "Processed"
+OUTPUT_PROCESSED_DIR = OUTPUT_DIR / "Processed"
 MAPPING_FILE = BASE_DIR / "column_mapping.json"
 SHIPMENT_MAPPING_FILE = BASE_DIR / "shipment_mapping.json"
 
-for p in (RESOURCES_DIR, INPUT_DIR, OUTPUT_DIR, PROCESSED_DIR):
+for p in (RESOURCES_DIR, INPUT_DIR, OUTPUT_DIR, PROCESSED_DIR, OUTPUT_PROCESSED_DIR):
     p.mkdir(exist_ok=True)
 
 DB_PATH = RESOURCES_DIR / DB_NAME
@@ -3968,6 +3969,14 @@ class DerivativeMill(QMainWindow):
         self.export_refresh_timer.timeout.connect(self.refresh_exported_files_light)
         self.export_refresh_timer.start(10000)  # 10000ms = 10 seconds
         
+        # Clean up old exported files every 30 minutes
+        self.cleanup_timer = QTimer(self)
+        self.cleanup_timer.timeout.connect(self.cleanup_old_exports)
+        self.cleanup_timer.start(1800000)  # 1800000ms = 30 minutes
+        
+        # Run cleanup once on startup
+        QTimer.singleShot(5000, self.cleanup_old_exports)  # Wait 5 seconds after startup
+        
         logger.info("Auto-refresh enabled for file lists (10 second interval)")
     
     def refresh_input_files_light(self):
@@ -4005,6 +4014,57 @@ class DerivativeMill(QMainWindow):
                 self.refresh_exported_files()
         except:
             pass  # Silently ignore errors during auto-refresh
+    
+    def cleanup_old_exports(self):
+        """Move exported files older than 3 days to Output/Processed directory"""
+        try:
+            if not OUTPUT_DIR.exists():
+                return
+            
+            # Ensure Output/Processed directory exists
+            OUTPUT_PROCESSED_DIR.mkdir(exist_ok=True)
+            
+            from datetime import datetime, timedelta
+            cutoff_date = datetime.now() - timedelta(days=3)
+            moved_count = 0
+            
+            # Process all .xlsx files in Output directory
+            for file_path in OUTPUT_DIR.glob("*.xlsx"):
+                try:
+                    # Skip if it's a directory
+                    if file_path.is_dir():
+                        continue
+                    
+                    # Get file modification time
+                    file_mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
+                    
+                    # Move if older than 3 days
+                    if file_mtime < cutoff_date:
+                        dest_path = OUTPUT_PROCESSED_DIR / file_path.name
+                        
+                        # Handle duplicate filenames
+                        if dest_path.exists():
+                            base_name = file_path.stem
+                            ext = file_path.suffix
+                            counter = 1
+                            while dest_path.exists():
+                                dest_path = OUTPUT_PROCESSED_DIR / f"{base_name}_{counter}{ext}"
+                                counter += 1
+                        
+                        # Move the file
+                        shutil.move(str(file_path), str(dest_path))
+                        moved_count += 1
+                        logger.debug(f"Moved old export to Processed: {file_path.name}")
+                except Exception as e:
+                    logger.warning(f"Failed to move {file_path.name}: {e}")
+            
+            if moved_count > 0:
+                logger.info(f"Cleanup: Moved {moved_count} exported file(s) older than 3 days to Output/Processed")
+                # Refresh the exported files list if we're on the Process Shipment tab
+                if self.tabs.currentIndex() == 0:
+                    self.refresh_exported_files()
+        except Exception as e:
+            logger.error(f"Cleanup old exports failed: {e}")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
