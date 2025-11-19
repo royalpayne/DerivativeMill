@@ -1886,9 +1886,9 @@ class DerivativeMill(QMainWindow):
                 if idx not in [10, 11, 12]:  # Not 232%, Non-232%, 232 Status
                     item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsEditable)
 
-            # Set font colors: 232 content rows black, non-232 rows red
+            # Set font colors: 232 content rows charcoal gray, non-232 rows red
             is_steel_row = (r.get('SteelRatio', 0.0) or 0.0) > 0.0
-            row_color = QColor("black") if is_steel_row else QColor("red")
+            row_color = QColor("#4a4a4a") if is_steel_row else QColor("red")  # Medium charcoal gray for better visibility
             for item in items:
                 item.setForeground(row_color)
                 f = item.font()
