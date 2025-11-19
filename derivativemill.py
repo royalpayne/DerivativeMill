@@ -818,9 +818,11 @@ class DerivativeMill(QMainWindow):
         self.setup_actions_tab()
         self.setup_guide_tab()
 
-        self.load_available_mids()
         self.load_mapping_profiles()
         self.load_config_paths()
+        
+        # Defer database operations to after window is shown (speeds up startup)
+        QTimer.singleShot(200, self.load_available_mids)
         
         # Defer file list refreshes to after window is shown (prevents blocking on network paths)
         QTimer.singleShot(100, self.refresh_exported_files)
@@ -1321,8 +1323,8 @@ class DerivativeMill(QMainWindow):
         # Windows 11 dark theme colors
         palette.setColor(QPalette.Window, QColor(32, 32, 32))  # Main background
         palette.setColor(QPalette.WindowText, QColor(243, 243, 243))  # Primary text
-        palette.setColor(QPalette.Base, QColor(31, 31, 31))  # Secondary background for input fields
-        palette.setColor(QPalette.AlternateBase, QColor(45, 45, 45))  # Tertiary background for alternating rows
+        palette.setColor(QPalette.Base, QColor(51, 51, 51))  # Secondary background for input fields
+        palette.setColor(QPalette.AlternateBase, QColor(115, 115, 115))  # Tertiary background for alternating rows
         palette.setColor(QPalette.ToolTipBase, QColor(45, 45, 45))  # Tertiary background
         palette.setColor(QPalette.ToolTipText, QColor(243, 243, 243))  # Primary text
         palette.setColor(QPalette.Text, QColor(243, 243, 243))  # Primary text in text boxes
@@ -1330,7 +1332,7 @@ class DerivativeMill(QMainWindow):
         palette.setColor(QPalette.ButtonText, QColor(243, 243, 243))  # Primary text on buttons
         palette.setColor(QPalette.BrightText, QColor(164, 38, 44))  # Danger/error red
         palette.setColor(QPalette.Link, QColor(0, 120, 212))  # Accent blue
-        palette.setColor(QPalette.Highlight, QColor(0, 120, 212))  # Selection/highlight blue
+        palette.setColor(QPalette.Highlight, QColor(22, 120, 212))  # Selection/highlight blue
         palette.setColor(QPalette.HighlightedText, QColor(243, 243, 243))  # Primary text
         return palette
     
@@ -4135,15 +4137,6 @@ if __name__ == "__main__":
     logger.info(f"Application started by user: {login.authenticated_user}")
     win = DerivativeMill()
     win.setWindowTitle(f"{APP_NAME} {VERSION} - User: {login.authenticated_user}")
-    win.splash_screen = splash  # Store reference for housekeeping message
-    
-    # Update splash for housekeeping
-    splash.showMessage(
-        f"Loading {APP_NAME}...\n⏳ Housekeeping in Progress\nCleaning old files...",
-        Qt.AlignCenter,
-        QColor(243, 243, 243)
-    )
-    app.processEvents()
     
     # Close splash and show main window
     splash.finish(win)
