@@ -62,6 +62,7 @@ class ErrorLogger:
             self.logs = self.logs[-1000:]
         print(entry)
     def info(self, msg): self.log("info", msg)
+    def debug(self, msg): self.log("debug", msg)
     def warning(self, msg): self.log("warning", msg)
     def error(self, msg):
         self.log("ERROR", msg)
@@ -153,11 +154,11 @@ def get_232_info(hts_code):
         return "Aluminum", "07", "Y"
 
     # Primary Steel
-    if hts_clean.startswith(( '7206','7207','7208','7209','7210','7211','7212','7213','7214','7215',
+    if hts_clean.startswith(( """ '7206','7207','7208','7209','7210','7211','7212','7213','7214','7215',
                             '7216','7217','7218','7219','7220','7221','7222','7223','7224','7225',
                             '7226','7227','7228','7229','7301','7302','7303','7304','7305','7306',
                             '7307','7308','7309','7310','7311','7312','7313','7314','7315','7316',
-                            '7317','7318','7320','7321','7322','7323','7324','7325','7326')):
+                            '7317','7318','7320','7321','7322','7323','7324','7325','7326' """)):
         return "Steel", "08", ""
 
     # 3. OFFICIAL DERIVATIVE ALUMINUM (9903.85.04 / 9903.85.13)
@@ -4054,7 +4055,7 @@ class DerivativeMill(QMainWindow):
                         # Move the file
                         shutil.move(str(file_path), str(dest_path))
                         moved_count += 1
-                        logger.debug(f"Moved old export to Processed: {file_path.name}")
+                        logger.info(f"Moved old export to Processed: {file_path.name}")
                 except Exception as e:
                     logger.warning(f"Failed to move {file_path.name}: {e}")
             
