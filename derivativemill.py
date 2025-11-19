@@ -809,35 +809,52 @@ class DerivativeMill(QMainWindow):
         bottom_bar.setFixedHeight(20)
         layout.addWidget(bottom_bar)
 
+        # Track which tabs have been initialized (lazy loading for performance)
+        self.tabs_initialized = set()
+        
+        # Only set up the first tab immediately for faster startup
         self.setup_process_tab()
-        self.setup_shipment_mapping_tab()
-        self.setup_import_tab()
-        self.setup_master_tab()
-        self.setup_log_tab()
-        self.setup_config_tab()
-        self.setup_actions_tab()
-        self.setup_guide_tab()
+        self.tabs_initialized.add(0)
+        
+        # Connect to tab change signal for lazy initialization
+        self.tabs.currentChanged.connect(self.on_tab_changed)
 
-        self.load_mapping_profiles()
         self.load_config_paths()
         
-        # Defer database operations to after window is shown (speeds up startup)
-        QTimer.singleShot(200, self.load_available_mids)
-        
-        # Defer file list refreshes to after window is shown (prevents blocking on network paths)
+        # Defer everything else to after window is shown (speeds up startup)
+        QTimer.singleShot(50, self.apply_saved_theme)
         QTimer.singleShot(100, self.refresh_exported_files)
         QTimer.singleShot(150, self.refresh_input_files)
-        
-        # Set up auto-refresh timers
-        self.setup_auto_refresh()
-        
-        # Apply saved theme
-        self.apply_saved_theme()
+        QTimer.singleShot(200, self.load_available_mids)
+        QTimer.singleShot(250, self.load_mapping_profiles)
+        QTimer.singleShot(300, self.setup_auto_refresh)
         
         # Update status bar styles for current theme
         self.update_status_bar_styles()
         
         logger.success(f"{APP_NAME} {VERSION} launched")
+    
+    def on_tab_changed(self, index):
+        """Initialize tabs lazily when they are first accessed"""
+        if index in self.tabs_initialized:
+            return
+        
+        # Map tab index to setup method
+        tab_setup_methods = {
+            1: self.setup_shipment_mapping_tab,
+            2: self.setup_import_tab,
+            3: self.setup_master_tab,
+            4: self.setup_log_tab,
+            5: self.setup_config_tab,
+            6: self.setup_actions_tab,
+            7: self.setup_guide_tab
+        }
+        
+        # Initialize the tab
+        if index in tab_setup_methods:
+            tab_setup_methods[index]()
+            self.tabs_initialized.add(index)
+            logger.debug(f"Initialized tab {index}")
     
     def apply_saved_theme(self):
         """Load and apply the saved theme preference on startup"""
@@ -1321,7 +1338,7 @@ class DerivativeMill(QMainWindow):
         
         palette = QPalette()
         # Windows 11 dark theme colors
-        palette.setColor(QPalette.Window, QColor(32, 32, 32))  # Main background
+        palette.setColor(QPalette.Window, QColor(41, 41, 41))  # Main background
         palette.setColor(QPalette.WindowText, QColor(243, 243, 243))  # Primary text
         palette.setColor(QPalette.Base, QColor(51, 51, 51))  # Secondary background for input fields
         palette.setColor(QPalette.AlternateBase, QColor(115, 115, 115))  # Tertiary background for alternating rows
@@ -1495,7 +1512,7 @@ class DerivativeMill(QMainWindow):
 
                 # 3. Also flash the combo box itself
                 self.profile_combo.setStyleSheet(
-                    "QComboBox { border: 3px solid #ff4444; background-color: #ffebee; }"
+                    "QComboBox { border: 3px solid #ff8533; background-color: #ff8533; }"
                 )
                 QTimer.singleShot(1200, lambda: self.profile_combo.setStyleSheet(""))
 
@@ -1505,7 +1522,7 @@ class DerivativeMill(QMainWindow):
 
             # Status bar warning
             self.status.setText("Please select a Saved Profile first")
-            self.status.setStyleSheet("background:#A4262C; color:white; font-weight:bold; padding:8px;")
+            self.status.setStyleSheet("background:#ff8533; color:white; font-weight:bold; padding:8px;")
 
             QMessageBox.warning(
                 self,
@@ -1866,14 +1883,14 @@ class DerivativeMill(QMainWindow):
         
         logger.warning(f"Found {len(missing_df)} parts with missing data: {parts_list}")
         self.status.setText(f"⚠ Warning: {len(missing_df)} parts have missing data - review in preview")
-        self.status.setStyleSheet("background:#CA5010; color:white; font-weight:bold; padding:8px;")
+        self.status.setStyleSheet("background:#f7bfa1; color:white; font-weight:bold; padding:8px;")
 
     def on_worker_error(self, msg):
         self.progress.setVisible(False)
         self.process_btn.setEnabled(True)
         QMessageBox.critical(self, "Error", msg)
         self.status.setText("Error")
-        self.status.setStyleSheet("background:#A4262C; color:white; font-weight:bold;")
+        self.status.setStyleSheet("background:#dd6e74; color:white; font-weight:bold;")
 
     def on_done(self, df, vr, fname):
         # Populate preview with editable Value column; export later when totals match
@@ -4110,7 +4127,7 @@ if __name__ == "__main__":
     
     # Create and show splash screen with Windows 11 styling
     splash_pix = QPixmap(500, 250)
-    splash_pix.fill(QColor(32, 32, 32))  # Windows 11 dark background
+    splash_pix.fill(QColor(51,51,51))  # Windows 11 dark background
     splash = QSplashScreen(splash_pix, Qt.WindowStaysOnTopHint)
     
     # Style the splash screen
@@ -4118,7 +4135,7 @@ if __name__ == "__main__":
         QSplashScreen {
             background-color: #202020;
             border: 3px solid #0078D4;
-            border-radius: 8px;
+            border-radius: 15px;
         }
     """)
     
