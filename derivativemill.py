@@ -1415,21 +1415,29 @@ class DerivativeMill(QMainWindow):
         base_text = palette.color(QPalette.ButtonText)
         highlight = palette.color(QPalette.Highlight)
         
-        # Define button type colors
-        if button_type == "primary" or button_type == "success":
-            # Teal for success/primary actions
+        # Check if we're in a dark theme
+        is_dark_theme = hasattr(self, 'current_theme') and self.current_theme in ["Fusion (Dark)", "Ocean", "Teal Professional"]
+        
+        # In dark themes, all buttons use teal
+        if is_dark_theme:
             bg = QColor(0, 128, 128)  # Teal
             hover_bg = QColor(0, 77, 77)  # Darker Teal
+            disabled_bg = QColor(160, 160, 160)  # Grey
+        # In light themes, use different colors per button type
+        elif button_type == "primary" or button_type == "success":
+            # Green for success/primary actions
+            bg = QColor(40, 167, 69)  # Green
+            hover_bg = QColor(33, 136, 56)  # Darker green
             disabled_bg = QColor(160, 160, 160)  # Grey
         elif button_type == "danger":
-            # Teal for success/primary actions
-            bg = QColor(0, 128, 128)  # Teal
-            hover_bg = QColor(0, 77, 77)  # Darker Teal
+            # Red for destructive actions
+            bg = QColor(220, 53, 69)  # Red
+            hover_bg = QColor(200, 35, 51)  # Darker red
             disabled_bg = QColor(160, 160, 160)  # Grey
         elif button_type == "info":
-            # Teal for success/primary actions
-            bg = QColor(0, 128, 128)  # Teal
-            hover_bg = QColor(0, 77, 77)  # Darker Teal
+            # Blue for informational actions
+            bg = QColor(0, 120, 215)  # Blue
+            hover_bg = QColor(0, 95, 184)  # Darker blue
             disabled_bg = QColor(160, 160, 160)  # Grey
         elif button_type == "warning":
             # Orange for warning actions
