@@ -1082,7 +1082,7 @@ class DerivativeMill(QMainWindow):
         self.process_btn = QPushButton("Process Invoice")
         self.process_btn.setEnabled(False)
         self.process_btn.setFixedSize(160, 40)
-        self.process_btn.setStyleSheet(self.get_button_style("success") + "QPushButton { font-size: 11pt; border-radius: 4px; }")
+        self.process_btn.setStyleSheet(self.get_button_style("success"))
         self.process_btn.clicked.connect(self._process_or_export)
 
         actions_layout.addWidget(self.clear_btn)
@@ -1344,7 +1344,7 @@ class DerivativeMill(QMainWindow):
         if hasattr(self, 'clear_btn'):
             self.clear_btn.setStyleSheet(self.get_button_style("danger"))
         if hasattr(self, 'process_btn'):
-            self.process_btn.setStyleSheet(self.get_button_style("success") + "QPushButton { font-size: 11pt; border-radius: 4px; }")
+            self.process_btn.setStyleSheet(self.get_button_style("success"))
         if hasattr(self, 'edit_values_btn'):
             self.edit_values_btn.setStyleSheet(self.get_button_style("warning"))
         
@@ -2303,19 +2303,24 @@ class DerivativeMill(QMainWindow):
             
             # Block signals to prevent triggering load during clear/addItem
             self.profile_combo.blockSignals(True)
-            self.profile_combo_full.blockSignals(True)
+            if hasattr(self, 'profile_combo_full'):
+                self.profile_combo_full.blockSignals(True)
             
             self.profile_combo.clear()
-            self.profile_combo_full.clear()
+            if hasattr(self, 'profile_combo_full'):
+                self.profile_combo_full.clear()
             self.profile_combo.addItem("-- Select Profile --")
-            self.profile_combo_full.addItem("-- Select Profile --")
+            if hasattr(self, 'profile_combo_full'):
+                self.profile_combo_full.addItem("-- Select Profile --")
             for name in df['profile_name'].tolist():
                 self.profile_combo.addItem(name)
-                self.profile_combo_full.addItem(name)
+                if hasattr(self, 'profile_combo_full'):
+                    self.profile_combo_full.addItem(name)
             
             # Unblock signals
             self.profile_combo.blockSignals(False)
-            self.profile_combo_full.blockSignals(False)
+            if hasattr(self, 'profile_combo_full'):
+                self.profile_combo_full.blockSignals(False)
         except:
             pass
 
