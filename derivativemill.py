@@ -820,14 +820,19 @@ class DerivativeMill(QMainWindow):
         self.tabs.currentChanged.connect(self.on_tab_changed)
 
         self.load_config_paths()
+        self.apply_saved_theme()
         
-        # Defer everything else to after window is shown (speeds up startup)
-        QTimer.singleShot(50, self.apply_saved_theme)
-        QTimer.singleShot(100, self.refresh_exported_files)
-        QTimer.singleShot(150, self.refresh_input_files)
-        QTimer.singleShot(200, self.load_available_mids)
-        QTimer.singleShot(250, self.load_mapping_profiles)
-        QTimer.singleShot(300, self.setup_auto_refresh)
+        # Show loading indicator and load data synchronously
+        self.show_loading_indicator()
+        QApplication.processEvents()  # Process events to show the spinner
+        
+        self.load_available_mids()
+        self.load_mapping_profiles()
+        self.refresh_exported_files()
+        self.refresh_input_files()
+        self.setup_auto_refresh()
+        
+        self.hide_loading_indicator()
         
         # Update status bar styles for current theme
         self.update_status_bar_styles()
@@ -855,6 +860,58 @@ class DerivativeMill(QMainWindow):
             tab_setup_methods[index]()
             self.tabs_initialized.add(index)
             logger.debug(f"Initialized tab {index}")
+    
+    def show_loading_indicator(self):
+        """Show loading spinner overlay"""
+        # Create overlay widget
+        self.loading_overlay = QWidget(self)
+        self.loading_overlay.setStyleSheet("background-color: rgba(0, 0, 0, 100);")
+        self.loading_overlay.setGeometry(self.rect())
+        
+        # Create layout for centered content
+        overlay_layout = QVBoxLayout(self.loading_overlay)
+        overlay_layout.setAlignment(Qt.AlignCenter)
+        
+        # Create spinner label with loading text
+        self.loading_label = QLabel("Loading data...")
+        self.loading_label.setStyleSheet("""
+            color: white;
+            font-size: 16pt;
+            font-weight: bold;
+            background: transparent;
+            padding: 20px;
+        """)
+        self.loading_label.setAlignment(Qt.AlignCenter)
+        overlay_layout.addWidget(self.loading_label)
+        
+        # Create progress bar as spinner
+        self.loading_progress = QProgressBar()
+        self.loading_progress.setRange(0, 0)  # Indeterminate/busy indicator
+        self.loading_progress.setFixedWidth(300)
+        self.loading_progress.setFixedHeight(6)
+        self.loading_progress.setTextVisible(False)
+        self.loading_progress.setStyleSheet("""
+            QProgressBar {
+                border: none;
+                border-radius: 3px;
+                background-color: rgba(255, 255, 255, 30);
+            }
+            QProgressBar::chunk {
+                background-color: #00bcd4;
+                border-radius: 3px;
+            }
+        """)
+        overlay_layout.addWidget(self.loading_progress, alignment=Qt.AlignCenter)
+        
+        self.loading_overlay.show()
+        self.loading_overlay.raise_()
+    
+    def hide_loading_indicator(self):
+        """Hide loading spinner overlay"""
+        if hasattr(self, 'loading_overlay'):
+            self.loading_overlay.hide()
+            self.loading_overlay.deleteLater()
+            del self.loading_overlay
     
     def apply_saved_theme(self):
         """Load and apply the saved theme preference on startup"""
