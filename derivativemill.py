@@ -840,11 +840,7 @@ class DerivativeMill(QMainWindow):
         total_steps = len(steps)
         for i, (message, func) in enumerate(steps):
             if splash:
-                splash.showMessage(
-                    f"Loading {APP_NAME}...\n{message}\nPlease wait...",
-                    Qt.AlignCenter | Qt.AlignBottom,
-                    QColor(243, 243, 243)
-                )
+                splash.setText(f"{message}\nPlease wait...")
             if progress_callback:
                 progress_callback(int((i / total_steps) * 100))
             QApplication.processEvents()
