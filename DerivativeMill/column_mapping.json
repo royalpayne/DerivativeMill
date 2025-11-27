@@ -1,6 +1,6 @@
 {
-  "part_number": "Sigma Part Numbers",
-  "hts_code": "HTS",
+  "part_number": "Item #",
   "mid": "MID",
-  "steel_ratio": "steel ratio"
+  "hts_code": "FINAL HTS",
+  "steel_ratio": "SEC 232 %"
 }

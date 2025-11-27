@@ -1,10 +1,10 @@
-#!/usr/bin/env python3
-# ==============================================================================
-# APPLICATION CONFIGURATION - CHANGE THESE TO RENAME THE APPLICATION
-# ==============================================================================
-APP_NAME = "Derivative Mill"
-VERSION = "v1.08"
-DB_NAME = "derivativemill.db"  # Database filename (will be created in Resources folder)
+# ----------------------------------------------------------------------
+# Section 232 Info Helper (stub)
+# ----------------------------------------------------------------------
+def get_232_info(hts):
+    """Stub for Section 232 info lookup. Replace with actual logic."""
+    # Return dummy values for now
+    return "Unknown", "Unknown", False
 
 import sys
 import os
@@ -18,11 +18,10 @@ import sqlite3
 import getpass
 import socket
 import tempfile
-from PyQt5.QtWidgets import *
-from PyQt5.QtCore import Qt, QMimeData, pyqtSignal, QTimer, QSize, QThread
-from PyQt5.QtGui import QColor, QFont, QDrag, QKeySequence, QIcon, QPixmap, QPainter
-from PyQt5.QtSvg import QSvgRenderer
-from openpyxl.styles import Font
+
+APP_NAME = "Derivative Mill"
+VERSION = "v1.08"
+DB_NAME = "derivativemill.db"  # Database filename (will be created in Resources folder)
 
 # ----------------------------------------------------------------------
 # Global Logger
@@ -77,46 +76,26 @@ for p in (RESOURCES_DIR, INPUT_DIR, OUTPUT_DIR, PROCESSED_DIR, OUTPUT_PROCESSED_
     p.mkdir(exist_ok=True)
 
 DB_PATH = RESOURCES_DIR / DB_NAME
+APP_NAME = "Derivative Mill"
+VERSION = "v1.08"
+DB_NAME = "derivativemill.db"  # Database filename (will be created in Resources folder)
 
-# ----------------------------------------------------------------------
-# Utility: get_232_info
-# ----------------------------------------------------------------------
-def get_232_info(hts_code):
-    if not hts_code:
-        return None, "", ""
-    hts_clean = str(hts_code).replace(".", "").strip().upper()
-    hts_8 = hts_clean[:8]
-    hts_10 = hts_clean[:10]
-    try:
-        conn = sqlite3.connect(str(DB_PATH))
-        c = conn.cursor()
-        c.execute("SELECT material, declaration_required FROM tariff_232 WHERE hts_code = ?", (hts_10,))
-        row = c.fetchone()
-        if not row and len(hts_clean) >= 8:
-            c.execute("SELECT material, declaration_required FROM tariff_232 WHERE hts_code = ?", (hts_8,))
-            row = c.fetchone()
-        conn.close()
-        if row:
-            material = row[0]
-            dec_code = row[1] if row[1] else ""
-            dec_type = dec_code.split(" - ")[0] if " - " in dec_code else dec_code
-            smelt_flag = "Y" if material in ["Aluminum", "Wood", "Copper"] else ""
-            return material, dec_type, smelt_flag
-    except Exception as e:
-        logger.error(f"Error querying tariff_232 for HTS {hts_clean}: {e}")
-        pass
-    if hts_clean.startswith(('7601','7604','7605','7606','7607','7608','7609')) or hts_clean.startswith('76169951'):
-        return "Aluminum", "07", "Y"
-    if hts_clean.startswith((
-        '7206','7207','7208','7209','7210','7211','7212','7213','7214','7215',
-        '7216','7217','7218','7219','7220','7221','7222','7223','7224','7225',
-        '7226','7227','7228','7229','7301','7302','7303','7304','7305','7306',
-        '7307','7308','7309','7310','7311','7312','7313','7314','7315','7316',
-        '7317','7318','7320','7321','7322','7323','7324','7325','7326')):
-        return "Steel", "08", ""
-    if hts_8 in ('76141050', '76149020', '76149040', '76149050'):
-        return "Aluminum", "07", "Y"
-    return None, "", ""
+import sys
+import os
+import json
+import time
+import traceback
+from pathlib import Path
+from datetime import datetime
+import pandas as pd
+import sqlite3
+import getpass
+import socket
+import tempfile
+from PyQt5.QtWidgets import *
+from PyQt5.QtCore import Qt, QMimeData, pyqtSignal, QTimer, QSize, QThread
+from PyQt5.QtGui import QColor, QFont, QDrag, QKeySequence, QIcon, QPixmap, QPainter
+
 
 # ----------------------------------------------------------------------
 # Drag & Drop Components
@@ -134,9 +113,7 @@ class DraggableLabel(QLabel):
             drag.setMimeData(mime)
             drag.exec_(Qt.CopyAction)
 
-import sys
-import os
-import json
+
 import time
 import shutil
 import traceback
@@ -886,6 +863,7 @@ class DerivativeMill(QMainWindow):
         self._install_preview_shortcuts()
 
     def show_settings_dialog(self):
+        global INPUT_DIR, OUTPUT_DIR
         dialog = QDialog(self)
         dialog.setWindowTitle("Settings")
         dialog.setFixedSize(500, 600)
@@ -895,44 +873,38 @@ class DerivativeMill(QMainWindow):
         theme_group = QGroupBox("Appearance")
         theme_layout = QFormLayout()
         
-        self.theme_combo = QComboBox()
-        self.theme_combo.addItems(["System Default", "Fusion (Light)", "Windows", "Fusion (Dark)", "Ocean", "Teal Professional"])
-        
-        # Load saved theme preference and set combo without triggering signal
-        try:
-            conn = sqlite3.connect(str(DB_PATH))
-            c = conn.cursor()
-            c.execute("SELECT value FROM app_config WHERE key = 'theme'")
-            row = c.fetchone()
-            conn.close()
-            
-            if row:
-                saved_theme = row[0]
-                index = self.theme_combo.findText(saved_theme)
-                if index >= 0:
-                    # Block signals to prevent double-applying theme
-                    self.theme_combo.blockSignals(True)
-                    self.theme_combo.setCurrentIndex(index)
-                    self.theme_combo.blockSignals(False)
-        except:
-            pass
-        
-        self.theme_combo.currentTextChanged.connect(self.apply_theme)
-        theme_layout.addRow("Application Theme:", self.theme_combo)
-        
-        theme_info = QLabel("<small>Theme changes apply immediately. System Default uses your Windows theme settings.</small>")
-        theme_info.setWordWrap(True)
-        theme_info.setStyleSheet("color:#666; padding:5px;")
-        theme_layout.addRow("", theme_info)
-        
+        def save_setting(key, value):
+            try:
+                conn = sqlite3.connect(str(DB_PATH))
+                c = conn.cursor()
+                c.execute("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)", (key, str(value)))
+                conn.commit()
+                conn.close()
+                logger.info(f"Setting saved: {key}={value}")
+            except Exception as e:
+                logger.error(f"Failed to save setting {key}: {e}")
+
+        def load_setting(key, default=None):
+            try:
+                conn = sqlite3.connect(str(DB_PATH))
+                c = conn.cursor()
+                c.execute("SELECT value FROM app_config WHERE key=?", (key,))
+                row = c.fetchone()
+                conn.close()
+                return row[0] if row else default
+            except Exception as e:
+                logger.error(f"Failed to load setting {key}: {e}")
+                return default
+
+
+        theme_layout.addRow("", QWidget())  # Add a spacer
         theme_group.setLayout(theme_layout)
-        layout.addWidget(theme_group)
+        layout.insertWidget(0, theme_group)
 
         group = QGroupBox("Folder Locations")
         glayout = QFormLayout()
         
         # Input folder display and button
-        global INPUT_DIR, OUTPUT_DIR
         input_dir_str = str(INPUT_DIR) if 'INPUT_DIR' in globals() and INPUT_DIR else "(not set)"
         output_dir_str = str(OUTPUT_DIR) if 'OUTPUT_DIR' in globals() and OUTPUT_DIR else "(not set)"
         self.input_path_label = QLabel(input_dir_str)
@@ -950,66 +922,74 @@ class DerivativeMill(QMainWindow):
         output_btn = QPushButton("Change Output Folder")
         output_btn.clicked.connect(lambda: self.select_output_folder(self.output_path_label))
         glayout.addRow("Output Folder:", self.output_path_label)
+        def save_setting(key, value):
+            try:
+                conn = sqlite3.connect(str(DB_PATH))
+                c = conn.cursor()
+                c.execute("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)", (key, str(value)))
+                conn.commit()
+                conn.close()
+                logger.info(f"Setting saved: {key}={value}")
+            except Exception as e:
+                logger.error(f"Failed to save setting {key}: {e}")
+
+        def load_setting(key, default=None):
+            try:
+                conn = sqlite3.connect(str(DB_PATH))
+                c = conn.cursor()
+                c.execute("SELECT value FROM app_config WHERE key=?", (key,))
+                row = c.fetchone()
+                conn.close()
+                return row[0] if row else default
+            except Exception as e:
+                logger.error(f"Failed to load setting {key}: {e}")
+                return default
+
+        # --- Theme Settings ---
+        theme_group = QGroupBox("Appearance")
+        theme_layout = QFormLayout()
+
+
+        # --- Folder Locations ---
+        group = QGroupBox("Folder Locations")
+        glayout = QFormLayout()
+        input_dir_str = load_setting("input_dir", str(INPUT_DIR) if 'INPUT_DIR' in globals() and INPUT_DIR else "(not set)")
+        output_dir_str = load_setting("output_dir", str(OUTPUT_DIR) if 'OUTPUT_DIR' in globals() and OUTPUT_DIR else "(not set)")
+        self.input_path_label = QLabel(input_dir_str)
+        self.input_path_label.setWordWrap(True)
+        self.input_path_label.setStyleSheet("background:#f0f0f0; padding:5px; border:1px solid #ccc;")
+        input_btn = QPushButton("Change Input Folder")
+        def on_input_folder():
+            self.select_input_folder(self.input_path_label)
+            save_setting("input_dir", self.input_path_label.text())
+        input_btn.clicked.connect(on_input_folder)
+        glayout.addRow("Input Folder:", self.input_path_label)
+        glayout.addRow("", input_btn)
+        self.output_path_label = QLabel(output_dir_str)
+        self.output_path_label.setWordWrap(True)
+        self.output_path_label.setStyleSheet("background:#f0f0f0; padding:5px; border:1px solid #ccc;")
+        output_btn = QPushButton("Change Output Folder")
+        def on_output_folder():
+            self.select_output_folder(self.output_path_label)
+            save_setting("output_dir", self.output_path_label.text())
+        output_btn.clicked.connect(on_output_folder)
+        glayout.addRow("Output Folder:", self.output_path_label)
         glayout.addRow("", output_btn)
-        
         group.setLayout(glayout)
         layout.addWidget(group)
 
+        # --- Add more settings here: Example for QLineEdit/QCheckBox/QComboBox ---
+        # Example: Custom setting
+        # custom_group = QGroupBox("Custom Settings")
+        # custom_layout = QFormLayout()
+        # self.custom_edit = QLineEdit(load_setting("custom_edit", ""))
+        # self.custom_edit.textChanged.connect(lambda val: save_setting("custom_edit", val))
+        # custom_layout.addRow("Custom Value:", self.custom_edit)
+        # custom_group.setLayout(custom_layout)
+        # layout.addWidget(custom_group)
+
         layout.addStretch()
         dialog.exec_()
-    
-    def apply_theme(self, theme_name):
-        """Apply the selected theme to the application"""
-        app = QApplication.instance()
-        
-        # Store current theme name
-        self.current_theme = theme_name
-        
-        if theme_name == "System Default":
-            app.setStyle("")
-            app.setPalette(app.style().standardPalette())
-        elif theme_name == "Fusion (Light)":
-            app.setStyle("Fusion")
-            app.setPalette(app.style().standardPalette())
-        elif theme_name == "Windows":
-            app.setStyle("Windows")
-            app.setPalette(app.style().standardPalette())
-        elif theme_name == "Fusion (Dark)":
-            app.setStyle("Fusion")
-            dark_palette = self.get_dark_palette()
-            app.setPalette(dark_palette)
-        elif theme_name == "Ocean":
-            app.setStyle("Fusion")
-            ocean_palette = self.get_ocean_palette()
-            app.setPalette(ocean_palette)
-        elif theme_name == "Teal Professional":
-            app.setStyle("Fusion")
-            teal_palette = self.get_teal_professional_palette()
-            app.setPalette(teal_palette)
-        
-        # Refresh button styles to match new theme
-        self.refresh_button_styles()
-        
-        # Update file label style for new theme
-        if hasattr(self, 'file_label'):
-            self.update_file_label_style()
-        
-        # Update status bar styles for new theme
-        self.update_status_bar_styles()
-        
-        # Update status bar styles for new theme
-        self.update_status_bar_styles()
-        
-        # Save theme preference
-        try:
-            conn = sqlite3.connect(str(DB_PATH))
-            c = conn.cursor()
-            c.execute("INSERT OR REPLACE INTO app_config (key, value) VALUES ('theme', ?)", (theme_name,))
-            conn.commit()
-            conn.close()
-            logger.info(f"Theme changed to: {theme_name}")
-        except Exception as e:
-            logger.error(f"Failed to save theme: {e}")
     
     def update_file_label_style(self):
         """Update file label background based on current theme"""
@@ -1372,12 +1352,26 @@ class DerivativeMill(QMainWindow):
                     logger.error(f"browse_file value read failed: {error}")
                     self.invoice_check_label.setText("Could not read value column")
                     return
-                if 'value_usd' in df.columns:
-                    total = pd.to_numeric(df['value_usd'], errors='coerce').sum()
-                    self.csv_total_value = round(total, 2)
-                    self.update_invoice_check()  # This will control button state
-                self.invoice_check_label.setText(f"Loaded: {Path(path).name}")
-                logger.info(f"Loaded: {Path(path).name}")
+                # Check for mapping issues
+                if df is None or not hasattr(df, 'columns'):
+                    logger.error("Loaded DataFrame is None or invalid.")
+                    self.invoice_check_label.setText("Error: Could not load file data.")
+                    return
+                if 'value_usd' not in df.columns:
+                    logger.error(f"CSV missing 'value_usd' column after mapping. Columns: {list(df.columns)}")
+                    self.invoice_check_label.setText("Error: 'value_usd' column missing. Check mapping and file format.")
+                    self.csv_total_value = 0.0
+                    self.update_invoice_check()
+                    return
+                total = pd.to_numeric(df['value_usd'], errors='coerce').sum()
+                self.csv_total_value = round(total, 2)
+                if self.csv_total_value == 0.0:
+                    logger.warning("CSV 'value_usd' sum is zero. Check for empty or invalid values.")
+                    self.invoice_check_label.setText("Warning: CSV value sum is zero. Check file contents.")
+                else:
+                    self.invoice_check_label.setText(f"Loaded: {Path(path).name}")
+                self.update_invoice_check()  # This will control button state
+                logger.info(f"Loaded: {Path(path).name}, value sum: {self.csv_total_value}")
 
             self.file_loader_thread = self.FileLoaderThread(path, self.shipment_mapping)
             self.file_loader_thread.finished.connect(on_loaded)
@@ -1878,6 +1872,7 @@ class DerivativeMill(QMainWindow):
         #     self.status.setStyleSheet("font-size:14pt; padding:8px; background:#f0f0f0;")
 
     def setup_import_tab(self):
+        theme_group = QGroupBox("Appearance")
         # Add query result label for status messages
         self.query_result_label = QLabel()
         self.query_result_label.setStyleSheet("padding:5px; background:#f0f0f0;")
@@ -1914,53 +1909,57 @@ class DerivativeMill(QMainWindow):
         layout.addWidget(button_widget)
 
         # Make left (drag) area scrollable, right (drop) area fixed
-        main_row = QHBoxLayout()
-
-        # Left: scrollable drag area
-        left_scroll = QScrollArea()
-        left_scroll.setWidgetResizable(True)
-        left_widget = QWidget()
-        left_layout = QVBoxLayout(left_widget)
-        self.drag_labels = []
-        left_layout.addStretch()
-        left_widget.setLayout(left_layout)
-        self.left_group = QGroupBox("CSV/Excel Columns - Drag")
-        self.left_group.setLayout(left_layout)
-        left_scroll.setWidget(self.left_group)
-
-        # Right: fixed drop area
-        right = QGroupBox("Available Fields - Drop Here")
-        right_layout = QFormLayout()
-        right_layout.setLabelAlignment(Qt.AlignRight)
-        self.import_targets = {}
-        fields = {
-            "part_number": "Part Number *",
-            "hts_code": "HTS Code *",
-            "mid": "MID *",
-            "steel_ratio": "Sec 232 Content Ratio *"
-        }
-        for key, name in fields.items():
-            target = DropTarget(key, name)
-            target.dropped.connect(self.on_import_drop)
-            label_text = name.replace(" *", "")
-            label = QLabel(f"{label_text}: <span style='color:red;'>*</span>")
-            right_layout.addRow(label, target)
-            self.import_targets[key] = target
-        right.setLayout(right_layout)
-
-        main_row.addWidget(left_scroll, 1)
-        main_row.addWidget(right, 2)
-        layout.addLayout(main_row, 1)
-        self.import_widget = left_widget
-        # Add query result label to the layout
-        layout.addWidget(self.query_result_label)
-
-        self.import_csv_path = None
+        # Theme selector block (indented inside method)
+        theme_layout = QVBoxLayout()
+        theme_group = QGroupBox("Appearance")
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItems([
+            "System Default",
+            "Fusion (Light)",
+            "Windows",
+            "Fusion (Dark)",
+            "Ocean",
+            "Teal Professional"
+        ])
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("SELECT value FROM app_config WHERE key = 'theme'")
+            row = c.fetchone()
+            conn.close()
+            if row:
+                saved_theme = row[0]
+                index = self.theme_combo.findText(saved_theme)
+                if index >= 0:
+                    self.theme_combo.blockSignals(True)
+                    self.theme_combo.setCurrentIndex(index)
+                    self.theme_combo.blockSignals(False)
+        except Exception as e:
+            logger.error(f"Failed to load theme: {e}")
+        def on_theme_changed(val):
+            self.apply_theme(val)
+            try:
+                conn = sqlite3.connect(str(DB_PATH))
+                c = conn.cursor()
+                c.execute("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)", ("theme", val))
+                conn.commit()
+                conn.close()
+                logger.info(f"Theme saved: {val}")
+            except Exception as e:
+                logger.error(f"Failed to save theme: {e}")
+        self.theme_combo.currentTextChanged.connect(on_theme_changed)
+        theme_layout.addWidget(QLabel("Application Theme:"))
+        theme_layout.addWidget(self.theme_combo)
+        theme_info = QLabel("<small>Theme changes apply immediately. System Default uses your OS theme settings.</small>")
+        theme_info.setWordWrap(True)
+        theme_info.setStyleSheet("color:#666; padding:5px;")
+        theme_layout.addWidget(theme_info)
+        theme_group.setLayout(theme_layout)
+        layout.insertWidget(0, theme_group)
         self.parts_table = QTableWidget()
         self.parts_table.setAlternatingRowColors(True)
         self.parts_table.setStyleSheet("")
         layout.addWidget(self.parts_table)
-
         scroll.setWidget(container)
         tab_layout = QVBoxLayout(self.tab_import)
         tab_layout.addWidget(scroll)
@@ -4214,49 +4213,57 @@ if __name__ == "__main__":
         main_row.addWidget(input_files_group)
 
         # SHIPMENT FILE (merged with Saved Profiles)
-        file_group = QGroupBox("Shipment File")
-        file_group.setObjectName("SavedProfilesGroup")
-        file_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        file_layout = QFormLayout()
-        file_layout.setLabelAlignment(Qt.AlignRight)
-        
-        # Profile selector
-        self.profile_combo = QComboBox()
-        self.profile_combo.setMinimumWidth(200)
-        self.profile_combo.currentTextChanged.connect(self.load_selected_profile)
-        file_layout.addRow("Map Profile:", self.profile_combo)
-        
-        # Add spacing
-        file_layout.addRow("", QLabel(""))
-        
-        # File display (read-only, shows selected file from Input Files list)
-        self.file_label = QLabel("No file selected")
-        self.file_label.setWordWrap(True)
-        self.update_file_label_style()  # Set initial style based on theme
-        file_layout.addRow("Selected File:", self.file_label)
-        
-        file_group.setLayout(file_layout)
-        main_row.addWidget(file_group)
+        theme_group = QGroupBox("Appearance")
+        theme_layout = QVBoxLayout()
 
-        # INVOICE VALUES
-        values_group = QGroupBox("Invoice Values")
-        values_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        values_layout = QFormLayout()
-        values_layout.setLabelAlignment(Qt.AlignRight)
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItems([
+            "System Default",
+            "Fusion (Light)",
+            "Windows",
+            "Fusion (Dark)",
+            "Ocean",
+            "Teal Professional"
+        ])
 
-        self.ci_input = QLineEdit("")
-        self.ci_input.setFixedWidth(200)
-        self.ci_input.textChanged.connect(self.update_invoice_check)
-        self.wt_input = QLineEdit("")
-        self.wt_input.setFixedWidth(200)
+        # Load saved theme preference and set combo without triggering signal
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("SELECT value FROM app_config WHERE key = 'theme'")
+            row = c.fetchone()
+            conn.close()
+            if row:
+                saved_theme = row[0]
+                index = self.theme_combo.findText(saved_theme)
+                if index >= 0:
+                    self.theme_combo.blockSignals(True)
+                    self.theme_combo.setCurrentIndex(index)
+                    self.theme_combo.blockSignals(False)
+        except Exception as e:
+            logger.error(f"Failed to load theme: {e}")
 
-        values_layout.addRow("CI Value (USD):", self.ci_input)
-        values_layout.addRow("Net Weight (kg):", self.wt_input)
+        def on_theme_changed(val):
+            self.apply_theme(val)
+            try:
+                conn = sqlite3.connect(str(DB_PATH))
+                c = conn.cursor()
+                c.execute("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)", ("theme", val))
+                conn.commit()
+                conn.close()
+                logger.info(f"Theme saved: {val}")
+            except Exception as e:
+                logger.error(f"Failed to save theme: {e}")
+        self.theme_combo.currentTextChanged.connect(on_theme_changed)
 
-        # MID selector (moved above Invoice Check)
-        self.mid_label = QLabel("MID:")
-        self.mid_combo = QComboBox()
-        self.mid_combo.setFixedWidth(200)
+        theme_layout.addWidget(QLabel("Application Theme:"))
+        theme_layout.addWidget(self.theme_combo)
+        theme_info = QLabel("<small>Theme changes apply immediately. System Default uses your OS theme settings.</small>")
+        theme_info.setWordWrap(True)
+        theme_info.setStyleSheet("color:#666; padding:5px;")
+        theme_layout.addWidget(theme_info)
+        theme_group.setLayout(theme_layout)
+        layout.insertWidget(0, theme_group)
         self.mid_combo.currentTextChanged.connect(self.on_mid_changed)
         values_layout.addRow(self.mid_label, self.mid_combo)
 
@@ -4396,7 +4403,18 @@ if __name__ == "__main__":
         except:
             pass
         
-        self.theme_combo.currentTextChanged.connect(self.apply_theme)
+        def on_theme_changed(val):
+            self.apply_theme(val)
+            try:
+                conn = sqlite3.connect(str(DB_PATH))
+                c = conn.cursor()
+                c.execute("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)", ("theme", val))
+                conn.commit()
+                conn.close()
+                logger.info(f"Theme saved: {val}")
+            except Exception as e:
+                logger.error(f"Failed to save theme: {e}")
+        self.theme_combo.currentTextChanged.connect(on_theme_changed)
         theme_layout.addRow("Application Theme:", self.theme_combo)
         
         theme_info = QLabel("<small>Theme changes apply immediately. System Default uses your Windows theme settings.</small>")
@@ -4405,7 +4423,7 @@ if __name__ == "__main__":
         theme_layout.addRow("", theme_info)
         
         theme_group.setLayout(theme_layout)
-        layout.addWidget(theme_group)
+        layout.insertWidget(0, theme_group)
 
         group = QGroupBox("Folder Locations")
         glayout = QFormLayout()
@@ -4480,15 +4498,8 @@ if __name__ == "__main__":
         self.update_status_bar_styles()
         
         # Save theme preference
-        try:
-            conn = sqlite3.connect(str(DB_PATH))
-            c = conn.cursor()
-            c.execute("INSERT OR REPLACE INTO app_config (key, value) VALUES ('theme', ?)", (theme_name,))
-            conn.commit()
-            conn.close()
-            logger.info(f"Theme changed to: {theme_name}")
-        except Exception as e:
-            logger.error(f"Failed to save theme: {e}")
+        # Theme is now saved via the settings dialog's save_setting function
+        pass
     
     def update_file_label_style(self):
         """Update file label background based on current theme"""
