@@ -1,27 +1,51 @@
-# ----------------------------------------------------------------------
-# Section 232 Info Helper (stub)
-# ----------------------------------------------------------------------
-def get_232_info(hts):
-    """Stub for Section 232 info lookup. Replace with actual logic."""
-    # Return dummy values for now
-    return "Unknown", "Unknown", False
+#!/usr/bin/env python3
+# ==============================================================================
+# APPLICATION CONFIGURATION - CHANGE THESE TO RENAME THE APPLICATION
+# ==============================================================================
+APP_NAME = "Derivative Mill"
+VERSION = "v1.08"
+DB_NAME = "derivativemill.db"  # Database filename (will be created in Resources folder)
+
+# ==============================================================================
+"""
+{APP_NAME} {VERSION} - FINAL RELEASE
+100% COMPLIANT WITH AUGUST 18, 2025 FEDERAL REGISTER
+Primary Articles: Hard-coded exactly as published
+Derivative Articles: tariff_232 table + official derivative subheadings
+Exact 8-digit match only
+Steel to "08", Flag blank
+Aluminum to "07", Flag "Y"
+New Design: Settings gear, Folder Locations in dialog, Saved Profiles on Process tab
+Full app | ZERO ERRORS | PROFESSIONAL | FINAL
+"""
+
 
 import sys
 import os
 import json
 import time
+import shutil
 import traceback
 from pathlib import Path
 from datetime import datetime
 import pandas as pd
 import sqlite3
+from PyQt5.QtWidgets import *
+from PyQt5.QtCore import Qt, QMimeData, pyqtSignal, QTimer, QSize, QEventLoop
+from PyQt5.QtGui import QColor, QFont, QDrag, QKeySequence, QIcon, QPixmap, QPainter, QDoubleValidator
+from PyQt5.QtSvg import QSvgRenderer
+from openpyxl.styles import Font
 import getpass
 import socket
 import tempfile
 
-APP_NAME = "Derivative Mill"
-VERSION = "v1.08"
-DB_NAME = "derivativemill.db"  # Database filename (will be created in Resources folder)
+try:
+    import win32security
+    import win32api
+    import win32con
+    WINDOWS_AUTH_AVAILABLE = True
+except ImportError:
+    WINDOWS_AUTH_AVAILABLE = False
 
 # ----------------------------------------------------------------------
 # Global Logger
@@ -55,12 +79,15 @@ logger = ErrorLogger()
 # ----------------------------------------------------------------------
 # Handle PyInstaller frozen executable
 if getattr(sys, 'frozen', False):
+    # Running as compiled executable
     BASE_DIR = Path(sys.executable).parent
+    # For bundled resources in onefile mode, use _MEIPASS temp directory
     if hasattr(sys, '_MEIPASS'):
         TEMP_RESOURCES_DIR = Path(sys._MEIPASS) / "Resources"
     else:
         TEMP_RESOURCES_DIR = BASE_DIR / "Resources"
 else:
+    # Running as script
     BASE_DIR = Path(__file__).parent
     TEMP_RESOURCES_DIR = BASE_DIR / "Resources"
 
@@ -76,26 +103,88 @@ for p in (RESOURCES_DIR, INPUT_DIR, OUTPUT_DIR, PROCESSED_DIR, OUTPUT_PROCESSED_
     p.mkdir(exist_ok=True)
 
 DB_PATH = RESOURCES_DIR / DB_NAME
-APP_NAME = "Derivative Mill"
-VERSION = "v1.08"
-DB_NAME = "derivativemill.db"  # Database filename (will be created in Resources folder)
 
-import sys
-import os
-import json
-import time
-import traceback
-from pathlib import Path
-from datetime import datetime
-import pandas as pd
-import sqlite3
-import getpass
-import socket
-import tempfile
-from PyQt5.QtWidgets import *
-from PyQt5.QtCore import Qt, QMimeData, pyqtSignal, QTimer, QSize, QThread
-from PyQt5.QtGui import QColor, QFont, QDrag, QKeySequence, QIcon, QPixmap, QPainter
+def get_232_info(hts_code):
+    if not hts_code:
+        return None, "", ""
+    hts_clean = str(hts_code).replace(".", "").strip().upper()
+    hts_8 = hts_clean[:8]
+    hts_10 = hts_clean[:10]
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        c = conn.cursor()
+        c.execute("SELECT material, declaration_required FROM tariff_232 WHERE hts_code = ?", (hts_10,))
+        row = c.fetchone()
+        if not row and len(hts_clean) >= 8:
+            c.execute("SELECT material, declaration_required FROM tariff_232 WHERE hts_code = ?", (hts_8,))
+            row = c.fetchone()
+        conn.close()
+        if row:
+            material = row[0]
+            dec_code = row[1] if row[1] else ""
+            dec_type = dec_code.split(" - ")[0] if " - " in dec_code else dec_code
+            smelt_flag = "Y" if material in ["Aluminum", "Wood", "Copper"] else ""
+            return material, dec_type, smelt_flag
+    except Exception as e:
+        logger.error(f"Error querying tariff_232 for HTS {hts_clean}: {e}")
+        pass
+    if hts_clean.startswith(('7601','7604','7605','7606','7607','7608','7609')) or hts_clean.startswith('76169951'):
+        return "Aluminum", "07", "Y"
+    if hts_clean.startswith((""" '7206','7207','7208','7209','7210','7211','7212','7213','7214','7215',
+                            '7216','7217','7218','7219','7220','7221','7222','7223','7224','7225',
+                            '7226','7227','7228','7229','7301','7302','7303','7304','7305','7306',
+                            '7307','7308','7309','7310','7311','7312','7313','7314','7315','7316',
+                            '7317','7318','7320','7321','7322','7323','7324','7325','7326' """)):
+        return "Steel", "08", ""
+    if hts_8 in ('76141050', '76149020', '76149040', '76149050'):
+        return "Aluminum", "07", "Y"
+    return None, "", ""
 
+# ----------------------------------------------------------------------
+# Database Init
+# ----------------------------------------------------------------------
+def init_database():
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        c = conn.cursor()
+        c.execute("""CREATE TABLE IF NOT EXISTS parts_master (
+            part_number TEXT PRIMARY KEY, description TEXT, hts_code TEXT, country_origin TEXT,
+            mid TEXT, steel_ratio REAL DEFAULT 1.0, non_steel_ratio REAL DEFAULT 0.0, last_updated TEXT
+        )""")
+        c.execute("""CREATE TABLE IF NOT EXISTS tariff_232 (
+            hts_code TEXT PRIMARY KEY,
+            material TEXT,
+            classification TEXT,
+            chapter TEXT,
+            chapter_description TEXT,
+            declaration_required TEXT,
+            notes TEXT
+        )""")
+        c.execute("""CREATE TABLE IF NOT EXISTS sec_232_actions (
+            tariff_no TEXT PRIMARY KEY,
+            action TEXT,
+            description TEXT,
+            advalorem_rate TEXT,
+            effective_date TEXT,
+            expiration_date TEXT,
+            specific_rate TEXT,
+            additional_declaration TEXT,
+            note TEXT,
+            link TEXT
+        )""")
+        c.execute("""CREATE TABLE IF NOT EXISTS mapping_profiles (
+            profile_name TEXT PRIMARY KEY, mapping_json TEXT, created_date TEXT
+        )""")
+        c.execute("""CREATE TABLE IF NOT EXISTS app_config (
+            key TEXT PRIMARY KEY, value TEXT
+        )""")
+        conn.commit()
+        conn.close()
+        logger.success("Database initialized")
+    except Exception as e:
+        logger.error(f"Database init failed: {e}")
+
+init_database()
 
 # ----------------------------------------------------------------------
 # Drag & Drop Components
@@ -107,66 +196,6 @@ class DraggableLabel(QLabel):
         self.setAlignment(Qt.AlignCenter)
     def mousePressEvent(self, e):
         if e.button() == Qt.LeftButton:
-            drag = QDrag(self)
-            mime = QMimeData()
-            mime.setText(self.text())
-            drag.setMimeData(mime)
-            drag.exec_(Qt.CopyAction)
-
-
-import time
-import shutil
-import traceback
-from pathlib import Path
-from datetime import datetime
-import pandas as pd
-import sqlite3
-import getpass
-import socket
-from PyQt5.QtWidgets import *
-from PyQt5.QtCore import Qt, QMimeData, pyqtSignal, QTimer, QSize
-from PyQt5.QtGui import QColor, QFont, QDrag, QKeySequence, QIcon, QPixmap, QPainter
-from PyQt5.QtSvg import QSvgRenderer
-from openpyxl.styles import Font
-
-# ==============================================================================
-"""
-{APP_NAME} {VERSION} - FINAL RELEASE
-100% COMPLIANT WITH AUGUST 18, 2025 FEDERAL REGISTER
-Primary Articles: Hard-coded exactly as published
-Derivative Articles: tariff_232 table + official derivative subheadings
-Exact 8-digit match only
-Steel to "08", Flag blank
-Aluminum to "07", Flag "Y"
-New Design: Settings gear, Folder Locations in dialog, Saved Profiles on Process tab
-Full app | ZERO ERRORS | PROFESSIONAL | FINAL
-"""
-
-from PyQt5.QtGui import QColor
-from PyQt5.QtSvg import QSvgRenderer
-
-class DerivativeMill(QMainWindow):
-    from PyQt5.QtCore import QThread, pyqtSignal
-
-    class FileLoaderThread(QThread):
-        finished = pyqtSignal(object, str, object)
-        def __init__(self, path, mapping):
-            super().__init__()
-            self.path = path
-            self.mapping = mapping
-        def run(self):
-            import pandas as pd
-            from pathlib import Path
-            try:
-                col_map = {v: k for k, v in self.mapping.items()}
-                if Path(self.path).suffix.lower() == ".xlsx":
-                    df = pd.read_excel(self.path, dtype=str)
-                else:
-                    df = pd.read_csv(self.path, dtype=str)
-                df = df.rename(columns=col_map)
-                self.finished.emit(df, None, None)
-            except Exception as e:
-                self.finished.emit(None, str(e), None)
             drag = QDrag(self)
             mime = QMimeData()
             mime.setText(self.text())
@@ -195,6 +224,78 @@ class DropTarget(QLabel):
         self.dropped.emit(self.field_key, col)
         e.accept()
 
+class FileDropZone(QLabel):
+    """Drag-and-drop zone for importing CSV/Excel files"""
+    file_dropped = pyqtSignal(str)
+    
+    def __init__(self):
+        super().__init__()
+        self.setText("📁 Drag & Drop CSV/Excel File Here\n\nor click to browse")
+        self.setAlignment(Qt.AlignCenter)
+        self.setWordWrap(True)
+        self.setMinimumHeight(120)
+        self.setAcceptDrops(True)
+        self.setCursor(Qt.PointingHandCursor)
+        self.update_style(False)
+        
+    def update_style(self, hover=False):
+        if hover:
+            self.setStyleSheet("""
+                QLabel {
+                    background: #e3f2fd;
+                    border: 3px dashed #2196F3;
+                    border-radius: 10px;
+                    font-size: 14pt;
+                    font-weight: bold;
+                    color: #1976D2;
+                    padding: 20px;
+                }
+            """)
+        else:
+            self.setStyleSheet("""
+                QLabel {
+                    background: #f5f5f5;
+                    border: 3px dashed #999;
+                    border-radius: 10px;
+                    font-size: 14pt;
+                    font-weight: bold;
+                    color: #666;
+                    padding: 20px;
+                }
+            """)
+    
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.accept()
+            self.update_style(True)
+        else:
+            event.ignore()
+    
+    def dragLeaveEvent(self, event):
+        self.update_style(False)
+    
+    def dropEvent(self, event):
+        self.update_style(False)
+        urls = event.mimeData().urls()
+        if urls:
+            file_path = urls[0].toLocalFile()
+            if file_path.lower().endswith(('.csv', '.xlsx', '.xls')):
+                self.file_dropped.emit(file_path)
+                event.accept()
+            else:
+                QMessageBox.warning(self, "Invalid File", 
+                    "Please drop a CSV or Excel file (.csv, .xlsx, .xls)")
+                event.ignore()
+    
+    def mousePressEvent(self, event):
+        # Clicking opens file dialog
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Select CSV/Excel File", str(INPUT_DIR), 
+            "CSV/Excel Files (*.csv *.xlsx *.xls)"
+        )
+        if file_path:
+            self.file_dropped.emit(file_path)
+
 
 # ----------------------------------------------------------------------
 # Login Dialog
@@ -208,7 +309,9 @@ class LoginDialog(QDialog):
         self.authenticated_user = None
         
         # Set window icon (use TEMP_RESOURCES_DIR for bundled resources)
-        icon_path = TEMP_RESOURCES_DIR / "icon.ico"
+        icon_path = TEMP_RESOURCES_DIR / "banner_bg.png"
+        if not icon_path.exists():
+            icon_path = TEMP_RESOURCES_DIR / "icon.ico"
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
         
@@ -222,7 +325,12 @@ class LoginDialog(QDialog):
         header.setAlignment(Qt.AlignCenter)
         layout.addWidget(header)
         
-
+        if not WINDOWS_AUTH_AVAILABLE:
+            warning = QLabel("<b style='color:#ff6b6b'>Warning: Windows authentication not available</b><br>"
+                           "Install pywin32: pip install pywin32")
+            warning.setWordWrap(True)
+            warning.setAlignment(Qt.AlignCenter)
+            layout.addWidget(warning)
         
         # Login form
         form_group = QGroupBox("Domain Login")
@@ -342,13 +450,49 @@ class LoginDialog(QDialog):
     
     def verify_credentials(self, username, password, domain):
         """Verify Windows domain credentials"""
-        # Linux-compatible stub: always succeed if password is not empty
-        if password:
-            logger.info("Login successful (Linux stub)")
-            return True, "Login successful (Linux stub)"
-        else:
-            logger.warning("Login failed: password required")
-            return False, "Password required"
+        if not WINDOWS_AUTH_AVAILABLE:
+            # Fallback: just check if password is not empty (development mode)
+            logger.warning("Windows authentication not available - using fallback mode")
+            return True, "Login successful (fallback mode)"
+        
+        try:
+            # Try to log on with the provided credentials
+            domain_user = f"{domain}\\{username}" if domain else username
+            
+            # Attempt Windows authentication
+            handle = win32security.LogonUser(
+                username,
+                domain if domain else None,
+                password,
+                win32con.LOGON32_LOGON_NETWORK,
+                win32con.LOGON32_PROVIDER_DEFAULT
+            )
+            
+            # If we got here, authentication succeeded
+            handle.Close()
+            logger.success(f"User authenticated: {domain_user}")
+            return True, "Authentication successful"
+            
+        except win32security.error as e:
+            error_code = e.winerror
+            if error_code == 1326:  # ERROR_LOGON_FAILURE
+                logger.warning(f"Login failed for {username}: Invalid credentials")
+                return False, "Invalid username or password"
+            elif error_code == 1331:  # ERROR_ACCOUNT_DISABLED
+                logger.warning(f"Login failed for {username}: Account disabled")
+                return False, "Account is disabled"
+            elif error_code == 1907:  # ERROR_PASSWORD_MUST_CHANGE
+                logger.warning(f"Login failed for {username}: Password expired")
+                return False, "Password has expired"
+            elif error_code == 1909:  # ERROR_ACCOUNT_LOCKED_OUT
+                logger.warning(f"Login failed for {username}: Account locked")
+                return False, "Account is locked out"
+            else:
+                logger.error(f"Login failed for {username}: {str(e)}")
+                return False, f"Authentication error: {str(e)}"
+        except Exception as e:
+            logger.error(f"Login error: {str(e)}")
+            return False, f"Error: {str(e)}"
 
 # ----------------------------------------------------------------------
 # MAIN APPLICATION — FINAL DESIGN
@@ -357,29 +501,35 @@ from PyQt5.QtGui import QColor
 from PyQt5.QtSvg import QSvgRenderer
 
 class DerivativeMill(QMainWindow):
-    # ...existing code before tab changes...
-
-    class FileLoaderThread(QThread):
-        finished = pyqtSignal(object, str, object)
-        def __init__(self, path, mapping):
-            super().__init__()
-            self.path = path
-            self.mapping = mapping
-        def run(self):
-            import pandas as pd
-            from pathlib import Path
-            try:
-                col_map = {v: k for k, v in self.mapping.items()}
-                if Path(self.path).suffix.lower() == ".xlsx":
-                    df = pd.read_excel(self.path, dtype=str)
-                else:
-                    df = pd.read_csv(self.path, dtype=str)
-                df = df.rename(columns=col_map)
-                self.finished.emit(df, None, None)
-            except Exception as e:
-                self.finished.emit(None, str(e), None)
-
+    def setup_tab_by_index(self, index):
+        """Initialize tab by index using existing setup methods."""
+        tab_setup_methods = {
+            1: self.setup_shipment_mapping_tab,
+            2: self.setup_import_tab,
+            3: self.setup_master_tab,
+            4: self.setup_log_tab,
+            5: self.setup_config_tab,
+            6: self.setup_actions_tab,
+            7: self.setup_guide_tab
+        }
+        if index in tab_setup_methods:
+            tab_setup_methods[index]()
     def __init__(self):
+        super().__init__()
+        self.setWindowTitle(f"{APP_NAME} {VERSION}")
+        # Compact default size - fully scalable with no minimum constraint
+        self.setGeometry(50, 50, 1200, 700)
+        
+        # Set window icon (use TEMP_RESOURCES_DIR for bundled resources)
+        icon_path = TEMP_RESOURCES_DIR / "banner_bg.png"
+        if not icon_path.exists():
+            icon_path = TEMP_RESOURCES_DIR / "icon.ico"
+        if not icon_path.exists():
+            icon_path = TEMP_RESOURCES_DIR / "icon.png"
+        if icon_path.exists():
+            self.setWindowIcon(QIcon(str(icon_path)))
+        
+        self.current_csv = None
         self.shipment_mapping = {}
         self.selected_mid = ""
         self.current_worker = None
@@ -389,7 +539,6 @@ class DerivativeMill(QMainWindow):
         self.last_output_filename = None
         self.shipment_targets = {}  # Prevent attribute error before tab setup
 
-        super().__init__()
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
@@ -449,7 +598,10 @@ class DerivativeMill(QMainWindow):
             header_layout.addWidget(self.header_bg_label, 0, Qt.AlignVCenter)
         header_layout.addWidget(app_name, 1, Qt.AlignVCenter)
 
+
         layout.addWidget(header_container)
+
+
 
         # Add a native menu bar with a Settings action (gear icon)
         menubar = QMenuBar(self)
@@ -475,15 +627,13 @@ class DerivativeMill(QMainWindow):
         self.tab_log = QWidget()
         self.tab_config = QWidget()
         self.tab_guide = QWidget()
-        self.tab_actions = QWidget()
-        self.tabs.addTab(self.tab_process, "1. Process Shipment")
-        self.tabs.addTab(self.tab_shipment_map, "2. Invoice Mapping Profiles")
-        self.tabs.addTab(self.tab_import, "3. Parts Import")
-        self.tabs.addTab(self.tab_master, "4. Parts View")
-        self.tabs.addTab(self.tab_log, "5. Log View")
-        self.tabs.addTab(self.tab_config, "6. Customs Config")
-        self.tabs.addTab(self.tab_actions, "7. 232 Actions")
-        self.tabs.addTab(self.tab_guide, "8. User Guide")
+        self.tabs.addTab(self.tab_process, "Process Shipment")
+        self.tabs.addTab(self.tab_shipment_map, "Invoice Mapping Profiles")
+        self.tabs.addTab(self.tab_import, "Parts Import")
+        self.tabs.addTab(self.tab_master, "Parts View")
+        self.tabs.addTab(self.tab_log, "Log View")
+        self.tabs.addTab(self.tab_config, "Customs Config")
+        self.tabs.addTab(self.tab_guide, "User Guide")
         
         # Only tabs (no settings icon here)
         tabs_container = QWidget()
@@ -553,10 +703,8 @@ class DerivativeMill(QMainWindow):
 
         logger.success(f"{APP_NAME} {VERSION} GUI ready")
 
-
     # Removed deferred_initialization; tabs are now lazily loaded only when selected
-
-
+    
     def initialize_data(self, splash=None, progress_callback=None):
         """Initialize database and load all data before showing window"""
         steps = [
@@ -590,6 +738,10 @@ class DerivativeMill(QMainWindow):
     
     def on_tab_changed(self, index):
         """Initialize tabs lazily when they are first accessed"""
+        # Always re-enable input fields when returning to Process Shipment tab
+        if index == 0:
+            QTimer.singleShot(0, lambda: self._enable_input_fields())
+        
         if index in self.tabs_initialized:
             return
         
@@ -597,10 +749,10 @@ class DerivativeMill(QMainWindow):
         tab_setup_methods = {
             1: self.setup_shipment_mapping_tab,
             2: self.setup_import_tab,
+            3: self.setup_master_tab,
             4: self.setup_log_tab,
             5: self.setup_config_tab,
-            6: self.setup_actions_tab,
-            7: self.setup_guide_tab
+            6: self.setup_guide_tab
         }
         
         # Initialize the tab
@@ -657,19 +809,6 @@ class DerivativeMill(QMainWindow):
 
     def setup_process_tab(self):
         layout = QVBoxLayout(self.tab_process)
-        # ...existing code...
-        # SHIPMENT FILE (merged with Saved Profiles)
-        file_group = QGroupBox("Shipment File")
-        file_group.setObjectName("SavedProfilesGroup")
-        file_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        file_layout = QFormLayout()
-        file_layout.setLabelAlignment(Qt.AlignRight)
-        # Profile selector
-        self.profile_combo = QComboBox()
-        self.profile_combo.setMinimumWidth(200)
-        self.profile_combo.currentTextChanged.connect(self.load_selected_profile)
-        file_layout.addRow("Map Profile:", self.profile_combo)
-        self.load_mapping_profiles()
 
         # TOP BAR: Title + Settings Gear
         top_bar = QHBoxLayout()
@@ -692,49 +831,13 @@ class DerivativeMill(QMainWindow):
         # MAIN ROW: Input Files + Shipment File (with Profile) + Invoice Values
         main_row = QHBoxLayout()
 
-        # INPUT FILES GROUP — shows CSV files in Input folder
-        input_files_group = QGroupBox("Input Files")
-        input_files_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        input_files_layout = QVBoxLayout()
-        
+        # INPUT FILES LIST — now inside Shipment File group
         self.input_files_list = QListWidget()
         self.input_files_list.setSelectionMode(QListWidget.SingleSelection)
         self.input_files_list.itemClicked.connect(self.load_selected_input_file)
-        input_files_layout.addWidget(self.input_files_list)
-        
         refresh_input_btn = QPushButton("Refresh")
         refresh_input_btn.setFixedHeight(25)
         refresh_input_btn.clicked.connect(self.refresh_input_files)
-        input_files_layout.addWidget(refresh_input_btn)
-        
-        input_files_group.setLayout(input_files_layout)
-        main_row.addWidget(input_files_group)
-
-        # SHIPMENT FILE (merged with Saved Profiles)
-        file_group = QGroupBox("Shipment File")
-        file_group.setObjectName("SavedProfilesGroup")
-        file_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        file_layout = QFormLayout()
-        file_layout.setLabelAlignment(Qt.AlignRight)
-        
-        # Profile selector
-        self.profile_combo = QComboBox()
-        self.profile_combo.setMinimumWidth(200)
-        self.profile_combo.currentTextChanged.connect(self.load_selected_profile)
-        file_layout.addRow("Map Profile:", self.profile_combo)
-        self.load_mapping_profiles()
-        
-        # Add spacing
-        file_layout.addRow("", QLabel(""))
-        
-        # File display (read-only, shows selected file from Input Files list)
-        self.file_label = QLabel("No file selected")
-        self.file_label.setWordWrap(True)
-        self.update_file_label_style()  # Set initial style based on theme
-        file_layout.addRow("Selected File:", self.file_label)
-        
-        file_group.setLayout(file_layout)
-        main_row.addWidget(file_group)
 
         # INVOICE VALUES
         values_group = QGroupBox("Invoice Values")
@@ -744,9 +847,18 @@ class DerivativeMill(QMainWindow):
 
         self.ci_input = QLineEdit("")
         self.ci_input.setFixedWidth(200)
+        self.ci_input.setReadOnly(False)  # Explicitly enable editing
+        self.ci_input.setEnabled(True)    # Explicitly enable the widget
+        self.ci_input.setFocusPolicy(Qt.StrongFocus)  # Allow focus
+        self.ci_input.setClearButtonEnabled(False)  # Disable clear button that might interfere
         self.ci_input.textChanged.connect(self.update_invoice_check)
+        
         self.wt_input = QLineEdit("")
         self.wt_input.setFixedWidth(200)
+        self.wt_input.setReadOnly(False)  # Explicitly enable editing
+        self.wt_input.setEnabled(True)    # Explicitly enable the widget
+        self.wt_input.setFocusPolicy(Qt.StrongFocus)  # Allow focus
+        self.wt_input.setClearButtonEnabled(False)  # Disable clear button that might interfere
 
         values_layout.addRow("CI Value (USD):", self.ci_input)
         values_layout.addRow("Net Weight (kg):", self.wt_input)
@@ -786,6 +898,28 @@ class DerivativeMill(QMainWindow):
 
         values_group.setLayout(values_layout)
         main_row.addWidget(values_group)
+
+        # SHIPMENT FILE (merged with Saved Profiles and Input Files)
+        file_group = QGroupBox("Shipment File")
+        file_group.setObjectName("SavedProfilesGroup")
+        file_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        file_layout = QFormLayout()
+        file_layout.setLabelAlignment(Qt.AlignRight)
+        # Profile selector
+        self.profile_combo = QComboBox()
+        self.profile_combo.setMinimumWidth(200)
+        self.profile_combo.currentTextChanged.connect(self.load_selected_profile)
+        file_layout.addRow("Map Profile:", self.profile_combo)
+        # Input files list and refresh button (moved here)
+        file_layout.addRow("Input Files:", self.input_files_list)
+        file_layout.addRow("", refresh_input_btn)
+        # File display (read-only, shows selected file from Input Files list)
+        self.file_label = QLabel("No file selected")
+        self.file_label.setWordWrap(True)
+        self.update_file_label_style()  # Set initial style based on theme
+        file_layout.addRow("Selected File:", self.file_label)
+        file_group.setLayout(file_layout)
+        main_row.addWidget(file_group)
 
         # ACTIONS GROUP — Clear All + Export Worksheet buttons
         actions_group = QGroupBox("Actions")
@@ -861,9 +995,44 @@ class DerivativeMill(QMainWindow):
 
         self.tab_process.setLayout(layout)
         self._install_preview_shortcuts()
+        
+        # Ensure input fields are ready immediately and repeatedly
+        self._enable_input_fields()  # Call immediately
+        QTimer.singleShot(0, lambda: self._enable_input_fields())
+        QTimer.singleShot(50, lambda: self._enable_input_fields())
+        QTimer.singleShot(100, lambda: self._enable_input_fields())
+        QTimer.singleShot(200, lambda: self._enable_input_fields())
+        QTimer.singleShot(500, lambda: self._enable_input_fields())
+        QTimer.singleShot(1000, lambda: self._enable_input_fields())
+    
+    def _enable_input_fields(self):
+        """Ensure CI and Weight input fields are enabled and ready for input"""
+        if hasattr(self, 'ci_input'):
+            self.ci_input.blockSignals(True)
+            self.ci_input.setReadOnly(False)
+            self.ci_input.setEnabled(True)
+            self.ci_input.setFocusPolicy(Qt.StrongFocus)
+            self.ci_input.clearFocus()
+            self.ci_input.setUpdatesEnabled(True)
+            self.ci_input.blockSignals(False)
+            self.ci_input.repaint()  # Force immediate repaint
+            self.ci_input.update()
+            QApplication.processEvents(QEventLoop.AllEvents)  # Process ALL events
+            QApplication.sendPostedEvents()  # Send all posted events immediately
+        if hasattr(self, 'wt_input'):
+            self.wt_input.blockSignals(True)
+            self.wt_input.setReadOnly(False)
+            self.wt_input.setEnabled(True)
+            self.wt_input.setFocusPolicy(Qt.StrongFocus)
+            self.wt_input.clearFocus()
+            self.wt_input.setUpdatesEnabled(True)
+            self.wt_input.blockSignals(False)
+            self.wt_input.repaint()  # Force immediate repaint
+            self.wt_input.update()
+            QApplication.processEvents(QEventLoop.AllEvents)  # Process ALL events
+            QApplication.sendPostedEvents()  # Send all posted events immediately
 
     def show_settings_dialog(self):
-        global INPUT_DIR, OUTPUT_DIR
         dialog = QDialog(self)
         dialog.setWindowTitle("Settings")
         dialog.setFixedSize(500, 600)
@@ -873,123 +1042,123 @@ class DerivativeMill(QMainWindow):
         theme_group = QGroupBox("Appearance")
         theme_layout = QFormLayout()
         
-        def save_setting(key, value):
-            try:
-                conn = sqlite3.connect(str(DB_PATH))
-                c = conn.cursor()
-                c.execute("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)", (key, str(value)))
-                conn.commit()
-                conn.close()
-                logger.info(f"Setting saved: {key}={value}")
-            except Exception as e:
-                logger.error(f"Failed to save setting {key}: {e}")
-
-        def load_setting(key, default=None):
-            try:
-                conn = sqlite3.connect(str(DB_PATH))
-                c = conn.cursor()
-                c.execute("SELECT value FROM app_config WHERE key=?", (key,))
-                row = c.fetchone()
-                conn.close()
-                return row[0] if row else default
-            except Exception as e:
-                logger.error(f"Failed to load setting {key}: {e}")
-                return default
-
-
-        theme_layout.addRow("", QWidget())  # Add a spacer
+        # Use local variable instead of instance variable
+        theme_combo = QComboBox()
+        theme_combo.addItems(["System Default", "Fusion (Light)", "Windows", "Fusion (Dark)", "Ocean", "Teal Professional"])
+        
+        # Load saved theme preference and set combo without triggering signal
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("SELECT value FROM app_config WHERE key = 'theme'")
+            row = c.fetchone()
+            conn.close()
+            
+            if row:
+                saved_theme = row[0]
+                index = theme_combo.findText(saved_theme)
+                if index >= 0:
+                    # Block signals to prevent double-applying theme
+                    theme_combo.blockSignals(True)
+                    theme_combo.setCurrentIndex(index)
+                    theme_combo.blockSignals(False)
+        except:
+            pass
+        
+        theme_combo.currentTextChanged.connect(self.apply_theme)
+        theme_layout.addRow("Application Theme:", theme_combo)
+        
+        theme_info = QLabel("<small>Theme changes apply immediately. System Default uses your Windows theme settings.</small>")
+        theme_info.setWordWrap(True)
+        theme_info.setStyleSheet("color:#666; padding:5px;")
+        theme_layout.addRow("", theme_info)
+        
         theme_group.setLayout(theme_layout)
-        layout.insertWidget(0, theme_group)
+        layout.addWidget(theme_group)
 
         group = QGroupBox("Folder Locations")
         glayout = QFormLayout()
         
         # Input folder display and button
+        global INPUT_DIR, OUTPUT_DIR
         input_dir_str = str(INPUT_DIR) if 'INPUT_DIR' in globals() and INPUT_DIR else "(not set)"
         output_dir_str = str(OUTPUT_DIR) if 'OUTPUT_DIR' in globals() and OUTPUT_DIR else "(not set)"
-        self.input_path_label = QLabel(input_dir_str)
-        self.input_path_label.setWordWrap(True)
-        self.input_path_label.setStyleSheet("background:#f0f0f0; padding:5px; border:1px solid #ccc;")
+        # Use local variables instead of instance variables
+        input_path_label = QLabel(input_dir_str)
+        input_path_label.setWordWrap(True)
+        input_path_label.setStyleSheet("background:#f0f0f0; padding:5px; border:1px solid #ccc;")
         input_btn = QPushButton("Change Input Folder")
-        input_btn.clicked.connect(lambda: self.select_input_folder(self.input_path_label))
-        glayout.addRow("Input Folder:", self.input_path_label)
+        input_btn.clicked.connect(lambda: self.select_input_folder(input_path_label))
+        glayout.addRow("Input Folder:", input_path_label)
         glayout.addRow("", input_btn)
         
         # Output folder display and button
-        self.output_path_label = QLabel(output_dir_str)
-        self.output_path_label.setWordWrap(True)
-        self.output_path_label.setStyleSheet("background:#f0f0f0; padding:5px; border:1px solid #ccc;")
+        output_path_label = QLabel(output_dir_str)
+        output_path_label.setWordWrap(True)
+        output_path_label.setStyleSheet("background:#f0f0f0; padding:5px; border:1px solid #ccc;")
         output_btn = QPushButton("Change Output Folder")
-        output_btn.clicked.connect(lambda: self.select_output_folder(self.output_path_label))
-        glayout.addRow("Output Folder:", self.output_path_label)
-        def save_setting(key, value):
-            try:
-                conn = sqlite3.connect(str(DB_PATH))
-                c = conn.cursor()
-                c.execute("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)", (key, str(value)))
-                conn.commit()
-                conn.close()
-                logger.info(f"Setting saved: {key}={value}")
-            except Exception as e:
-                logger.error(f"Failed to save setting {key}: {e}")
-
-        def load_setting(key, default=None):
-            try:
-                conn = sqlite3.connect(str(DB_PATH))
-                c = conn.cursor()
-                c.execute("SELECT value FROM app_config WHERE key=?", (key,))
-                row = c.fetchone()
-                conn.close()
-                return row[0] if row else default
-            except Exception as e:
-                logger.error(f"Failed to load setting {key}: {e}")
-                return default
-
-        # --- Theme Settings ---
-        theme_group = QGroupBox("Appearance")
-        theme_layout = QFormLayout()
-
-
-        # --- Folder Locations ---
-        group = QGroupBox("Folder Locations")
-        glayout = QFormLayout()
-        input_dir_str = load_setting("input_dir", str(INPUT_DIR) if 'INPUT_DIR' in globals() and INPUT_DIR else "(not set)")
-        output_dir_str = load_setting("output_dir", str(OUTPUT_DIR) if 'OUTPUT_DIR' in globals() and OUTPUT_DIR else "(not set)")
-        self.input_path_label = QLabel(input_dir_str)
-        self.input_path_label.setWordWrap(True)
-        self.input_path_label.setStyleSheet("background:#f0f0f0; padding:5px; border:1px solid #ccc;")
-        input_btn = QPushButton("Change Input Folder")
-        def on_input_folder():
-            self.select_input_folder(self.input_path_label)
-            save_setting("input_dir", self.input_path_label.text())
-        input_btn.clicked.connect(on_input_folder)
-        glayout.addRow("Input Folder:", self.input_path_label)
-        glayout.addRow("", input_btn)
-        self.output_path_label = QLabel(output_dir_str)
-        self.output_path_label.setWordWrap(True)
-        self.output_path_label.setStyleSheet("background:#f0f0f0; padding:5px; border:1px solid #ccc;")
-        output_btn = QPushButton("Change Output Folder")
-        def on_output_folder():
-            self.select_output_folder(self.output_path_label)
-            save_setting("output_dir", self.output_path_label.text())
-        output_btn.clicked.connect(on_output_folder)
-        glayout.addRow("Output Folder:", self.output_path_label)
+        output_btn.clicked.connect(lambda: self.select_output_folder(output_path_label))
+        glayout.addRow("Output Folder:", output_path_label)
         glayout.addRow("", output_btn)
+        
         group.setLayout(glayout)
         layout.addWidget(group)
 
-        # --- Add more settings here: Example for QLineEdit/QCheckBox/QComboBox ---
-        # Example: Custom setting
-        # custom_group = QGroupBox("Custom Settings")
-        # custom_layout = QFormLayout()
-        # self.custom_edit = QLineEdit(load_setting("custom_edit", ""))
-        # self.custom_edit.textChanged.connect(lambda val: save_setting("custom_edit", val))
-        # custom_layout.addRow("Custom Value:", self.custom_edit)
-        # custom_group.setLayout(custom_layout)
-        # layout.addWidget(custom_group)
-
         layout.addStretch()
         dialog.exec_()
+    
+    def apply_theme(self, theme_name):
+        """Apply the selected theme to the application"""
+        app = QApplication.instance()
+        
+        # Store current theme name
+        self.current_theme = theme_name
+        
+        if theme_name == "System Default":
+            app.setStyle("")
+            app.setPalette(app.style().standardPalette())
+        elif theme_name == "Fusion (Light)":
+            app.setStyle("Fusion")
+            app.setPalette(app.style().standardPalette())
+        elif theme_name == "Windows":
+            app.setStyle("Windows")
+            app.setPalette(app.style().standardPalette())
+        elif theme_name == "Fusion (Dark)":
+            app.setStyle("Fusion")
+            dark_palette = self.get_dark_palette()
+            app.setPalette(dark_palette)
+        elif theme_name == "Ocean":
+            app.setStyle("Fusion")
+            ocean_palette = self.get_ocean_palette()
+            app.setPalette(ocean_palette)
+        elif theme_name == "Teal Professional":
+            app.setStyle("Fusion")
+            teal_palette = self.get_teal_professional_palette()
+            app.setPalette(teal_palette)
+        
+        # Refresh button styles to match new theme
+        self.refresh_button_styles()
+        
+        # Update file label style for new theme
+        if hasattr(self, 'file_label'):
+            self.update_file_label_style()
+        
+        # Update status bar styles for new theme
+        self.update_status_bar_styles()
+        
+        # Update status bar styles for new theme
+        self.update_status_bar_styles()
+        
+        # Save theme preference
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("INSERT OR REPLACE INTO app_config (key, value) VALUES ('theme', ?)", (theme_name,))
+            conn.commit()
+            conn.close()
+            logger.info(f"Theme changed to: {theme_name}")
+        except Exception as e:
+            logger.error(f"Failed to save theme: {e}")
     
     def update_file_label_style(self):
         """Update file label background based on current theme"""
@@ -1337,101 +1506,95 @@ class DerivativeMill(QMainWindow):
         self.table.setRowCount(0)
 
         try:
-            # Show spinner
-            self.invoice_check_label.setText("Loading file...")
-            self.invoice_spinner = QProgressBar()
-            self.invoice_spinner.setRange(0, 0)
-            self.invoice_spinner.setFixedHeight(12)
-            self.invoice_spinner.setTextVisible(False)
-            self.layout().addWidget(self.invoice_spinner)
+            col_map = {v: k for k, v in self.shipment_mapping.items()}
+            if Path(path).suffix.lower() == ".xlsx":
+                df = pd.read_excel(path, dtype=str)
+            else:
+                df = pd.read_csv(path, dtype=str)
+            df = df.rename(columns=col_map)
 
-            def on_loaded(df, error, _):
-                self.invoice_spinner.hide()
-                self.invoice_spinner.deleteLater()
-                if error:
-                    logger.error(f"browse_file value read failed: {error}")
-                    self.invoice_check_label.setText("Could not read value column")
-                    return
-                # Check for mapping issues
-                if df is None or not hasattr(df, 'columns'):
-                    logger.error("Loaded DataFrame is None or invalid.")
-                    self.invoice_check_label.setText("Error: Could not load file data.")
-                    return
-                if 'value_usd' not in df.columns:
-                    logger.error(f"CSV missing 'value_usd' column after mapping. Columns: {list(df.columns)}")
-                    self.invoice_check_label.setText("Error: 'value_usd' column missing. Check mapping and file format.")
-                    self.csv_total_value = 0.0
-                    self.update_invoice_check()
-                    return
+            if 'value_usd' in df.columns:
                 total = pd.to_numeric(df['value_usd'], errors='coerce').sum()
                 self.csv_total_value = round(total, 2)
-                if self.csv_total_value == 0.0:
-                    logger.warning("CSV 'value_usd' sum is zero. Check for empty or invalid values.")
-                    self.invoice_check_label.setText("Warning: CSV value sum is zero. Check file contents.")
-                else:
-                    self.invoice_check_label.setText(f"Loaded: {Path(path).name}")
                 self.update_invoice_check()  # This will control button state
-                logger.info(f"Loaded: {Path(path).name}, value sum: {self.csv_total_value}")
-
-            self.file_loader_thread = self.FileLoaderThread(path, self.shipment_mapping)
-            self.file_loader_thread.finished.connect(on_loaded)
-            self.file_loader_thread.start()
         except Exception as e:
-            logger.error(f"Exception in browse_file: {e}")
-            self.invoice_check_label.setText("Error loading file")
+            logger.error(f"browse_file value read failed: {e}")
+            self.invoice_check_label.setText("Could not read value column")
+
+        logger.info(f"Loaded: {Path(path).name}")
+        
     def update_invoice_check(self):
-        if not self.current_csv:
-            self.invoice_check_label.setText("No file loaded")
-            # Gold glow effect in dark theme
-            if hasattr(self, 'current_theme') and self.current_theme in ["Fusion (Dark)", "Ocean", "Teal Professional"]:
-                self.invoice_check_label.setStyleSheet("background:transparent; color: gold; font-weight:bold; font-size:7pt; padding:3px; text-shadow: 0 0 8px gold, 0 0 4px #FFD700;")
-            else:
-                self.invoice_check_label.setStyleSheet("background:transparent; color: #A4262C; font-weight:bold; font-size:7pt; padding:3px;")
+        # Guard against re-entrancy
+        if getattr(self, '_updating_invoice_check', False):
             return
-
-        user_text = self.ci_input.text().replace(',', '').strip()
+        self._updating_invoice_check = True
+        
         try:
-            user_val = float(user_text) if user_text else 0.0
-        except:
-            user_val = 0.0
-
-        diff = abs(user_val - self.csv_total_value)
-        threshold = 0.01
-        # Update the invoice check label
-        if diff <= threshold:
-            self.invoice_check_label.setText(f"Match: ${self.csv_total_value:,.2f}")
-            self.invoice_check_label.setStyleSheet("background:#107C10; color:white; font-weight:bold; font-size:7pt; padding:3px;")
-            self.edit_values_btn.setVisible(False)
-        else:
-            self.invoice_check_label.setText(
-                f"CSV = ${self.csv_total_value:,.2f} | "
-                f"Entered = ${user_val:,.2f} | Diff = ${diff:,.2f}"
-            )
-            self.invoice_check_label.setStyleSheet("background:#A4262C; color:white; font-weight:bold; font-size:7pt; padding:3px;")
-            # Show Edit Values button when values don't match and haven't processed yet
-            if self.last_processed_df is None:
-                self.edit_values_btn.setVisible(True)
-            else:
+            if not self.current_csv:
+                self.invoice_check_label.setText("No file loaded")
+                # Gold color in dark theme (text-shadow not supported in Qt)
+                if hasattr(self, 'current_theme') and self.current_theme in ["Fusion (Dark)", "Ocean", "Teal Professional"]:
+                    self.invoice_check_label.setStyleSheet("background:transparent; color: gold; font-weight:bold; font-size:7pt; padding:3px;")
+                else:
+                    self.invoice_check_label.setStyleSheet("background:transparent; color: #A4262C; font-weight:bold; font-size:7pt; padding:3px;")
                 self.edit_values_btn.setVisible(False)
-        # Button state control
-        if self.current_csv and len(self.shipment_mapping) >= 2:
-            if self.last_processed_df is None:
-                # Haven't processed yet - enable button when values match
-                if diff <= threshold:
-                    self.process_btn.setEnabled(True)
-                    self.process_btn.setText("Process Invoice")
-                else:
-                    self.process_btn.setEnabled(False)
-                    self.process_btn.setText("Process Invoice ")
-            else:
-                # Already processed - button becomes Export, only enabled when values match
-                if diff <= threshold:
-                    self.process_btn.setEnabled(True)
-                    self.process_btn.setText("Export Worksheet")
-                else:
-                    self.process_btn.setEnabled(False)
-                    self.process_btn.setText("Export Worksheet ")
+                return
+
+            user_text = self.ci_input.text().replace(',', '').strip()
+            try:
+                user_val = float(user_text) if user_text else 0.0
+            except:
+                user_val = 0.0
+
+            diff = abs(user_val - self.csv_total_value)
+            threshold = 0.01
             
+            # Update the invoice check label and Edit Values button
+            if user_val == 0.0:
+                self.invoice_check_label.setText(f"CSV Total: ${self.csv_total_value:,.2f}")
+                self.invoice_check_label.setStyleSheet("background:#0078D4; color:white; font-weight:bold; font-size:7pt; padding:3px;")
+                self.edit_values_btn.setVisible(False)
+            elif diff <= threshold:
+                self.invoice_check_label.setText(f"✓ Match: ${self.csv_total_value:,.2f}")
+                self.invoice_check_label.setStyleSheet("background:#107C10; color:white; font-weight:bold; font-size:7pt; padding:3px;")
+                self.edit_values_btn.setVisible(False)
+            else:
+                # Values don't match - show comparison and Edit Values button
+                self.invoice_check_label.setText(
+                    f"CSV Total: ${self.csv_total_value:,.2f}\n"
+                    f"Difference: ${diff:,.2f}"
+                )
+                self.invoice_check_label.setStyleSheet("background:#ff9800; color:white; font-weight:bold; font-size:7pt; padding:3px;")
+                # Show Edit Values button only if haven't processed yet
+                if self.last_processed_df is None:
+                    self.edit_values_btn.setVisible(True)
+                else:
+                    self.edit_values_btn.setVisible(False)
+            
+            # Button state control - enable when required fields are filled (ALLOWS PROCESSING EVEN IF VALUES DON'T MATCH)
+            has_weight = bool(self.wt_input.text().strip())
+            has_ci_value = bool(user_text)
+            has_mid = bool(self.selected_mid)
+            
+            if self.current_csv and len(self.shipment_mapping) >= 2:
+                if self.last_processed_df is None:
+                    # Haven't processed yet - enable when required fields filled (regardless of value match)
+                    if has_weight and has_ci_value and has_mid:
+                        self.process_btn.setEnabled(True)
+                        self.process_btn.setText("Process Invoice")
+                    else:
+                        self.process_btn.setEnabled(False)
+                        self.process_btn.setText("Process Invoice")
+                else:
+                    # Already processed - button becomes Export, only enabled when values match
+                    if diff <= threshold:
+                        self.process_btn.setEnabled(True)
+                        self.process_btn.setText("Export Worksheet")
+                    else:
+                        self.process_btn.setEnabled(False)
+                        self.process_btn.setText("Export Worksheet")
+        finally:
+            self._updating_invoice_check = False
     def select_input_folder(self, label=None):
         global INPUT_DIR, PROCESSED_DIR
         folder = QFileDialog.getExistingDirectory(self, "Select Input Folder", str(INPUT_DIR))
@@ -1716,7 +1879,7 @@ class DerivativeMill(QMainWindow):
                 # Calculate total
                 total = df['value_usd'].sum()
                 self.csv_total_value = round(total, 2)
-                self.ci_input.setText(f"{self.csv_total_value:,.2f}")
+                # Don't overwrite user's CI input - just update the check
                 self.update_invoice_check()
                 
                 if removed_count > 0:
@@ -1872,24 +2035,17 @@ class DerivativeMill(QMainWindow):
         #     self.status.setStyleSheet("font-size:14pt; padding:8px; background:#f0f0f0;")
 
     def setup_import_tab(self):
-        theme_group = QGroupBox("Appearance")
-        # Add query result label for status messages
-        self.query_result_label = QLabel()
-        self.query_result_label.setStyleSheet("padding:5px; background:#f0f0f0;")
-        # Create a scrollable area for the import tab
-        scroll = QScrollArea(self.tab_import)
-        scroll.setWidgetResizable(True)
-        container = QWidget()
-        layout = QVBoxLayout(container)
-
+        layout = QVBoxLayout(self.tab_import)
         title = QLabel("<h2>Parts Import from CSV/Excel</h2><p>Drag & drop columns to map fields</p>")
         title.setAlignment(Qt.AlignCenter)
+        # Lighten font in dark mode
         if self.current_theme and "dark" in self.current_theme.lower():
             title.setStyleSheet("color: #e0e0e0;")
         else:
             title.setStyleSheet("color: #333;")
         layout.addWidget(title)
 
+        # Buttons at top
         button_widget = QWidget()
         btn_layout = QHBoxLayout(button_widget)
         btn_load = QPushButton("Load CSV/Excel File")
@@ -1908,64 +2064,115 @@ class DerivativeMill(QMainWindow):
         btn_layout.addWidget(btn_import)
         layout.addWidget(button_widget)
 
-        # Make left (drag) area scrollable, right (drop) area fixed
-        # Theme selector block (indented inside method)
-        theme_layout = QVBoxLayout()
-        theme_group = QGroupBox("Appearance")
-        self.theme_combo = QComboBox()
-        self.theme_combo.addItems([
-            "System Default",
-            "Fusion (Light)",
-            "Windows",
-            "Fusion (Dark)",
-            "Ocean",
-            "Teal Professional"
-        ])
-        try:
-            conn = sqlite3.connect(str(DB_PATH))
-            c = conn.cursor()
-            c.execute("SELECT value FROM app_config WHERE key = 'theme'")
-            row = c.fetchone()
-            conn.close()
-            if row:
-                saved_theme = row[0]
-                index = self.theme_combo.findText(saved_theme)
-                if index >= 0:
-                    self.theme_combo.blockSignals(True)
-                    self.theme_combo.setCurrentIndex(index)
-                    self.theme_combo.blockSignals(False)
-        except Exception as e:
-            logger.error(f"Failed to load theme: {e}")
-        def on_theme_changed(val):
-            self.apply_theme(val)
-            try:
-                conn = sqlite3.connect(str(DB_PATH))
-                c = conn.cursor()
-                c.execute("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)", ("theme", val))
-                conn.commit()
-                conn.close()
-                logger.info(f"Theme saved: {val}")
-            except Exception as e:
-                logger.error(f"Failed to save theme: {e}")
-        self.theme_combo.currentTextChanged.connect(on_theme_changed)
-        theme_layout.addWidget(QLabel("Application Theme:"))
-        theme_layout.addWidget(self.theme_combo)
-        theme_info = QLabel("<small>Theme changes apply immediately. System Default uses your OS theme settings.</small>")
-        theme_info.setWordWrap(True)
-        theme_info.setStyleSheet("color:#666; padding:5px;")
-        theme_layout.addWidget(theme_info)
-        theme_group.setLayout(theme_layout)
-        layout.insertWidget(0, theme_group)
-        self.parts_table = QTableWidget()
-        self.parts_table.setAlternatingRowColors(True)
-        self.parts_table.setStyleSheet("")
-        layout.addWidget(self.parts_table)
-        scroll.setWidget(container)
-        tab_layout = QVBoxLayout(self.tab_import)
-        tab_layout.addWidget(scroll)
-        self.tab_import.setLayout(tab_layout)
+        # Main drag/drop area with scroll
+        main_widget = QWidget()
+        main_layout = QHBoxLayout(main_widget)
+        main_layout.setContentsMargins(0,0,0,0)
+        main_layout.setSpacing(20)
 
+        left = QGroupBox("CSV/Excel Columns - Drag")
+        left_outer_layout = QVBoxLayout()
+        
+        # Add scroll area for columns
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        
+        scroll_widget = QWidget()
+        left_layout = QVBoxLayout(scroll_widget)
+        left_layout.setContentsMargins(5, 5, 5, 5)
+        left_layout.setSpacing(5)
+        self.drag_labels = []
+        # Don't add stretch here - it will be added after labels are loaded
+        
+        scroll_area.setWidget(scroll_widget)
+        left_outer_layout.addWidget(scroll_area)
+        left.setLayout(left_outer_layout)
+        
+        # Store reference to left_layout for adding labels later
+        self.import_left_layout = left_layout
+
+        right = QGroupBox("Available Fields - Drop Here")
+        right_outer_layout = QVBoxLayout()
+        
+        # Add scroll area for drop targets
+        right_scroll_area = QScrollArea()
+        right_scroll_area.setWidgetResizable(True)
+        right_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        right_scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        
+        right_scroll_widget = QWidget()
+        right_layout = QFormLayout(right_scroll_widget)
+        right_layout.setLabelAlignment(Qt.AlignRight)
+        right_layout.setContentsMargins(5, 5, 5, 5)
+        
+        self.import_targets = {}
+        fields = {
+            "part_number": "Part Number *",
+            "hts_code": "HTS Code *",
+            "mid": "MID *",
+            "steel_ratio": "Sec 232 Content Ratio *"
+        }
+        for key, name in fields.items():
+            target = DropTarget(key, name)
+            target.dropped.connect(self.on_import_drop)
+            label_text = name.replace(" *", "")
+            label = QLabel(f"{label_text}: <span style='color:red;'>*</span>")
+            right_layout.addRow(label, target)
+            self.import_targets[key] = target
+        
+        right_scroll_area.setWidget(right_scroll_widget)
+        right_outer_layout.addWidget(right_scroll_area)
+        right.setLayout(right_outer_layout)
+
+        main_layout.addWidget(left, 1)
+        main_layout.addWidget(right, 2)
+        layout.addWidget(main_widget, 1)
+        self.import_widget = main_widget
+
+        self.import_csv_path = None
+        self.tab_import.setLayout(layout)
+
+    def load_csv_for_import_from_path(self, path):
+        """Load CSV/Excel file from a given path (used by drag-and-drop)"""
+        if not path:
+            return
+        self.import_csv_path = path
+        try:
+            # Handle both CSV and Excel files
+            if path.lower().endswith('.xlsx'):
+                df = pd.read_excel(path, nrows=0, dtype=str)
+            else:
+                df = pd.read_csv(path, nrows=0, dtype=str)
+            cols = list(df.columns)
+            
+            # Clear existing labels
+            for label in self.drag_labels:
+                label.setParent(None)
+                label.deleteLater()
+            self.drag_labels = []
+            
+            # Add new labels directly to the layout
+            for col in cols:
+                lbl = DraggableLabel(col)
+                self.import_left_layout.addWidget(lbl)
+                self.drag_labels.append(lbl)
+            
+            # Add stretch at the end to push labels to the top
+            self.import_left_layout.addStretch()
+            
+            logger.info(f"Loaded CSV for import (drag-drop): {Path(path).name}")
+            self.bottom_status.setText(f"CSV loaded: {Path(path).name}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Cannot read CSV:\n{e}")
+    
     def load_csv_for_import(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Select CSV/Excel", str(INPUT_DIR), "CSV/Excel Files (*.csv *.xlsx)")
+        if not path: return
+        self.load_csv_for_import_from_path(path)
+    
+    def load_csv_for_import_old(self):
         path, _ = QFileDialog.getOpenFileName(self, "Select CSV/Excel", str(INPUT_DIR), "CSV/Excel Files (*.csv *.xlsx)")
         if not path: return
         self.import_csv_path = path
@@ -1979,7 +2186,7 @@ class DerivativeMill(QMainWindow):
             for label in self.drag_labels:
                 label.setParent(None)
             self.drag_labels = []
-            left_layout = self.left_group.layout()
+            left_layout = self.import_widget.layout().itemAt(0).widget().layout()
             for col in cols:
                 lbl = DraggableLabel(col)
                 left_layout.insertWidget(left_layout.count()-1, lbl)
@@ -1990,16 +2197,31 @@ class DerivativeMill(QMainWindow):
             QMessageBox.critical(self, "Error", f"Cannot read CSV:\n{e}")
 
     def reset_import_mapping(self):
-        if QMessageBox.question(self, "Reset", "Clear all field mappings?") != QMessageBox.Yes:
+        if QMessageBox.question(self, "Reset", "Clear all field mappings and column list?") != QMessageBox.Yes:
             return
+        
+        # Clear drop targets (right side)
         for target in self.import_targets.values():
             target.column_name = None
             target.setText(f"Drop {target.field_key} here")
             target.setProperty("occupied", False)
             target.style().unpolish(target); target.style().polish(target)
+        
+        # Clear drag labels (left side - CSV/Excel columns)
+        for label in self.drag_labels:
+            label.setParent(None)
+            label.deleteLater()
+        self.drag_labels = []
+        
+        # Clear the file path
+        self.import_csv_path = None
+        
+        # Delete mapping file if it exists
         if MAPPING_FILE.exists():
             MAPPING_FILE.unlink()
-        logger.info("Import mapping reset")
+        
+        logger.info("Import mapping and column list reset")
+        self.bottom_status.setText("Import mapping cleared")
 
     def on_import_drop(self, field_key, column_name):
         for k, t in self.import_targets.items():
@@ -2080,7 +2302,11 @@ class DerivativeMill(QMainWindow):
                     updated += 1 if conn.total_changes == updated+inserted else 0
             conn.commit(); conn.close()
             QMessageBox.information(self, "Success", f"Imported!\nUpdated: {updated}\nInserted: {inserted}")
-            self.refresh_parts_table()
+            
+            # Only refresh parts table if Parts View tab has been initialized
+            if hasattr(self, 'parts_table'):
+                self.refresh_parts_table()
+            
             self.load_available_mids()
             self.bottom_status.setText("Import complete")
         except Exception as e:
@@ -2101,6 +2327,9 @@ class DerivativeMill(QMainWindow):
         self.profile_combo_map.currentTextChanged.connect(self.load_selected_profile_full)
         top_bar.addWidget(QLabel("Saved Profiles:"))
         top_bar.addWidget(self.profile_combo_map)
+        
+        # Load profiles immediately after creating the combo box
+        self.load_mapping_profiles()
 
         btn_save = QPushButton("Save Current Mapping As...")
         btn_save.setStyleSheet(self.get_button_style("success"))
@@ -2150,72 +2379,31 @@ class DerivativeMill(QMainWindow):
             self.shipment_targets[key] = target
         right.setLayout(right_layout)
 
-        self.shipment_layout.addWidget(left,1)
-        self.shipment_layout.addWidget(right,1)
+        self.shipment_layout.addWidget(left,1); self.shipment_layout.addWidget(right,1)
         scroll_layout.addWidget(self.shipment_widget)
 
         scroll.setWidget(scroll_widget)
         layout.addWidget(scroll, 1)
         self.tab_shipment_map.setLayout(layout)
-        self.load_mapping_profiles()
 
     def load_csv_for_shipment_mapping(self):
-        logger.info("DEBUG: load_csv_for_shipment_mapping called")
         path, _ = QFileDialog.getOpenFileName(self, "Select CSV", str(INPUT_DIR), "CSV (*.csv)")
-        logger.info(f"File dialog returned path: {path}")
-        if not path:
-            logger.warning("No file selected in dialog")
-            QMessageBox.warning(self, "No File Selected", "Please select a CSV file to map.")
-            return
+        if not path: return
         try:
-            logger.info(f"Attempting to read CSV header: {path}")
             df = pd.read_csv(path, nrows=0, dtype=str)
             cols = list(df.columns)
-            logger.info(f"CSV columns found: {cols}")
-        except Exception as e:
-            logger.error(f"Failed to read CSV: {e}")
-            QMessageBox.critical(self, "Error", f"Cannot read CSV:\n{e}")
-            return
-
-        logger.info("Checking shipment_widget existence")
-        if not hasattr(self, 'shipment_widget') or self.shipment_widget is None:
-            logger.error("shipment_widget is not initialized")
-            QMessageBox.critical(self, "Error", "Shipment mapping widget is not initialized.")
-            return
-        shipment_layout = self.shipment_widget.layout()
-        logger.info(f"shipment_layout: {shipment_layout}")
-        if shipment_layout is None or shipment_layout.count() == 0:
-            logger.error("shipment_layout is not initialized or empty")
-            QMessageBox.critical(self, "Error", "Shipment mapping layout is not initialized.")
-            return
-        left_group = shipment_layout.itemAt(0).widget()
-        logger.info(f"left_group: {left_group}")
-        if left_group is None or left_group.layout() is None:
-            logger.error("CSV columns group is not initialized")
-            QMessageBox.critical(self, "Error", "CSV columns group is not initialized.")
-            return
-        left_layout = left_group.layout()
-        logger.info(f"left_layout: {left_layout}")
-
-        logger.info("Removing old shipment_drag_labels")
-        for label in getattr(self, 'shipment_drag_labels', []):
-            logger.info(f"Removing label: {label}")
-            label.setParent(None)
-            label.deleteLater()
-        self.shipment_drag_labels = []
-
-        logger.info("Adding new draggable labels for columns")
-        for col in cols:
-            try:
-                logger.info(f"Creating DraggableLabel for column: {col}")
+            for label in self.shipment_drag_labels:
+                label.setParent(None)
+            self.shipment_drag_labels = []
+            left_layout = self.shipment_widget.layout().itemAt(0).widget().layout()
+            for col in cols:
                 lbl = DraggableLabel(col)
                 left_layout.insertWidget(left_layout.count()-1, lbl)
                 self.shipment_drag_labels.append(lbl)
-            except Exception as e:
-                logger.error(f"Failed to create draggable label for column '{col}': {e}")
-
-        logger.info(f"Shipment CSV loaded for mapping: {Path(path).name}")
-        self.status.setText(f"Shipment CSV loaded: {Path(path).name}")
+            logger.info(f"Shipment CSV loaded for mapping: {Path(path).name}")
+            self.status.setText(f"Shipment CSV loaded: {Path(path).name}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Cannot read CSV:\n{e}")
 
     def on_shipment_drop(self, field_key, column_name):
         for k, t in self.shipment_targets.items():
@@ -2251,49 +2439,28 @@ class DerivativeMill(QMainWindow):
             conn = sqlite3.connect(str(DB_PATH))
             df = pd.read_sql("SELECT profile_name FROM mapping_profiles ORDER BY created_date DESC", conn)
             conn.close()
-            self.profile_combo.setEnabled(True)
-            if hasattr(self, 'profile_combo_map'):
-                self.profile_combo_map.setEnabled(True)
-            # Remember current selections
-            current_profile = self.profile_combo.currentText() if hasattr(self, 'profile_combo') else None
-            current_profile_map = self.profile_combo_map.currentText() if hasattr(self, 'profile_combo_map') else None
-
-            self.profile_combo.blockSignals(True)
+            
+            # Update Process tab combo (tab 0 - always initialized)
+            if hasattr(self, 'profile_combo'):
+                self.profile_combo.blockSignals(True)
+                self.profile_combo.clear()
+                self.profile_combo.addItem("-- Select Profile --")
+                for name in df['profile_name'].tolist():
+                    self.profile_combo.addItem(name)
+                self.profile_combo.blockSignals(False)
+            
+            # Update Invoice Mapping Profiles tab combo (tab 1 - may not be initialized yet)
             if hasattr(self, 'profile_combo_map'):
                 self.profile_combo_map.blockSignals(True)
-            self.profile_combo.clear()
-            if hasattr(self, 'profile_combo_map'):
                 self.profile_combo_map.clear()
-            self.profile_combo.addItem("-- Select Profile --")
-            if hasattr(self, 'profile_combo_map'):
                 self.profile_combo_map.addItem("-- Select Profile --")
-            profiles = df['profile_name'].tolist()
-            if not profiles:
-                logger.warning("No mapping profiles found in database.")
-            for name in profiles:
-                self.profile_combo.addItem(name)
-                if hasattr(self, 'profile_combo_map'):
+                for name in df['profile_name'].tolist():
                     self.profile_combo_map.addItem(name)
-
-            # Restore previous selection if possible, else select first profile
-            if current_profile and self.profile_combo.findText(current_profile) != -1:
-                self.profile_combo.setCurrentText(current_profile)
-            elif profiles:
-                self.profile_combo.setCurrentText(profiles[0])
-            if hasattr(self, 'profile_combo_map'):
-                if current_profile_map and self.profile_combo_map.findText(current_profile_map) != -1:
-                    self.profile_combo_map.setCurrentText(current_profile_map)
-                elif profiles:
-                    self.profile_combo_map.setCurrentText(profiles[0])
-
-            self.profile_combo.blockSignals(False)
-            if hasattr(self, 'profile_combo_map'):
                 self.profile_combo_map.blockSignals(False)
-            logger.info(f"Loaded mapping profiles: {profiles}")
+                
+            logger.info(f"Loaded {len(df)} mapping profiles")
         except Exception as e:
             logger.error(f"Failed to load mapping profiles: {e}")
-            self.profile_combo.setEnabled(True)
-            self.profile_combo_map.setEnabled(True)
 
     def save_mapping_profile(self):
         name, ok = QInputDialog.getText(self, "Save Mapping Profile", "Enter profile name:")
@@ -2305,21 +2472,19 @@ class DerivativeMill(QMainWindow):
                 return
         
         mapping_str = json.dumps(self.shipment_mapping)
-        created_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         try:
             conn = sqlite3.connect(str(DB_PATH))
             c = conn.cursor()
-            c.execute("INSERT OR REPLACE INTO mapping_profiles (profile_name, mapping_json, created_date) VALUES (?, ?, ?)",
-                      (name, mapping_str, created_date))
+            c.execute("INSERT OR REPLACE INTO mapping_profiles (profile_name, mapping_json) VALUES (?, ?)",
+                      (name, mapping_str))
             conn.commit()
             conn.close()
             self.load_mapping_profiles()
-            self.profile_combo.setCurrentText(name)
+            # Only update the combo on the Invoice Mapping Profiles tab (where save button is)
             self.profile_combo_map.setCurrentText(name)
             logger.success(f"Mapping profile saved: {name}")
             self.status.setText(f"Profile saved: {name}")
         except Exception as e:
-            logger.error(f"Mapping profile save failed: {e}")
             QMessageBox.critical(self, "Error", f"Save failed: {e}")
 
     def load_selected_profile(self, name):
@@ -2363,6 +2528,7 @@ class DerivativeMill(QMainWindow):
             QMessageBox.critical(self, "Error", f"Load failed: {e}")
 
     def delete_mapping_profile(self):
+        # Get profile name from Invoice Mapping Profiles tab combo (where delete button is)
         name = self.profile_combo_map.currentText()
         if not name or name == "-- Select Profile --":
             return
@@ -2375,6 +2541,7 @@ class DerivativeMill(QMainWindow):
             conn.commit()
             conn.close()
             self.load_mapping_profiles()
+            # Reset both combos to default after deletion
             self.profile_combo.setCurrentIndex(0)
             self.profile_combo_map.setCurrentIndex(0)
             logger.info(f"Profile deleted: {name}")
@@ -2382,20 +2549,125 @@ class DerivativeMill(QMainWindow):
             QMessageBox.critical(self, "Error", f"Delete failed: {e}")
 
     def apply_current_mapping(self):
-        # Only update mapping UI for current profile
+        # Batch UI updates to prevent GUI freezing
         for key, target in self.shipment_targets.items():
             col = self.shipment_mapping.get(key)
             if col:
                 target.column_name = col
-                target.setText(f"{col}")
+                target.setText(f"{key}\n<- {col}")
                 target.setProperty("occupied", True)
             else:
                 target.column_name = None
-                target.setText(f"Drop {target.field_key.replace('_', ' ')} here")
+                target.setText(f"Drop {key.replace('_', ' ')} here")
                 target.setProperty("occupied", False)
+        
+        # Apply all style updates at once after setting properties
+        for target in self.shipment_targets.values():
             target.style().unpolish(target)
             target.style().polish(target)
-        # All layout/UI construction code removed from this function
+
+    def setup_master_tab(self):
+        layout = QVBoxLayout(self.tab_master)
+        title = QLabel("<h2>Parts View - Click any cell to edit</h2>")
+        title.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title)
+
+        edit_box = QHBoxLayout()
+        btn_add = QPushButton("Add Row")
+        btn_add.setStyleSheet(self.get_button_style("success"))
+        btn_del = QPushButton("Delete Selected")
+        btn_del.setStyleSheet(self.get_button_style("danger"))
+        btn_save = QPushButton("Save Changes")
+        btn_save.setStyleSheet(self.get_button_style("success"))
+        btn_refresh = QPushButton("Refresh")
+        btn_refresh.setStyleSheet(self.get_button_style("info"))
+        btn_add.clicked.connect(self.add_part_row)
+        btn_del.clicked.connect(self.delete_selected_parts)
+        btn_save.clicked.connect(self.save_parts_table)
+        btn_refresh.clicked.connect(self.refresh_parts_table)
+        edit_box.addWidget(QLabel("Edit:"))
+        edit_box.addWidget(btn_add); edit_box.addWidget(btn_del); edit_box.addWidget(btn_save); edit_box.addWidget(btn_refresh)
+        edit_box.addStretch()
+        layout.addLayout(edit_box)
+
+        # SQL Query Builder
+        query_group = QGroupBox("SQL Query Builder")
+        query_layout = QVBoxLayout()
+        
+        query_controls = QHBoxLayout()
+        query_controls.addWidget(QLabel("SELECT * FROM parts_master WHERE"))
+        
+        self.query_field = QComboBox()
+        self.query_field.addItems(["part_number", "description", "hts_code", "country_origin", "mid", "steel_ratio", "non_steel_ratio"])
+        query_controls.addWidget(self.query_field)
+        
+        self.query_operator = QComboBox()
+        self.query_operator.addItems(["=", "LIKE", ">", "<", ">=", "<=", "!="])
+        query_controls.addWidget(self.query_operator)
+        
+        self.query_value = QLineEdit()
+        self.query_value.setPlaceholderText("Enter value...")
+        query_controls.addWidget(self.query_value, 1)
+        
+        btn_run_query = QPushButton("Run Query")
+        btn_run_query.setStyleSheet(self.get_button_style("info"))
+        btn_run_query.clicked.connect(self.run_custom_query)
+        query_controls.addWidget(btn_run_query)
+        
+        btn_clear_query = QPushButton("Show All")
+        btn_clear_query.setStyleSheet(self.get_button_style("default"))
+        btn_clear_query.clicked.connect(self.refresh_parts_table)
+        query_controls.addWidget(btn_clear_query)
+        
+        query_layout.addLayout(query_controls)
+        
+        # Custom SQL input
+        custom_sql_layout = QHBoxLayout()
+        custom_sql_layout.addWidget(QLabel("Custom SQL:"))
+        self.custom_sql_input = QLineEdit()
+        self.custom_sql_input.setPlaceholderText("SELECT * FROM parts_master WHERE ...")
+        custom_sql_layout.addWidget(self.custom_sql_input, 1)
+        btn_run_custom = QPushButton("Execute")
+        btn_run_custom.setStyleSheet(self.get_button_style("success"))
+        btn_run_custom.clicked.connect(self.run_custom_sql)
+        custom_sql_layout.addWidget(btn_run_custom)
+        query_layout.addLayout(custom_sql_layout)
+        
+        self.query_result_label = QLabel("Ready")
+        self.query_result_label.setStyleSheet("padding:5px; background:#f0f0f0;")
+        query_layout.addWidget(self.query_result_label)
+        
+        query_group.setLayout(query_layout)
+        layout.addWidget(query_group)
+
+        search_box = QHBoxLayout()
+        search_box.addWidget(QLabel("Quick Search:"))
+        self.search_field_combo = QComboBox()
+        self.search_field_combo.addItems(["All Fields","part_number","description","hts_code","country_origin","mid","steel_ratio","non_steel_ratio"])
+        search_box.addWidget(self.search_field_combo)
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Type to filter...")
+        self.search_input.textChanged.connect(self.filter_parts_table)
+        search_box.addWidget(self.search_input, 1)
+        layout.addLayout(search_box)
+
+        table_box = QGroupBox("Parts Master Table")
+        tl = QVBoxLayout()
+        self.parts_table = QTableWidget()
+        self.parts_table.setColumnCount(8)
+        self.parts_table.setHorizontalHeaderLabels([
+            "part_number", "description", "hts_code", "country_origin", "mid", "steel_ratio", "non_steel_ratio", "updated_date"
+        ])
+        self.parts_table.setEditTriggers(QTableWidget.AllEditTriggers)
+        self.parts_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.parts_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.parts_table.setSortingEnabled(False)  # Disabled for better performance
+        tl.addWidget(self.parts_table)
+        table_box.setLayout(tl)
+        layout.addWidget(table_box, 1)
+
+        self.refresh_parts_table()
+        self.tab_master.setLayout(layout)
 
     def refresh_parts_table(self):
         try:
@@ -2794,7 +3066,7 @@ class DerivativeMill(QMainWindow):
                 for item in items:
                     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                 
-                # Color coding by material (if toggle is enabled)
+                # Color code by material (if toggle is enabled)
                 if self.tariff_color_toggle.isChecked():
                     material_colors = {
                         'Steel': QColor('#e3f2fd'),      # Light blue
@@ -3077,8 +3349,8 @@ class DerivativeMill(QMainWindow):
                     material_colors = {
                         'Steel': QColor('#e3f2fd'),
                         'Aluminum': QColor('#fff3e0'),
-                        'Copper': QColor('#ffe0b2'),
-                        'Wood': QColor('#f1f8e9')
+                        'Wood': QColor('#f1f8e9'),
+                        'Copper': QColor('#ffe0b2')
                     }
                     
                     action_text = str(row['action']).upper()
@@ -3330,7 +3602,7 @@ class DerivativeMill(QMainWindow):
         
         <h2>💡 Quick Tips</h2>
         <div class="tip">
-            • <b>Ctrl+B</b> in preview table toggles bold on selected cells<br>
+            • <b>Ctrl+B</b> in preview table toggles bold formatting on selected cells<br>
             • Click column headers to select entire column for copying<br>
             • Use profile names that match your supplier names<br>
             • Keep your parts database updated for accurate processing<br>
@@ -3369,7 +3641,7 @@ class DerivativeMill(QMainWindow):
         guide_text.setWordWrap(True)
         guide_text.setTextFormat(Qt.RichText)
         guide_text.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-        guide_text.setStyleSheet("padding: 20px; background: white;")
+        guide_text.setStyleSheet("padding: 20px; background: white; color: #000000;")
         
         scroll_layout.addWidget(guide_text)
         scroll_layout.addStretch()
@@ -3581,7 +3853,7 @@ class DerivativeMill(QMainWindow):
             self.process_btn.setEnabled(False)
             self.process_btn.setText("Export Worksheet (Values Don't Match)")
             self.status.setText(f"Preview: ${total:,.2f} • Target: ${target_value:,.2f}")
-    
+
     def _process_or_export(self):
         # If no preview yet, run processing; otherwise proceed to export
         if self.last_processed_df is None:
@@ -3635,7 +3907,7 @@ class DerivativeMill(QMainWindow):
                 'ValueUSD': value,
                 'HTSCode': self.table.item(i, 2).text() if self.table.item(i, 2) else "",
                 'MID': self.table.item(i, 3).text() if self.table.item(i, 3) else "",
-                'CalcWtNet': float(self.table.item(i, 4).text()) if self.table.item(i, 4) and self.table.item(i, 4).text() else 0.0,
+                'CalcWtNet': round(float(self.table.item(i, 4).text())) if self.table.item(i, 4) and self.table.item(i, 4).text() else 0,
                 'DecTypeCd': self.table.item(i, 5).text() if self.table.item(i, 5) else "CO",
                 'CountryofMelt': self.table.item(i, 6).text() if self.table.item(i, 6) else "",
                 'CountryOfCast': self.table.item(i, 7).text() if self.table.item(i, 7) else "",
@@ -3822,16 +4094,12 @@ class DerivativeMill(QMainWindow):
             df = pd.read_sql("SELECT DISTINCT mid FROM parts_master WHERE mid IS NOT NULL AND mid != '' ORDER BY mid", conn)
             conn.close()
             self.available_mids = df['mid'].tolist()
-            self.mid_combo.clear()
-            self.mid_combo.addItem("-- Select MID --")  # Placeholder item
             if self.available_mids:
+                self.mid_combo.clear()
+                self.mid_combo.addItem("-- Select MID --")  # Placeholder item
                 self.mid_combo.addItems(self.available_mids)
-                logger.info(f"Loaded MIDs: {self.available_mids}")
-            else:
-                logger.warning("No MIDs found in parts_master table.")
-                QMessageBox.information(self, "No MIDs Found", "No MIDs are available. Please import parts data with valid MID values.")
-            self.mid_combo.setCurrentIndex(0)  # Start with placeholder
-            self.selected_mid = ""  # No default selection
+                self.mid_combo.setCurrentIndex(0)  # Start with placeholder
+                self.selected_mid = ""  # No default selection
         except Exception as e:
             logger.error(f"MID load failed: {e}")
 
@@ -3923,6 +4191,7 @@ class DerivativeMill(QMainWindow):
                 if 'value_usd' in df.columns:
                     total = pd.to_numeric(df['value_usd'], errors='coerce').sum()
                     self.csv_total_value = round(total, 2)
+                    # Don't auto-populate CI input - just update the check
                     self.update_invoice_check()  # This will control button state
                 
                 self.bottom_status.setText(f"Loaded: {file_path.name}")
@@ -3937,8 +4206,13 @@ class DerivativeMill(QMainWindow):
         try:
             file_path = OUTPUT_DIR / item.text()
             if file_path.exists():
-                import os
-                os.startfile(str(file_path))
+                import subprocess
+                if sys.platform == 'win32':
+                    os.startfile(str(file_path))
+                elif sys.platform == 'darwin':  # macOS
+                    subprocess.run(['open', str(file_path)])
+                else:  # Linux and other Unix-like systems
+                    subprocess.run(['xdg-open', str(file_path)])
         except Exception as e:
             logger.error(f"Open file failed: {e}")
             QMessageBox.warning(self, "Error", f"Could not open file:\n{e}")
@@ -4060,781 +4334,106 @@ if __name__ == "__main__":
     import traceback
     app = QApplication(sys.argv)
     try:
-        # ...existing code...
+        # Theme will be set by apply_saved_theme() during initialization
+        icon_path = TEMP_RESOURCES_DIR / "banner_bg.png"
+        if not icon_path.exists():
+            icon_path = TEMP_RESOURCES_DIR / "icon.ico"
+        if icon_path.exists():
+            app.setWindowIcon(QIcon(str(icon_path)))
+        login = LoginDialog()
+        if login.exec_() != QDialog.Accepted:
+            sys.exit(0)
+        splash_widget = QWidget()
+        splash_widget.setFixedSize(500, 300)
+        splash_widget.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        splash_widget.setAttribute(Qt.WA_TranslucentBackground)
+        splash_layout = QVBoxLayout(splash_widget)
+        splash_layout.setContentsMargins(0, 0, 0, 0)
+        splash_container = QWidget()
+        splash_container.setStyleSheet("""
+            QWidget {
+                background-color: #333333;
+                border: 3px solid #0078D4;
+                border-radius: 15px;
+            }
+        """)
+        container_layout = QVBoxLayout(splash_container)
+        container_layout.setContentsMargins(30, 30, 30, 30)
+        container_layout.setSpacing(20)
+        title_label = QLabel(f"<h1 style='color: #0078D4;'>{APP_NAME}</h1>")
+        title_label.setAlignment(Qt.AlignCenter)
+        container_layout.addWidget(title_label)
+        splash_message = QLabel("Initializing application\nPlease wait...")
+        splash_message.setStyleSheet("color: #f3f3f3; font-size: 12pt; font-weight: bold;")
+        splash_message.setAlignment(Qt.AlignCenter)
+        container_layout.addWidget(splash_message)
+        splash_progress = QProgressBar()
+        splash_progress.setRange(0, 100)
+        splash_progress.setValue(0)
+        splash_progress.setTextVisible(True)
+        splash_progress.setFormat("%p%")
+        splash_progress.setFixedHeight(20)
+        splash_progress.setStyleSheet("""
+            QProgressBar {
+                border: 2px solid #555;
+                border-radius: 5px;
+                background-color: #1e1e1e;
+                text-align: center;
+                color: white;
+                font-weight: bold;
+            }
+            QProgressBar::chunk {
+                background-color: #0078D4;
+                border-radius: 3px;
+            }
+        """)
+        container_layout.addWidget(splash_progress)
+        splash_layout.addWidget(splash_container)
+        splash_widget.show()
+        screen_geo = app.desktop().availableGeometry()
+        splash_widget.move(
+            (screen_geo.width() - splash_widget.width()) // 2,
+            (screen_geo.height() - splash_widget.height()) // 2
+        )
+        app.processEvents()
+        logger.info(f"Application started by user: {login.authenticated_user}")
+        splash_message.setText("Creating main window...\nPlease wait...")
+        splash_progress.setValue(10)
+        app.processEvents()
         win = DerivativeMill()
+        win.setWindowTitle(f"{APP_NAME} {VERSION} - User: {login.authenticated_user}")
+        splash_widget.close()
         win.show()
-        logger.success(f"{APP_NAME} {VERSION} GUI ready")
+
+        def finish_initialization():
+            win.status.setText("Initializing application...")
+            win.load_config_paths()
+            win.status.setText("Applying theme...")
+            win.apply_saved_theme()
+            win.status.setText("Loading MIDs...")
+            win.load_available_mids()
+            win.status.setText("Loading profiles...")
+            win.load_mapping_profiles()
+            win.status.setText("Scanning input files...")
+            win.refresh_input_files()
+            win.status.setText("Starting auto-refresh...")
+            win.setup_auto_refresh()
+            win.status.setText("Ready")
+            # Final aggressive enable after all initialization
+            QTimer.singleShot(0, win._enable_input_fields)
+            QTimer.singleShot(100, win._enable_input_fields)
+            QTimer.singleShot(500, win._enable_input_fields)
+            QTimer.singleShot(1000, win._enable_input_fields)
+
+        # Start initialization after window is shown
+        QTimer.singleShot(100, finish_initialization)
         sys.exit(app.exec_())
     except Exception as e:
-        logger.error(f"Error during initialization: {e}")
-        logger.error(traceback.format_exc())
-
-    # Removed deferred_initialization; tabs are now lazily loaded only when selected
-    
-    def initialize_data(self, splash=None, progress_callback=None):
-        """Initialize database and load all data before showing window"""
-        steps = [
-            ("Loading configuration...", self.load_config_paths),
-            ("Applying theme...", self.apply_saved_theme),
-            ("Loading MIDs...", self.load_available_mids),
-            ("Loading profiles...", self.load_mapping_profiles),
-            # Removed output file scanning on startup
-            ("Scanning input files...", self.refresh_input_files),
-            ("Starting auto-refresh...", self.setup_auto_refresh),
-            ("Finalizing...", self.update_status_bar_styles),
-        ]
-        
-        total_steps = len(steps)
-        for i, (message, func) in enumerate(steps):
-            if splash:
-                splash.setText(f"{message}\nPlease wait...")
-            if progress_callback:
-                progress_callback(int((i / total_steps) * 100))
-            QApplication.processEvents()
-            
-            try:
-                func()
-            except Exception as e:
-                logger.error(f"Error during {message}: {e}")
-        
-        if progress_callback:
-            progress_callback(100)
-        
-        logger.success(f"{APP_NAME} {VERSION} loaded successfully")
-    
-    def on_tab_changed(self, index):
-        """Initialize tabs lazily when they are first accessed"""
-        if index in self.tabs_initialized:
-            return
-        
-        # Map tab index to setup method
-        tab_setup_methods = {
-            1: self.setup_shipment_mapping_tab,
-            2: self.setup_import_tab,
-            3: self.setup_master_tab,
-            4: self.setup_log_tab,
-            5: self.setup_config_tab,
-            6: self.setup_actions_tab,
-            7: self.setup_guide_tab
-        }
-        
-        # Initialize the tab
-        if index in tab_setup_methods:
-            tab_setup_methods[index]()
-            self.tabs_initialized.add(index)
-            logger.debug(f"Initialized tab {index}")
-    
-    def apply_saved_theme(self):
-        """Load and apply the saved theme preference on startup"""
+        error_msg = f"Unhandled Exception:\n{str(e)}\n\n{traceback.format_exc()}"
+        print(error_msg)
         try:
-            conn = sqlite3.connect(str(DB_PATH))
-            c = conn.cursor()
-            c.execute("SELECT value FROM app_config WHERE key = 'theme'")
-            row = c.fetchone()
-            conn.close()
-            if row:
-                self.apply_theme(row[0])
-            else:
-                # Default to Fusion (Light) if no preference saved
-                self.apply_theme("Fusion (Light)")
-        except:
-            # Use Fusion (Light) as default theme if database error
-            self.apply_theme("Fusion (Light)")
-
-    def load_config_paths(self):
-        try:
-            self.bottom_status.setText("Loading Directory location...")
-            QApplication.processEvents()
-            conn = sqlite3.connect(str(DB_PATH))
-            c = conn.cursor()
-            c.execute("SELECT value FROM app_config WHERE key = 'input_dir'")
-            row = c.fetchone()
-            global INPUT_DIR, PROCESSED_DIR
-            if row:
-                INPUT_DIR = Path(row[0])
-                PROCESSED_DIR = INPUT_DIR / "Processed"
-                PROCESSED_DIR.mkdir(exist_ok=True)
-                QApplication.processEvents()
-            c.execute("SELECT value FROM app_config WHERE key = 'output_dir'")
-            row = c.fetchone()
-            if row:
-                global OUTPUT_DIR
-                OUTPUT_DIR = Path(row[0])
-                OUTPUT_DIR.mkdir(exist_ok=True)
-                QApplication.processEvents()
-            conn.close()
-            self.bottom_status.setText("Ready")
-            QApplication.processEvents()
-        except Exception as e:
-            logger.error(f"Config load failed: {e}")
-            self.bottom_status.setText("Config load failed")
-            QApplication.processEvents()
-
-    def setup_process_tab(self):
-        layout = QVBoxLayout(self.tab_process)
-
-        # TOP BAR: Title + Settings Gear
-        top_bar = QHBoxLayout()
-        top_bar.addStretch()
-        settings_btn = QPushButton()
-        # Prefer a custom gear icon if present; otherwise use a unicode fallback (use TEMP_RESOURCES_DIR for bundled resources)
-        gear_path = TEMP_RESOURCES_DIR / "gear.png"
-        if gear_path.exists():
-            settings_btn.setIcon(QIcon(str(gear_path)))
-            settings_btn.setIconSize(QSize(20, 20))
-        else:
-            settings_btn.setText("⚙")
-            settings_btn.setStyleSheet("font-size:16pt; font-weight:bold;")
-        settings_btn.setFixedSize(40, 40)
-        settings_btn.setToolTip("Settings")
-        settings_btn.clicked.connect(self.show_settings_dialog)
-        top_bar.addWidget(settings_btn)
-        layout.addLayout(top_bar)
-
-        # MAIN ROW: Input Files + Shipment File (with Profile) + Invoice Values
-        main_row = QHBoxLayout()
-
-        # INPUT FILES GROUP — shows CSV files in Input folder
-        input_files_group = QGroupBox("Input Files")
-        input_files_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        input_files_layout = QVBoxLayout()
-        
-        self.input_files_list = QListWidget()
-        self.input_files_list.setSelectionMode(QListWidget.SingleSelection)
-        self.input_files_list.itemClicked.connect(self.load_selected_input_file)
-        input_files_layout.addWidget(self.input_files_list)
-        
-        refresh_input_btn = QPushButton("Refresh")
-        refresh_input_btn.setFixedHeight(25)
-        refresh_input_btn.clicked.connect(self.refresh_input_files)
-        input_files_layout.addWidget(refresh_input_btn)
-        
-        input_files_group.setLayout(input_files_layout)
-        main_row.addWidget(input_files_group)
-
-        # SHIPMENT FILE (merged with Saved Profiles)
-        theme_group = QGroupBox("Appearance")
-        theme_layout = QVBoxLayout()
-
-        self.theme_combo = QComboBox()
-        self.theme_combo.addItems([
-            "System Default",
-            "Fusion (Light)",
-            "Windows",
-            "Fusion (Dark)",
-            "Ocean",
-            "Teal Professional"
-        ])
-
-        # Load saved theme preference and set combo without triggering signal
-        try:
-            conn = sqlite3.connect(str(DB_PATH))
-            c = conn.cursor()
-            c.execute("SELECT value FROM app_config WHERE key = 'theme'")
-            row = c.fetchone()
-            conn.close()
-            if row:
-                saved_theme = row[0]
-                index = self.theme_combo.findText(saved_theme)
-                if index >= 0:
-                    self.theme_combo.blockSignals(True)
-                    self.theme_combo.setCurrentIndex(index)
-                    self.theme_combo.blockSignals(False)
-        except Exception as e:
-            logger.error(f"Failed to load theme: {e}")
-
-        def on_theme_changed(val):
-            self.apply_theme(val)
-            try:
-                conn = sqlite3.connect(str(DB_PATH))
-                c = conn.cursor()
-                c.execute("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)", ("theme", val))
-                conn.commit()
-                conn.close()
-                logger.info(f"Theme saved: {val}")
-            except Exception as e:
-                logger.error(f"Failed to save theme: {e}")
-        self.theme_combo.currentTextChanged.connect(on_theme_changed)
-
-        theme_layout.addWidget(QLabel("Application Theme:"))
-        theme_layout.addWidget(self.theme_combo)
-        theme_info = QLabel("<small>Theme changes apply immediately. System Default uses your OS theme settings.</small>")
-        theme_info.setWordWrap(True)
-        theme_info.setStyleSheet("color:#666; padding:5px;")
-        theme_layout.addWidget(theme_info)
-        theme_group.setLayout(theme_layout)
-        layout.insertWidget(0, theme_group)
-        self.mid_combo.currentTextChanged.connect(self.on_mid_changed)
-        values_layout.addRow(self.mid_label, self.mid_combo)
-
-        # Replace your current hbox_check block with this:
-        self.invoice_check_label = QLabel("No file loaded")
-        self.invoice_check_label.setWordWrap(True)
-        self.invoice_check_label.setStyleSheet("font-size: 7pt;")
-        self.invoice_check_label.setAlignment(Qt.AlignCenter)
-
-        # Use a QVBoxLayout for the invoice check label and Edit Values button
-        vbox_check = QVBoxLayout()
-        vbox_check.setSpacing(12)
-        vbox_check.setContentsMargins(0, 10, 0, 0)
-
-        vbox_check.addWidget(self.invoice_check_label, alignment=Qt.AlignCenter)
-        
-        # Edit Values button (initially hidden, shown when values don't match)
-        self.edit_values_btn = QPushButton("Edit Values")
-        self.edit_values_btn.setFixedSize(120, 30)
-        self.edit_values_btn.setStyleSheet(self.get_button_style("warning"))
-        self.edit_values_btn.setVisible(False)
-        self.edit_values_btn.clicked.connect(self.start_processing_with_editable_preview)
-        vbox_check.addWidget(self.edit_values_btn, alignment=Qt.AlignCenter)
-        
-        vbox_check.addStretch()                     # pushes everything to the top
-
-        # Now add the vertical layout as the widget for the row (after MID)
-        values_layout.addRow("Invoice Check:", vbox_check)
-
-        values_group.setLayout(values_layout)
-        main_row.addWidget(values_group)
-
-        # ACTIONS GROUP — Clear All + Export Worksheet buttons
-        actions_group = QGroupBox("Actions")
-        actions_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
-        actions_layout = QVBoxLayout()
-        
-        self.clear_btn = QPushButton("Clear All")
-        self.clear_btn.setFixedSize(160, 40)
-        self.clear_btn.setStyleSheet(self.get_button_style("danger"))
-        self.clear_btn.clicked.connect(self.clear_all)
-
-        self.process_btn = QPushButton("Process Invoice")
-        self.process_btn.setEnabled(False)
-        self.process_btn.setFixedSize(160, 40)
-        self.process_btn.setStyleSheet(self.get_button_style("success"))
-        self.process_btn.clicked.connect(self._process_or_export)
-
-        actions_layout.addWidget(self.clear_btn)
-        actions_layout.addWidget(self.process_btn)
-        actions_layout.addStretch()
-        actions_group.setLayout(actions_layout)
-        main_row.addWidget(actions_group)
-
-        # EXPORTED FILES GROUP — shows recent exports
-        exports_group = QGroupBox("Exported Files")
-        exports_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        exports_layout = QVBoxLayout()
-        
-        self.exports_list = QListWidget()
-        self.exports_list.setSelectionMode(QListWidget.SingleSelection)
-        self.exports_list.itemDoubleClicked.connect(self.open_exported_file)
-        exports_layout.addWidget(self.exports_list)
-        
-        refresh_exports_btn = QPushButton("Refresh")
-        refresh_exports_btn.setFixedHeight(25)
-        refresh_exports_btn.clicked.connect(self.refresh_exported_files)
-        exports_layout.addWidget(refresh_exports_btn)
-        
-        exports_group.setLayout(exports_layout)
-        main_row.addWidget(exports_group)
-
-        main_row.addStretch()
-        layout.addLayout(main_row)
-
-        self.progress = QProgressBar()
-        self.progress.setVisible(False)
-        layout.addWidget(self.progress)
-
-        preview_group = QGroupBox("Result Preview")
-        preview_layout = QVBoxLayout()
-        
-        self.table = QTableWidget()
-        self.table.setColumnCount(13)
-        self.table.setHorizontalHeaderLabels([
-            "Product No","Value","HTS","MID","Wt","Dec","Melt","Cast","Smelt","Flag","232%","Non-232%","232 Status"
-        ])
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.table.setSelectionBehavior(QTableWidget.SelectItems)
-        self.table.setSelectionMode(QTableWidget.ExtendedSelection)
-        self.table.setSortingEnabled(False)  # Disabled for better performance
-        # Match body font size to the header font size and make non-bold
-        header_font = self.table.horizontalHeader().font()
-        header_font.setBold(False)
-        self.table.horizontalHeader().setFont(header_font)
-        self.table.setFont(header_font)
-        
-        # Enable clicking header to select entire column
-        self.table.horizontalHeader().sectionClicked.connect(self.select_column)
-        
-        preview_layout.addWidget(self.table)
-        preview_group.setLayout(preview_layout)
-        layout.addWidget(preview_group, 1)
-
-        self.tab_process.setLayout(layout)
-        self._install_preview_shortcuts()
-
-    def show_settings_dialog(self):
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Settings")
-        dialog.setFixedSize(500, 600)
-        layout = QVBoxLayout(dialog)
-
-        # Theme Settings Group
-        theme_group = QGroupBox("Appearance")
-        theme_layout = QFormLayout()
-        
-        self.theme_combo = QComboBox()
-        self.theme_combo.addItems(["System Default", "Fusion (Light)", "Windows", "Fusion (Dark)", "Ocean", "Teal Professional"])
-        
-        # Load saved theme preference and set combo without triggering signal
-        try:
-            conn = sqlite3.connect(str(DB_PATH))
-            c = conn.cursor()
-            c.execute("SELECT value FROM app_config WHERE key = 'theme'")
-            row = c.fetchone()
-            conn.close()
-            
-            if row:
-                saved_theme = row[0]
-                index = self.theme_combo.findText(saved_theme)
-                if index >= 0:
-                    # Block signals to prevent double-applying theme
-                    self.theme_combo.blockSignals(True)
-                    self.theme_combo.setCurrentIndex(index)
-                    self.theme_combo.blockSignals(False)
-        except:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.critical(None, "Application Error", error_msg)
+        except Exception:
             pass
-        
-        def on_theme_changed(val):
-            self.apply_theme(val)
-            try:
-                conn = sqlite3.connect(str(DB_PATH))
-                c = conn.cursor()
-                c.execute("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)", ("theme", val))
-                conn.commit()
-                conn.close()
-                logger.info(f"Theme saved: {val}")
-            except Exception as e:
-                logger.error(f"Failed to save theme: {e}")
-        self.theme_combo.currentTextChanged.connect(on_theme_changed)
-        theme_layout.addRow("Application Theme:", self.theme_combo)
-        
-        theme_info = QLabel("<small>Theme changes apply immediately. System Default uses your Windows theme settings.</small>")
-        theme_info.setWordWrap(True)
-        theme_info.setStyleSheet("color:#666; padding:5px;")
-        theme_layout.addRow("", theme_info)
-        
-        theme_group.setLayout(theme_layout)
-        layout.insertWidget(0, theme_group)
-
-        group = QGroupBox("Folder Locations")
-        glayout = QFormLayout()
-        
-        # Input folder display and button
-        global INPUT_DIR, OUTPUT_DIR
-        input_dir_str = str(INPUT_DIR) if 'INPUT_DIR' in globals() and INPUT_DIR else "(not set)"
-        output_dir_str = str(OUTPUT_DIR) if 'OUTPUT_DIR' in globals() and OUTPUT_DIR else "(not set)"
-        self.input_path_label = QLabel(input_dir_str)
-        self.input_path_label.setWordWrap(True)
-        self.input_path_label.setStyleSheet("background:#f0f0f0; padding:5px; border:1px solid #ccc;")
-        input_btn = QPushButton("Change Input Folder")
-        input_btn.clicked.connect(lambda: self.select_input_folder(self.input_path_label))
-        glayout.addRow("Input Folder:", self.input_path_label)
-        glayout.addRow("", input_btn)
-        
-        # Output folder display and button
-        self.output_path_label = QLabel(output_dir_str)
-        self.output_path_label.setWordWrap(True)
-        self.output_path_label.setStyleSheet("background:#f0f0f0; padding:5px; border:1px solid #ccc;")
-        output_btn = QPushButton("Change Output Folder")
-        output_btn.clicked.connect(lambda: self.select_output_folder(self.output_path_label))
-        glayout.addRow("Output Folder:", self.output_path_label)
-        glayout.addRow("", output_btn)
-        
-        group.setLayout(glayout)
-        layout.addWidget(group)
-
-        layout.addStretch()
-        dialog.exec_()
-    
-    def apply_theme(self, theme_name):
-        """Apply the selected theme to the application"""
-        app = QApplication.instance()
-        
-        # Store current theme name
-        self.current_theme = theme_name
-        
-        if theme_name == "System Default":
-            app.setStyle("")
-            app.setPalette(app.style().standardPalette())
-        elif theme_name == "Fusion (Light)":
-            app.setStyle("Fusion")
-            app.setPalette(app.style().standardPalette())
-        elif theme_name == "Windows":
-            app.setStyle("Windows")
-            app.setPalette(app.style().standardPalette())
-        elif theme_name == "Fusion (Dark)":
-            app.setStyle("Fusion")
-            dark_palette = self.get_dark_palette()
-            app.setPalette(dark_palette)
-        elif theme_name == "Ocean":
-            app.setStyle("Fusion")
-            ocean_palette = self.get_ocean_palette()
-            app.setPalette(ocean_palette)
-        elif theme_name == "Teal Professional":
-            app.setStyle("Fusion")
-            teal_palette = self.get_teal_professional_palette()
-            app.setPalette(teal_palette)
-        
-        # Refresh button styles to match new theme
-        self.refresh_button_styles()
-        
-        # Update file label style for new theme
-        if hasattr(self, 'file_label'):
-            self.update_file_label_style()
-        
-        # Update status bar styles for new theme
-        self.update_status_bar_styles()
-        
-        # Update status bar styles for new theme
-        self.update_status_bar_styles()
-        
-        # Save theme preference
-        # Theme is now saved via the settings dialog's save_setting function
-        pass
-    
-    def update_file_label_style(self):
-        """Update file label background based on current theme"""
-        if not hasattr(self, 'current_theme'):
-            self.current_theme = "System Default"
-        
-        # Use white background for light themes, darker background for dark themes
-        if self.current_theme in ["Fusion (Dark)", "Ocean", "Teal Professional"]:
-            self.file_label.setStyleSheet("background:#2d2d2d; padding:5px; border:1px solid #555; color:#e0e0e0;")
-        else:
-            self.file_label.setStyleSheet("background:white; padding:5px; border:1px solid #ccc;")
-    
-    def update_status_bar_styles(self):
-        """Update status bar backgrounds based on current theme"""
-        if not hasattr(self, 'current_theme'):
-            self.current_theme = "System Default"
-        
-        is_dark = self.current_theme in ["Fusion (Dark)", "Ocean", "Teal Professional"]
-        
-        if is_dark:
-            # Dark theme status bars
-            self.status.setStyleSheet("font-size:14pt; padding:8px; background:#2d2d2d; color:#e0e0e0;")
-            self.bottom_status.setStyleSheet("font-size:9pt; color:#b0b0b0;")
-            if hasattr(self, 'bottom_bar'):
-                self.bottom_bar.setStyleSheet("""
-                    QWidget {
-                        background: #2d2d2d;
-                        border-top: 1px solid #404040;
-                    }
-                """)
-        else:
-            # Light theme status bars
-            self.status.setStyleSheet("font-size:14pt; padding:8px; background:#f0f0f0; color:#000000;")
-            self.bottom_status.setStyleSheet("font-size:9pt; color:#555555;")
-            if hasattr(self, 'bottom_bar'):
-                self.bottom_bar.setStyleSheet("""
-                    QWidget {
-                        background: #e8e8e8;
-                        border-top: 1px solid #d0d0d0;
-                    }
-                """)
-    
-    def update_status_bar_styles(self):
-        """Update status bar backgrounds based on current theme"""
-        if not hasattr(self, 'current_theme'):
-            self.current_theme = "System Default"
-        
-        is_dark = self.current_theme in ["Fusion (Dark)", "Ocean", "Teal Professional"]
-        
-        if is_dark:
-            # Dark theme status bars
-            self.status.setStyleSheet("font-size:14pt; padding:8px; background:#2d2d2d; color:#e0e0e0;")
-            self.bottom_status.setStyleSheet("font-size:9pt; color:#b0b0b0;")
-            if hasattr(self, 'bottom_bar'):
-                self.bottom_bar.setStyleSheet("""
-                    QWidget {
-                        background: #2d2d2d;
-                        border-top: 1px solid #404040;
-                    }
-                """)
-        else:
-            # Light theme status bars
-            self.status.setStyleSheet("font-size:14pt; padding:8px; background:#f0f0f0; color:#000000;")
-            self.bottom_status.setStyleSheet("font-size:9pt; color:#555555;")
-            if hasattr(self, 'bottom_bar'):
-                self.bottom_bar.setStyleSheet("""
-                    QWidget {
-                        background: #e8e8e8;
-                        border-top: 1px solid #d0d0d0;
-                    }
-                """)
-    
-    def refresh_button_styles(self):
-        """Refresh all button styles to match current theme"""
-        # Process tab buttons
-        if hasattr(self, 'clear_btn'):
-            self.clear_btn.setStyleSheet(self.get_button_style("danger"))
-        if hasattr(self, 'process_btn'):
-            self.process_btn.setStyleSheet(self.get_button_style("success"))
-        if hasattr(self, 'edit_values_btn'):
-            self.edit_values_btn.setStyleSheet(self.get_button_style("warning"))
-        
-        # Import tab - need to find and update buttons in the tab
-        if hasattr(self, 'tab_import'):
-            for btn in self.tab_import.findChildren(QPushButton):
-                if btn.text() == "Load CSV File":
-                    btn.setStyleSheet(self.get_button_style("info"))
-                elif btn.text() == "Reset Mapping":
-                    btn.setStyleSheet(self.get_button_style("danger"))
-                elif btn.text() == "IMPORT NOW":
-                    btn.setStyleSheet(self.get_button_style("success") + "QPushButton { font-size:16pt; padding:15px; }")
-        
-        # Shipment Mapping tab
-        if hasattr(self, 'tab_shipment_map'):
-            for btn in self.tab_shipment_map.findChildren(QPushButton):
-                if btn.text() == "Save Current Mapping As...":
-                    btn.setStyleSheet(self.get_button_style("success"))
-                elif btn.text() == "Delete Profile":
-                    btn.setStyleSheet(self.get_button_style("danger"))
-                elif btn.text() == "Load CSV to Map":
-                    btn.setStyleSheet(self.get_button_style("info"))
-                elif btn.text() == "Reset Current":
-                    btn.setStyleSheet(self.get_button_style("danger"))
-        
-        # Master/Parts View tab
-        if hasattr(self, 'tab_master'):
-            for btn in self.tab_master.findChildren(QPushButton):
-                if btn.text() == "Run Query":
-                    btn.setStyleSheet(self.get_button_style("info"))
-                elif btn.text() == "Execute":
-                    btn.setStyleSheet(self.get_button_style("success"))
-        
-        # Config tab
-        if hasattr(self, 'tab_config'):
-            for btn in self.tab_config.findChildren(QPushButton):
-                if btn.text() == "Import Section 232 Tariffs (CSV/Excel)":
-                    btn.setStyleSheet(self.get_button_style("success"))
-                elif btn.text() == "Import from CSV":
-                    btn.setStyleSheet(self.get_button_style("info"))
-                elif btn.text() == "Refresh View":
-                    btn.setStyleSheet(self.get_button_style("info"))
-
-    
-    def get_dark_palette(self):
-        """Create a Windows 11 dark mode inspired theme"""
-        from PyQt5.QtGui import QPalette, QColor
-        
-        palette = QPalette()
-        # Windows 11 dark theme colors
-        palette.setColor(QPalette.Window, QColor(41, 41, 41))  # Main background
-        palette.setColor(QPalette.WindowText, QColor(243, 243, 243))  # Primary text
-        palette.setColor(QPalette.Base, QColor(51, 51, 51))  # Secondary background for input fields
-        palette.setColor(QPalette.AlternateBase, QColor(115, 115, 115))  # Tertiary background for alternating rows
-        palette.setColor(QPalette.ToolTipBase, QColor(45, 45, 45))  # Tertiary background
-        palette.setColor(QPalette.ToolTipText, QColor(243, 243, 243))  # Primary text
-        palette.setColor(QPalette.Text, QColor(243, 243, 243))  # Primary text in text boxes
-        palette.setColor(QPalette.Button, QColor(45, 45, 45))  # Tertiary background for buttons
-        palette.setColor(QPalette.ButtonText, QColor(243, 243, 243))  # Primary text on buttons
-        palette.setColor(QPalette.BrightText, QColor(164, 38, 44))  # Danger/error red
-        palette.setColor(QPalette.Link, QColor(0, 120, 212))  # Accent blue
-        palette.setColor(QPalette.Highlight, QColor(22, 120, 212))  # Selection/highlight blue
-        palette.setColor(QPalette.HighlightedText, QColor(243, 243, 243))  # Primary text
-        return palette
-    
-    def get_ocean_palette(self):
-        """Create an ocean-themed color palette with deep blues and teals"""
-        from PyQt5.QtGui import QPalette, QColor
-        
-        palette = QPalette()
-        # Deep ocean blue backgrounds
-        palette.setColor(QPalette.Window, QColor(28, 57, 87))  # Deep ocean blue
-        palette.setColor(QPalette.WindowText, QColor(230, 245, 255))  # Light blue-white text
-        palette.setColor(QPalette.Base, QColor(15, 35, 55))  # Darker blue for input fields
-        palette.setColor(QPalette.AlternateBase, QColor(35, 65, 95))  # Lighter ocean blue
-        palette.setColor(QPalette.ToolTipBase, QColor(200, 230, 255))  # Light blue
-        palette.setColor(QPalette.ToolTipText, QColor(15, 35, 55))  # Dark blue
-        palette.setColor(QPalette.Text, QColor(230, 245, 255))  # Light blue-white text
-        palette.setColor(QPalette.Button, QColor(40, 75, 110))  # Medium ocean blue
-        palette.setColor(QPalette.ButtonText, QColor(230, 245, 255))  # Light text
-        palette.setColor(QPalette.BrightText, QColor(0, 255, 200))  # Bright teal
-        palette.setColor(QPalette.Link, QColor(100, 200, 255))  # Bright cyan
-        palette.setColor(QPalette.Highlight, QColor(0, 150, 180))  # Teal highlight
-        palette.setColor(QPalette.HighlightedText, QColor(255, 255, 255))  # White text
-        return palette
-    
-    def get_teal_professional_palette(self):
-        """Create a teal professional palette matching customs management software"""
-        from PyQt5.QtGui import QPalette, QColor
-        
-        palette = QPalette()
-        # Modern teal theme with consistent light backgrounds
-        palette.setColor(QPalette.Window, QColor(235, 245, 245))  # Very light muted teal background
-        palette.setColor(QPalette.WindowText, QColor(33, 33, 33))  # Dark grey text for readability
-        palette.setColor(QPalette.Base, QColor(235, 245, 245))  # Same as Window for consistency
-        palette.setColor(QPalette.AlternateBase, QColor(225, 238, 238))  # Slightly darker for alternating rows
-        palette.setColor(QPalette.ToolTipBase, QColor(255, 255, 255))
-        palette.setColor(QPalette.ToolTipText, QColor(33, 33, 33))
-        palette.setColor(QPalette.Text, QColor(33, 33, 33))  # Dark grey text
-        palette.setColor(QPalette.Button, QColor(70, 150, 180))  # Softer, brighter teal for buttons
-        palette.setColor(QPalette.ButtonText, QColor(255, 255, 255))  # White text on buttons
-        palette.setColor(QPalette.BrightText, QColor(255, 90, 90))  # Softer red
-        palette.setColor(QPalette.Link, QColor(50, 130, 160))  # Appealing link color
-        palette.setColor(QPalette.Highlight, QColor(80, 180, 210))  # Bright, appealing highlight
-        palette.setColor(QPalette.HighlightedText, QColor(255, 255, 255))  # White highlighted text
-        return palette
-
-    def get_button_style(self, button_type="default"):
-        """
-        Generate theme-aware button styles using current palette colors.
-        
-        Args:
-            button_type: "default", "primary", "danger", "info", "warning", "success"
-        
-        Returns:
-            CSS stylesheet string that adapts to current theme
-        """
-        from PyQt5.QtGui import QPalette, QColor
-        from PyQt5.QtWidgets import QApplication
-        
-        palette = QApplication.palette()
-        
-        # Get base colors from theme
-        base_bg = palette.color(QPalette.Button)
-        base_text = palette.color(QPalette.ButtonText)
-        highlight = palette.color(QPalette.Highlight)
-        
-        # Check if we're in a dark theme
-        is_dark_theme = hasattr(self, 'current_theme') and self.current_theme in ["Fusion (Dark)", "Ocean", "Teal Professional"]
-        
-        # In dark themes, all buttons use teal
-        if is_dark_theme:
-            bg = QColor(66, 160, 189)  # Teal
-            hover_bg = QColor(53, 128, 151)  # Darker Teal
-            disabled_bg = QColor(160, 160, 160)  # Grey
-        # In light themes, use different colors per button type
-        elif button_type == "primary" or button_type == "success":
-            # Green for success/primary actions
-            bg = QColor(40, 167, 69)  # Green
-            hover_bg = QColor(33, 136, 56)  # Darker green
-            disabled_bg = QColor(160, 160, 160)  # Grey
-        elif button_type == "danger":
-            # Red for destructive actions
-            bg = QColor(220, 53, 69)  # Red
-            hover_bg = QColor(200, 35, 51)  # Darker red
-            disabled_bg = QColor(160, 160, 160)  # Grey
-        elif button_type == "info":
-            # Blue for informational actions
-            bg = QColor(0, 120, 215)  # Blue
-            hover_bg = QColor(0, 95, 184)  # Darker blue
-            disabled_bg = QColor(160, 160, 160)  # Grey
-        elif button_type == "warning":
-            # Orange for warning actions
-            bg = QColor(255, 152, 0)  # Orange
-            hover_bg = QColor(230, 126, 34)  # Darker orange
-            disabled_bg = QColor(160, 160, 160)  # Grey
-        else:  # default - use theme colors
-            bg = base_bg
-            hover_bg = highlight
-            disabled_bg = QColor(160, 160, 160)
-        
-        # Text color - white for dark buttons, black for light buttons
-        text_color = QColor(255, 255, 255) if bg.lightness() < 128 else QColor(0, 0, 0)
-        
-        return f"""
-            QPushButton {{
-                background-color: rgb({bg.red()}, {bg.green()}, {bg.blue()});
-                color: rgb({text_color.red()}, {text_color.green()}, {text_color.blue()});
-                font-weight: bold;
-            }}
-            QPushButton:hover {{
-                background-color: rgb({hover_bg.red()}, {hover_bg.green()}, {hover_bg.blue()});
-            }}
-            QPushButton:disabled {{
-                background-color: rgb({disabled_bg.red()}, {disabled_bg.green()}, {disabled_bg.blue()});
-            }}
-        """
-
-    def clear_all(self):
-        self.current_csv = None
-        self.file_label.setText("No file selected")
-        self.ci_input.clear()
-        self.wt_input.clear()
-        self.mid_combo.setCurrentIndex(-1)
-        self.selected_mid = ""
-        self.table.setRowCount(0)
-        self.process_btn.setEnabled(False)
-        self.progress.setVisible(False)
-        self.invoice_check_label.setText("No file loaded")
-        self.csv_total_value = 0.0
-        self.edit_values_btn.setVisible(False)
-        self.bottom_status.setText("Cleared")
-        self.status.setStyleSheet("font-size:14pt; padding:8px; background:#f0f0f0;")
-        logger.info("Process tab cleared")
-
-    def browse_file(self):
-        # --- Highlight Saved Profiles box (no tab switch, no errors) ---
-        current_profile = self.profile_combo.currentText()
-        if not current_profile or current_profile == "-- Select Profile --":
-            # Find the Saved Profiles group box
-            profiles_group = None
-            for widget in self.tab_process.findChildren(QGroupBox):
-                if widget.title() == "Saved Profiles":
-                    profiles_group = widget
-                    break
-
-            if profiles_group:
-                # 1. Scroll the tab into view (works on QScrollArea or plain widget)
-                scroll_area = self.tab_process
-                while scroll_area and not isinstance(scroll_area, QScrollArea):
-                    scroll_area = scroll_area.parentWidget()
-                if scroll_area and isinstance(scroll_area, QScrollArea):
-                    scroll_area.ensureWidgetVisible(profiles_group)
-
-                # 2. Flash effect using only stylesheet + QTimer (no QPropertyAnimation)
-                original_ss = profiles_group.styleSheet()
-
-                def flash(step=0):
-                    styles = [
-                        "QGroupBox { border: 4px solid #ff4444; background-color: #ffebee; }",
-                        "QGroupBox { border: 4px solid #ff8800; background-color: #fff3e0; }",
-                        "QGroupBox { border: 4px solid #ffaa00; background-color: #fff8e1; }",
-                        original_ss or ""
-                    ]
-                    if step < len(styles):
-                        profiles_group.setStyleSheet(styles[step])
-                        QTimer.singleShot(300, lambda s=step+1: flash(s))
-
-                flash()
-
-                # 3. Also flash the combo box itself
-                self.profile_combo.setStyleSheet(
-                    "QComboBox { border: 3px solid #ff8533; background-color: #ff8533; }"
-                )
-                QTimer.singleShot(1200, lambda: self.profile_combo.setStyleSheet(""))
-
-                # 4. Focus + open dropdown
-                self.profile_combo.setFocus()
-                QTimer.singleShot(100, self.profile_combo.showPopup)
-
-            # Status bar warning
-            self.status.setText("Please select a Saved Profile first")
-            self.status.setStyleSheet("background:#ff8533; color:white; font-weight:bold; padding:8px;")
-
-            QMessageBox.warning(
-                self,
-                "Mapping Profile Required",
-                "<b>You must select a mapping profile before loading a shipment file.</b><br><br>"
-                "Please choose one from the <b>Saved Profiles</b> box on the right.",
-                QMessageBox.Ok
-            )
-            return
-        # -------------------------------------------------------------------------
-
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Select Shipment File", str(INPUT_DIR), "CSV/Excel (*.csv *.xlsx)"
-        )
-        if not path:
-            return
+        sys.exit(1)
