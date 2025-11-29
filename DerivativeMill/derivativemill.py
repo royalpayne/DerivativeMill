@@ -34,18 +34,8 @@ from PyQt5.QtWidgets import *
 from PyQt5.QtCore import Qt, QMimeData, pyqtSignal, QTimer, QSize, QEventLoop
 from PyQt5.QtGui import QColor, QFont, QDrag, QKeySequence, QIcon, QPixmap, QPainter, QDoubleValidator
 from PyQt5.QtSvg import QSvgRenderer
-from openpyxl.styles import Font
-import getpass
-import socket
+from openpyxl.styles import Font as ExcelFont
 import tempfile
-
-try:
-    import win32security
-    import win32api
-    import win32con
-    WINDOWS_AUTH_AVAILABLE = True
-except ImportError:
-    WINDOWS_AUTH_AVAILABLE = False
 
 # ----------------------------------------------------------------------
 # Global Logger
@@ -224,6 +214,37 @@ class DropTarget(QLabel):
         self.dropped.emit(self.field_key, col)
         e.accept()
 
+class ForceEditableLineEdit(QLineEdit):
+    """QLineEdit that forces itself to remain editable no matter what"""
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._force_editable = True
+        # Set properties immediately
+        self.setReadOnly(False)
+        self.setEnabled(True)
+        self.setFocusPolicy(Qt.StrongFocus)
+
+    def setReadOnly(self, readonly):
+        """Override setReadOnly to always stay editable"""
+        if self._force_editable and readonly:
+            return  # Ignore attempts to make readonly
+        super().setReadOnly(readonly)
+
+    def setEnabled(self, enabled):
+        """Override setEnabled to always stay enabled"""
+        if self._force_editable and not enabled:
+            return  # Ignore attempts to disable
+        super().setEnabled(enabled)
+
+    def mousePressEvent(self, event):
+        """Force editable on mouse click"""
+        self.setFocus()
+        super().mousePressEvent(event)
+
+    def focusInEvent(self, event):
+        """Accept all focus events"""
+        super().focusInEvent(event)
+
 class FileDropZone(QLabel):
     """Drag-and-drop zone for importing CSV/Excel files"""
     file_dropped = pyqtSignal(str)
@@ -297,202 +318,6 @@ class FileDropZone(QLabel):
             self.file_dropped.emit(file_path)
 
 
-# ----------------------------------------------------------------------
-# Login Dialog
-# ----------------------------------------------------------------------
-class LoginDialog(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle(f"{APP_NAME} - Login")
-        self.setMinimumWidth(400)
-        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
-        self.authenticated_user = None
-        
-        # Set window icon (use TEMP_RESOURCES_DIR for bundled resources)
-        icon_path = TEMP_RESOURCES_DIR / "banner_bg.png"
-        if not icon_path.exists():
-            icon_path = TEMP_RESOURCES_DIR / "icon.ico"
-        if icon_path.exists():
-            self.setWindowIcon(QIcon(str(icon_path)))
-        
-        self.setup_ui()
-        
-    def setup_ui(self):
-        layout = QVBoxLayout(self)
-        
-        # Header
-        header = QLabel(f"<h2>{APP_NAME}</h2>")
-        header.setAlignment(Qt.AlignCenter)
-        layout.addWidget(header)
-        
-        if not WINDOWS_AUTH_AVAILABLE:
-            warning = QLabel("<b style='color:#ff6b6b'>Warning: Windows authentication not available</b><br>"
-                           "Install pywin32: pip install pywin32")
-            warning.setWordWrap(True)
-            warning.setAlignment(Qt.AlignCenter)
-            layout.addWidget(warning)
-        
-        # Login form
-        form_group = QGroupBox("Domain Login")
-        form_layout = QFormLayout()
-        
-        # Get current user and domain
-        current_user = getpass.getuser()
-        
-        # Try to load last used domain from database
-        try:
-            conn = sqlite3.connect(str(DB_PATH))
-            c = conn.cursor()
-            c.execute("SELECT value FROM app_config WHERE key = 'last_domain'")
-            row = c.fetchone()
-            conn.close()
-            domain = row[0] if row else None
-        except:
-            domain = None
-        
-        # Fallback to detecting domain or use default
-        if not domain:
-            try:
-                domain = socket.getfqdn().split('.')[1].upper() if '.' in socket.getfqdn() else 'DOMAIN'
-            except:
-                domain = 'DOMAIN'
-        
-        self.username_input = QLineEdit()
-        self.username_input.setPlaceholderText(f"{domain}\\{current_user}")
-        self.username_input.setText(current_user)
-        form_layout.addRow("Username:", self.username_input)
-        
-        self.password_input = QLineEdit()
-        self.password_input.setEchoMode(QLineEdit.Password)
-        self.password_input.setPlaceholderText("Enter your domain password")
-        self.password_input.returnPressed.connect(self.authenticate)
-        form_layout.addRow("Password:", self.password_input)
-        
-        self.domain_input = QLineEdit()
-        self.domain_input.setPlaceholderText("Leave blank for local machine")
-        self.domain_input.setText(domain)
-        form_layout.addRow("Domain:", self.domain_input)
-        
-        form_group.setLayout(form_layout)
-        layout.addWidget(form_group)
-        
-        # Status label
-        self.status_label = QLabel("")
-        self.status_label.setAlignment(Qt.AlignCenter)
-        self.status_label.setWordWrap(True)
-        layout.addWidget(self.status_label)
-        
-        # Buttons
-        btn_layout = QHBoxLayout()
-        self.btn_login = QPushButton("Login")
-        self.btn_login.setStyleSheet("background:#28a745; color:white; font-weight:bold; padding:8px;")
-        self.btn_login.clicked.connect(self.authenticate)
-        self.btn_login.setDefault(True)
-        
-        btn_cancel = QPushButton("Cancel")
-        btn_cancel.setStyleSheet("background:#6c757d; color:white; font-weight:bold; padding:8px;")
-        btn_cancel.clicked.connect(self.reject)
-        
-        btn_layout.addWidget(self.btn_login)
-        btn_layout.addWidget(btn_cancel)
-        layout.addLayout(btn_layout)
-        
-        # Info
-        info = QLabel(f"<small>Use your Windows domain credentials to access {APP_NAME}</small>")
-        info.setAlignment(Qt.AlignCenter)
-        info.setStyleSheet("color:#666; margin-top:10px;")
-        layout.addWidget(info)
-        
-    def authenticate(self):
-        username = self.username_input.text().strip()
-        password = self.password_input.text()
-        domain = self.domain_input.text().strip()
-        
-        if not username:
-            self.status_label.setText("<span style='color:#dc3545'>Username is required</span>")
-            return
-        
-        if not password:
-            self.status_label.setText("<span style='color:#dc3545'>Password is required</span>")
-            return
-        
-        self.btn_login.setEnabled(False)
-        self.btn_login.setText("Authenticating...")
-        self.status_label.setText("Verifying credentials...")
-        QApplication.processEvents()
-        
-        # Authenticate
-        success, message = self.verify_credentials(username, password, domain)
-        
-        if success:
-            self.authenticated_user = f"{domain}\\{username}" if domain else username
-            # Save the domain for next login
-            if domain:
-                try:
-                    conn = sqlite3.connect(str(DB_PATH))
-                    c = conn.cursor()
-                    # Ensure app_config table exists
-                    c.execute("CREATE TABLE IF NOT EXISTS app_config (key TEXT PRIMARY KEY, value TEXT)")
-                    c.execute("INSERT OR REPLACE INTO app_config (key, value) VALUES ('last_domain', ?)", (domain,))
-                    conn.commit()
-                    conn.close()
-                    logger.info(f"Saved domain '{domain}' to database")
-                except Exception as e:
-                    logger.warning(f"Failed to save domain: {e}")
-            self.status_label.setText(f"<span style='color:#28a745'>✓ Login successful</span>")
-            QTimer.singleShot(500, self.accept)
-        else:
-            self.status_label.setText(f"<span style='color:#dc3545'>✗ {message}</span>")
-            self.btn_login.setEnabled(True)
-            self.btn_login.setText("Login")
-            self.password_input.clear()
-            self.password_input.setFocus()
-    
-    def verify_credentials(self, username, password, domain):
-        """Verify Windows domain credentials"""
-        if not WINDOWS_AUTH_AVAILABLE:
-            # Fallback: just check if password is not empty (development mode)
-            logger.warning("Windows authentication not available - using fallback mode")
-            return True, "Login successful (fallback mode)"
-        
-        try:
-            # Try to log on with the provided credentials
-            domain_user = f"{domain}\\{username}" if domain else username
-            
-            # Attempt Windows authentication
-            handle = win32security.LogonUser(
-                username,
-                domain if domain else None,
-                password,
-                win32con.LOGON32_LOGON_NETWORK,
-                win32con.LOGON32_PROVIDER_DEFAULT
-            )
-            
-            # If we got here, authentication succeeded
-            handle.Close()
-            logger.success(f"User authenticated: {domain_user}")
-            return True, "Authentication successful"
-            
-        except win32security.error as e:
-            error_code = e.winerror
-            if error_code == 1326:  # ERROR_LOGON_FAILURE
-                logger.warning(f"Login failed for {username}: Invalid credentials")
-                return False, "Invalid username or password"
-            elif error_code == 1331:  # ERROR_ACCOUNT_DISABLED
-                logger.warning(f"Login failed for {username}: Account disabled")
-                return False, "Account is disabled"
-            elif error_code == 1907:  # ERROR_PASSWORD_MUST_CHANGE
-                logger.warning(f"Login failed for {username}: Password expired")
-                return False, "Password has expired"
-            elif error_code == 1909:  # ERROR_ACCOUNT_LOCKED_OUT
-                logger.warning(f"Login failed for {username}: Account locked")
-                return False, "Account is locked out"
-            else:
-                logger.error(f"Login failed for {username}: {str(e)}")
-                return False, f"Authentication error: {str(e)}"
-        except Exception as e:
-            logger.error(f"Login error: {str(e)}")
-            return False, f"Error: {str(e)}"
 
 # ----------------------------------------------------------------------
 # MAIN APPLICATION — FINAL DESIGN
@@ -710,6 +535,7 @@ class DerivativeMill(QMainWindow):
         steps = [
             ("Loading configuration...", self.load_config_paths),
             ("Applying theme...", self.apply_saved_theme),
+            ("Applying font size...", self.apply_saved_font_size),
             ("Loading MIDs...", self.load_available_mids),
             ("Loading profiles...", self.load_mapping_profiles),
             # Removed output file scanning on startup
@@ -733,15 +559,15 @@ class DerivativeMill(QMainWindow):
         
         if progress_callback:
             progress_callback(100)
-        
+
+        # Ensure input fields are enabled after all initialization
+        if hasattr(self, '_enable_input_fields'):
+            self._enable_input_fields()
+
         logger.success(f"{APP_NAME} {VERSION} loaded successfully")
     
     def on_tab_changed(self, index):
         """Initialize tabs lazily when they are first accessed"""
-        # Always re-enable input fields when returning to Process Shipment tab
-        if index == 0:
-            QTimer.singleShot(0, lambda: self._enable_input_fields())
-        
         if index in self.tabs_initialized:
             return
         
@@ -778,6 +604,23 @@ class DerivativeMill(QMainWindow):
             # Use Fusion (Light) as default theme if database error
             self.apply_theme("Fusion (Light)")
 
+    def apply_saved_font_size(self):
+        """Load and apply the saved font size preference on startup"""
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("SELECT value FROM app_config WHERE key = 'font_size'")
+            row = c.fetchone()
+            conn.close()
+            if row:
+                self.apply_font_size(int(row[0]))
+            else:
+                # Default to 10pt if no preference saved
+                self.apply_font_size(10)
+        except:
+            # Use 10pt as default font size if database error
+            self.apply_font_size(10)
+
     def load_config_paths(self):
         try:
             self.bottom_status.setText("Loading Directory location...")
@@ -810,27 +653,18 @@ class DerivativeMill(QMainWindow):
     def setup_process_tab(self):
         layout = QVBoxLayout(self.tab_process)
 
-        # TOP BAR: Title + Settings Gear
-        top_bar = QHBoxLayout()
-        top_bar.addStretch()
-        settings_btn = QPushButton()
-        # Prefer a custom gear icon if present; otherwise use a unicode fallback (use TEMP_RESOURCES_DIR for bundled resources)
-        gear_path = TEMP_RESOURCES_DIR / "gear.png"
-        if gear_path.exists():
-            settings_btn.setIcon(QIcon(str(gear_path)))
-            settings_btn.setIconSize(QSize(20, 20))
-        else:
-            settings_btn.setText("⚙")
-            settings_btn.setStyleSheet("font-size:16pt; font-weight:bold;")
-        settings_btn.setFixedSize(40, 40)
-        settings_btn.setToolTip("Settings")
-        settings_btn.clicked.connect(self.show_settings_dialog)
-        top_bar.addWidget(settings_btn)
-        layout.addLayout(top_bar)
-
-        # MAIN ROW: Input Files + Shipment File (with Profile) + Invoice Values
-        main_row = QHBoxLayout()
-
+        # MAIN CONTAINER: Left side (controls) + Right side (preview) with splitter
+        main_container = QHBoxLayout()
+        
+        # Create splitter for resizable panels
+        splitter = QSplitter(Qt.Horizontal)
+        
+        # LEFT SIDE: Single outer box containing all controls
+        left_outer_box = QGroupBox("Controls")
+        left_side = QVBoxLayout(left_outer_box)
+        left_side.setSpacing(10)
+        left_side.setContentsMargins(10, 10, 10, 10)
+        
         # INPUT FILES LIST — now inside Shipment File group
         self.input_files_list = QListWidget()
         self.input_files_list.setSelectionMode(QListWidget.SingleSelection)
@@ -841,24 +675,21 @@ class DerivativeMill(QMainWindow):
 
         # INVOICE VALUES
         values_group = QGroupBox("Invoice Values")
-        values_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         values_layout = QFormLayout()
         values_layout.setLabelAlignment(Qt.AlignRight)
 
-        self.ci_input = QLineEdit("")
-        self.ci_input.setFixedWidth(200)
-        self.ci_input.setReadOnly(False)  # Explicitly enable editing
-        self.ci_input.setEnabled(True)    # Explicitly enable the widget
-        self.ci_input.setFocusPolicy(Qt.StrongFocus)  # Allow focus
-        self.ci_input.setClearButtonEnabled(False)  # Disable clear button that might interfere
+        self.ci_input = ForceEditableLineEdit("")
+        self.ci_input.setObjectName("ci_input")
+        self.ci_input.setPlaceholderText("Enter CI value...")
         self.ci_input.textChanged.connect(self.update_invoice_check)
-        
-        self.wt_input = QLineEdit("")
-        self.wt_input.setFixedWidth(200)
-        self.wt_input.setReadOnly(False)  # Explicitly enable editing
-        self.wt_input.setEnabled(True)    # Explicitly enable the widget
-        self.wt_input.setFocusPolicy(Qt.StrongFocus)  # Allow focus
-        self.wt_input.setClearButtonEnabled(False)  # Disable clear button that might interfere
+        # Force visual state to always look enabled
+        self.ci_input.setStyleSheet("QLineEdit { background-color: white; color: black; }")
+
+        self.wt_input = ForceEditableLineEdit("")
+        self.wt_input.setObjectName("wt_input")
+        self.wt_input.setPlaceholderText("Enter net weight...")
+        # Force visual state to always look enabled
+        self.wt_input.setStyleSheet("QLineEdit { background-color: white; color: black; }")
 
         values_layout.addRow("CI Value (USD):", self.ci_input)
         values_layout.addRow("Net Weight (kg):", self.wt_input)
@@ -866,17 +697,19 @@ class DerivativeMill(QMainWindow):
         # MID selector (moved above Invoice Check)
         self.mid_label = QLabel("MID:")
         self.mid_combo = QComboBox()
-        self.mid_combo.setFixedWidth(200)
         self.mid_combo.currentTextChanged.connect(self.on_mid_changed)
         values_layout.addRow(self.mid_label, self.mid_combo)
 
-        # Replace your current hbox_check block with this:
+        # Set explicit tab order: ci_input -> wt_input -> mid_combo
+        self.setTabOrder(self.ci_input, self.wt_input)
+        self.setTabOrder(self.wt_input, self.mid_combo)
+
+        # Invoice check label and Edit Values button
         self.invoice_check_label = QLabel("No file loaded")
         self.invoice_check_label.setWordWrap(True)
         self.invoice_check_label.setStyleSheet("font-size: 7pt;")
         self.invoice_check_label.setAlignment(Qt.AlignCenter)
 
-        # Use a QVBoxLayout for the invoice check label and Edit Values button
         vbox_check = QVBoxLayout()
         vbox_check.setSpacing(12)
         vbox_check.setContentsMargins(0, 10, 0, 0)
@@ -891,23 +724,18 @@ class DerivativeMill(QMainWindow):
         self.edit_values_btn.clicked.connect(self.start_processing_with_editable_preview)
         vbox_check.addWidget(self.edit_values_btn, alignment=Qt.AlignCenter)
         
-        vbox_check.addStretch()                     # pushes everything to the top
+        vbox_check.addStretch()
 
-        # Now add the vertical layout as the widget for the row (after MID)
         values_layout.addRow("Invoice Check:", vbox_check)
-
         values_group.setLayout(values_layout)
-        main_row.addWidget(values_group)
 
         # SHIPMENT FILE (merged with Saved Profiles and Input Files)
         file_group = QGroupBox("Shipment File")
         file_group.setObjectName("SavedProfilesGroup")
-        file_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         file_layout = QFormLayout()
         file_layout.setLabelAlignment(Qt.AlignRight)
         # Profile selector
         self.profile_combo = QComboBox()
-        self.profile_combo.setMinimumWidth(200)
         self.profile_combo.currentTextChanged.connect(self.load_selected_profile)
         file_layout.addRow("Map Profile:", self.profile_combo)
         # Input files list and refresh button (moved here)
@@ -919,21 +747,21 @@ class DerivativeMill(QMainWindow):
         self.update_file_label_style()  # Set initial style based on theme
         file_layout.addRow("Selected File:", self.file_label)
         file_group.setLayout(file_layout)
-        main_row.addWidget(file_group)
+        left_side.addWidget(file_group)
+        left_side.addWidget(values_group)
 
         # ACTIONS GROUP — Clear All + Export Worksheet buttons
         actions_group = QGroupBox("Actions")
-        actions_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         actions_layout = QVBoxLayout()
         
         self.clear_btn = QPushButton("Clear All")
-        self.clear_btn.setFixedSize(160, 40)
+        self.clear_btn.setFixedHeight(35)
         self.clear_btn.setStyleSheet(self.get_button_style("danger"))
         self.clear_btn.clicked.connect(self.clear_all)
 
         self.process_btn = QPushButton("Process Invoice")
         self.process_btn.setEnabled(False)
-        self.process_btn.setFixedSize(160, 40)
+        self.process_btn.setFixedHeight(35)
         self.process_btn.setStyleSheet(self.get_button_style("success"))
         self.process_btn.clicked.connect(self._process_or_export)
 
@@ -941,11 +769,10 @@ class DerivativeMill(QMainWindow):
         actions_layout.addWidget(self.process_btn)
         actions_layout.addStretch()
         actions_group.setLayout(actions_layout)
-        main_row.addWidget(actions_group)
+        left_side.addWidget(actions_group)
 
         # EXPORTED FILES GROUP — shows recent exports
         exports_group = QGroupBox("Exported Files")
-        exports_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         exports_layout = QVBoxLayout()
         
         self.exports_list = QListWidget()
@@ -959,24 +786,33 @@ class DerivativeMill(QMainWindow):
         exports_layout.addWidget(refresh_exports_btn)
         
         exports_group.setLayout(exports_layout)
-        main_row.addWidget(exports_group)
+        left_side.addWidget(exports_group)
+        
+        # Set maximum width for left controls to keep it compact
+        left_outer_box.setMaximumWidth(350)
 
-        main_row.addStretch()
-        layout.addLayout(main_row)
+        # Add left_outer_box to splitter
+        splitter.addWidget(left_outer_box)
+
+        # RIGHT SIDE: Preview table in a widget
+        right_widget = QWidget()
+        right_side = QVBoxLayout(right_widget)
+        right_side.setContentsMargins(0, 0, 0, 0)
 
         self.progress = QProgressBar()
         self.progress.setVisible(False)
-        layout.addWidget(self.progress)
+        right_side.addWidget(self.progress)
 
         preview_group = QGroupBox("Result Preview")
         preview_layout = QVBoxLayout()
-        
+
         self.table = QTableWidget()
         self.table.setColumnCount(13)
         self.table.setHorizontalHeaderLabels([
             "Product No","Value","HTS","MID","Wt","Dec","Melt","Cast","Smelt","Flag","232%","Non-232%","232 Status"
         ])
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        # Make columns manually resizable instead of auto-stretch
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.table.setSelectionBehavior(QTableWidget.SelectItems)
         self.table.setSelectionMode(QTableWidget.ExtendedSelection)
         self.table.setSortingEnabled(False)  # Disabled for better performance
@@ -985,57 +821,66 @@ class DerivativeMill(QMainWindow):
         header_font.setBold(False)
         self.table.horizontalHeader().setFont(header_font)
         self.table.setFont(header_font)
-        
+
         # Enable clicking header to select entire column
         self.table.horizontalHeader().sectionClicked.connect(self.select_column)
-        
+
+        # Connect signal to save column widths when they change
+        self.table.horizontalHeader().sectionResized.connect(self.save_column_widths)
+
+        # Load saved column widths
+        self.load_column_widths()
+
         preview_layout.addWidget(self.table)
         preview_group.setLayout(preview_layout)
-        layout.addWidget(preview_group, 1)
+        right_side.addWidget(preview_group, 1)
+
+        # Add right widget to splitter
+        splitter.addWidget(right_widget)
+
+        # Set initial splitter sizes - minimize left, maximize right (15% left, 85% right)
+        splitter.setSizes([200, 1000])
+
+        # Make the splitter collapsible on the left side
+        splitter.setCollapsible(0, False)  # Don't allow full collapse
+        splitter.setCollapsible(1, False)
+        
+        # Add splitter to main container
+        main_container.addWidget(splitter)
+        
+        layout.addLayout(main_container, 1)
 
         self.tab_process.setLayout(layout)
         self._install_preview_shortcuts()
-        
-        # Ensure input fields are ready immediately and repeatedly
-        self._enable_input_fields()  # Call immediately
-        QTimer.singleShot(0, lambda: self._enable_input_fields())
-        QTimer.singleShot(50, lambda: self._enable_input_fields())
-        QTimer.singleShot(100, lambda: self._enable_input_fields())
-        QTimer.singleShot(200, lambda: self._enable_input_fields())
-        QTimer.singleShot(500, lambda: self._enable_input_fields())
-        QTimer.singleShot(1000, lambda: self._enable_input_fields())
+
+        # Ensure input fields are enabled on startup
+        self._enable_input_fields()
     
     def _enable_input_fields(self):
         """Ensure CI and Weight input fields are enabled and ready for input"""
+        # Block signals to prevent recursion during enable
         if hasattr(self, 'ci_input'):
             self.ci_input.blockSignals(True)
             self.ci_input.setReadOnly(False)
             self.ci_input.setEnabled(True)
             self.ci_input.setFocusPolicy(Qt.StrongFocus)
-            self.ci_input.clearFocus()
-            self.ci_input.setUpdatesEnabled(True)
-            self.ci_input.blockSignals(False)
-            self.ci_input.repaint()  # Force immediate repaint
+            # Force immediate visual update
             self.ci_input.update()
-            QApplication.processEvents(QEventLoop.AllEvents)  # Process ALL events
-            QApplication.sendPostedEvents()  # Send all posted events immediately
+            self.ci_input.blockSignals(False)
+
         if hasattr(self, 'wt_input'):
             self.wt_input.blockSignals(True)
             self.wt_input.setReadOnly(False)
             self.wt_input.setEnabled(True)
             self.wt_input.setFocusPolicy(Qt.StrongFocus)
-            self.wt_input.clearFocus()
-            self.wt_input.setUpdatesEnabled(True)
-            self.wt_input.blockSignals(False)
-            self.wt_input.repaint()  # Force immediate repaint
+            # Force immediate visual update
             self.wt_input.update()
-            QApplication.processEvents(QEventLoop.AllEvents)  # Process ALL events
-            QApplication.sendPostedEvents()  # Send all posted events immediately
+            self.wt_input.blockSignals(False)
 
     def show_settings_dialog(self):
         dialog = QDialog(self)
         dialog.setWindowTitle("Settings")
-        dialog.setFixedSize(500, 600)
+        dialog.setFixedSize(500, 650)
         layout = QVBoxLayout(dialog)
 
         # Theme Settings Group
@@ -1067,12 +912,51 @@ class DerivativeMill(QMainWindow):
         
         theme_combo.currentTextChanged.connect(self.apply_theme)
         theme_layout.addRow("Application Theme:", theme_combo)
-        
+
         theme_info = QLabel("<small>Theme changes apply immediately. System Default uses your Windows theme settings.</small>")
         theme_info.setWordWrap(True)
         theme_info.setStyleSheet("color:#666; padding:5px;")
         theme_layout.addRow("", theme_info)
-        
+
+        # Font Size Slider
+        font_size_layout = QHBoxLayout()
+        font_size_slider = QSlider(Qt.Horizontal)
+        font_size_slider.setMinimum(8)
+        font_size_slider.setMaximum(16)
+        font_size_slider.setValue(10)  # Default
+        font_size_slider.setTickPosition(QSlider.TicksBelow)
+        font_size_slider.setTickInterval(1)
+
+        font_size_value_label = QLabel("10pt")
+        font_size_value_label.setMinimumWidth(40)
+
+        # Load saved font size preference
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("SELECT value FROM app_config WHERE key = 'font_size'")
+            row = c.fetchone()
+            conn.close()
+
+            if row:
+                saved_font_size = int(row[0])
+                font_size_slider.setValue(saved_font_size)
+                font_size_value_label.setText(f"{saved_font_size}pt")
+        except:
+            pass
+
+        # Connect slider to update label and apply font size
+        def update_font_size(value):
+            font_size_value_label.setText(f"{value}pt")
+            self.apply_font_size(value)
+
+        font_size_slider.valueChanged.connect(update_font_size)
+
+        font_size_layout.addWidget(font_size_slider)
+        font_size_layout.addWidget(font_size_value_label)
+
+        theme_layout.addRow("Font Size:", font_size_layout)
+
         theme_group.setLayout(theme_layout)
         layout.addWidget(theme_group)
 
@@ -1086,7 +970,14 @@ class DerivativeMill(QMainWindow):
         # Use local variables instead of instance variables
         input_path_label = QLabel(input_dir_str)
         input_path_label.setWordWrap(True)
-        input_path_label.setStyleSheet("background:#f0f0f0; padding:5px; border:1px solid #ccc;")
+        
+        # Apply theme-aware styling
+        is_dark = hasattr(self, 'current_theme') and self.current_theme in ["Fusion (Dark)", "Ocean", "Teal Professional"]
+        if is_dark:
+            input_path_label.setStyleSheet("background:#2d2d2d; padding:5px; border:1px solid #555; color:#e0e0e0;")
+        else:
+            input_path_label.setStyleSheet("background:#f0f0f0; padding:5px; border:1px solid #ccc; color:#000000;")
+        
         input_btn = QPushButton("Change Input Folder")
         input_btn.clicked.connect(lambda: self.select_input_folder(input_path_label))
         glayout.addRow("Input Folder:", input_path_label)
@@ -1095,7 +986,13 @@ class DerivativeMill(QMainWindow):
         # Output folder display and button
         output_path_label = QLabel(output_dir_str)
         output_path_label.setWordWrap(True)
-        output_path_label.setStyleSheet("background:#f0f0f0; padding:5px; border:1px solid #ccc;")
+        
+        # Apply theme-aware styling
+        if is_dark:
+            output_path_label.setStyleSheet("background:#2d2d2d; padding:5px; border:1px solid #555; color:#e0e0e0;")
+        else:
+            output_path_label.setStyleSheet("background:#f0f0f0; padding:5px; border:1px solid #ccc; color:#000000;")
+        
         output_btn = QPushButton("Change Output Folder")
         output_btn.clicked.connect(lambda: self.select_output_folder(output_path_label))
         glayout.addRow("Output Folder:", output_path_label)
@@ -1159,7 +1056,27 @@ class DerivativeMill(QMainWindow):
             logger.info(f"Theme changed to: {theme_name}")
         except Exception as e:
             logger.error(f"Failed to save theme: {e}")
-    
+
+    def apply_font_size(self, size):
+        """Apply the selected font size to the application"""
+        app = QApplication.instance()
+
+        # Get current font and update size
+        font = app.font()
+        font.setPointSize(size)
+        app.setFont(font)
+
+        # Save font size preference
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("INSERT OR REPLACE INTO app_config (key, value) VALUES ('font_size', ?)", (str(size),))
+            conn.commit()
+            conn.close()
+            logger.info(f"Font size changed to: {size}pt")
+        except Exception as e:
+            logger.error(f"Failed to save font size: {e}")
+
     def update_file_label_style(self):
         """Update file label background based on current theme"""
         if not hasattr(self, 'current_theme'):
@@ -1434,61 +1351,18 @@ class DerivativeMill(QMainWindow):
         logger.info("Process tab cleared")
 
     def browse_file(self):
-        # --- Highlight Saved Profiles box (no tab switch, no errors) ---
+        # Simple profile check without focus manipulation
         current_profile = self.profile_combo.currentText()
         if not current_profile or current_profile == "-- Select Profile --":
-            # Find the Saved Profiles group box
-            profiles_group = None
-            for widget in self.tab_process.findChildren(QGroupBox):
-                if widget.title() == "Saved Profiles":
-                    profiles_group = widget
-                    break
-
-            if profiles_group:
-                # 1. Scroll the tab into view (works on QScrollArea or plain widget)
-                scroll_area = self.tab_process
-                while scroll_area and not isinstance(scroll_area, QScrollArea):
-                    scroll_area = scroll_area.parentWidget()
-                if scroll_area and isinstance(scroll_area, QScrollArea):
-                    scroll_area.ensureWidgetVisible(profiles_group)
-
-                # 2. Flash effect using only stylesheet + QTimer (no QPropertyAnimation)
-                original_ss = profiles_group.styleSheet()
-
-                def flash(step=0):
-                    styles = [
-                        "QGroupBox { border: 4px solid #ff4444; background-color: #ffebee; }",
-                        "QGroupBox { border: 4px solid #ff8800; background-color: #fff3e0; }",
-                        "QGroupBox { border: 4px solid #ffaa00; background-color: #fff8e1; }",
-                        original_ss or ""
-                    ]
-                    if step < len(styles):
-                        profiles_group.setStyleSheet(styles[step])
-                        QTimer.singleShot(300, lambda s=step+1: flash(s))
-
-                flash()
-
-                # 3. Also flash the combo box itself
-                self.profile_combo.setStyleSheet(
-                    "QComboBox { border: 3px solid #ff8533; background-color: #ff8533; }"
-                )
-                QTimer.singleShot(1200, lambda: self.profile_combo.setStyleSheet(""))
-
-                # 4. Focus + open dropdown
-                self.profile_combo.setFocus()
-                QTimer.singleShot(100, self.profile_combo.showPopup)
-
-            # Status bar warning
-            self.status.setText("Please select a Saved Profile first")
-            self.status.setStyleSheet("background:#ff8533; color:white; font-weight:bold; padding:8px;")
-
             QMessageBox.warning(
                 self,
                 "Mapping Profile Required",
                 "<b>You must select a mapping profile before loading a shipment file.</b><br><br>"
-                "Please choose one from the <b>Saved Profiles</b> box on the right.",
+                "Please choose one from the <b>Saved Profiles</b> dropdown.",
                 QMessageBox.Ok
             )
+            # Re-enable input fields after modal dialog
+            self._enable_input_fields()
             return
         # -------------------------------------------------------------------------
 
@@ -1571,15 +1445,16 @@ class DerivativeMill(QMainWindow):
                 else:
                     self.edit_values_btn.setVisible(False)
             
-            # Button state control - enable when required fields are filled (ALLOWS PROCESSING EVEN IF VALUES DON'T MATCH)
+            # Button state control - require invoice check match before processing
             has_weight = bool(self.wt_input.text().strip())
             has_ci_value = bool(user_text)
             has_mid = bool(self.selected_mid)
-            
+            values_match = diff <= threshold
+
             if self.current_csv and len(self.shipment_mapping) >= 2:
                 if self.last_processed_df is None:
-                    # Haven't processed yet - enable when required fields filled (regardless of value match)
-                    if has_weight and has_ci_value and has_mid:
+                    # Haven't processed yet - require all fields AND invoice values must match
+                    if has_weight and has_ci_value and has_mid and values_match:
                         self.process_btn.setEnabled(True)
                         self.process_btn.setText("Process Invoice")
                     else:
@@ -1587,12 +1462,15 @@ class DerivativeMill(QMainWindow):
                         self.process_btn.setText("Process Invoice")
                 else:
                     # Already processed - button becomes Export, only enabled when values match
-                    if diff <= threshold:
+                    if values_match:
                         self.process_btn.setEnabled(True)
                         self.process_btn.setText("Export Worksheet")
                     else:
                         self.process_btn.setEnabled(False)
                         self.process_btn.setText("Export Worksheet")
+
+            # Always ensure input fields stay enabled
+            self._enable_input_fields()
         finally:
             self._updating_invoice_check = False
     def select_input_folder(self, label=None):
@@ -2496,7 +2374,7 @@ class DerivativeMill(QMainWindow):
         if not name or name == "-- Select Profile --":
             # Clear all mappings and reset UI
             self.shipment_mapping = {}
-            
+
             # Clear drop targets
             for target in self.shipment_targets.values():
                 target.column_name = None
@@ -2504,15 +2382,15 @@ class DerivativeMill(QMainWindow):
                 target.setProperty("occupied", False)
                 target.style().unpolish(target)
                 target.style().polish(target)
-            
+
             # Clear draggable CSV columns
             for label in self.shipment_drag_labels:
                 label.deleteLater()
             self.shipment_drag_labels.clear()
-            
+
             self.bottom_status.setText("Profile cleared")
             return
-            
+
         try:
             conn = sqlite3.connect(str(DB_PATH))
             c = conn.cursor()
@@ -3825,6 +3703,42 @@ class DerivativeMill(QMainWindow):
             if item:
                 item.setSelected(True)
 
+    def save_column_widths(self):
+        """Save column widths to database for persistence"""
+        try:
+            widths = {}
+            for col in range(self.table.columnCount()):
+                header_text = self.table.horizontalHeaderItem(col).text()
+                widths[header_text] = self.table.columnWidth(col)
+
+            import json
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("INSERT OR REPLACE INTO app_config (key, value) VALUES ('column_widths', ?)",
+                     (json.dumps(widths),))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.debug(f"Could not save column widths: {e}")
+
+    def load_column_widths(self):
+        """Load saved column widths from database"""
+        try:
+            import json
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("SELECT value FROM app_config WHERE key = 'column_widths'")
+            row = c.fetchone()
+            conn.close()
+
+            if row:
+                widths = json.loads(row[0])
+                for col in range(self.table.columnCount()):
+                    header_text = self.table.horizontalHeaderItem(col).text()
+                    if header_text in widths:
+                        self.table.setColumnWidth(col, widths[header_text])
+        except Exception as e:
+            logger.debug(f"Could not load column widths: {e}")
 
     def recalculate_total_and_check_match(self):
         if self.last_processed_df is None:
@@ -3961,15 +3875,27 @@ class DerivativeMill(QMainWindow):
                     self.export_progress_bar.setValue(50)
                     QApplication.processEvents()
                     
-                    # Apply red font to any row where NonSteelRatio > 0
+                    # Apply Arial font to all cells and red font to non-steel rows
                     t_format_start = time.time()
                     ws = next(iter(writer.sheets.values()))
-                    red_font = Font(color="00FF0000")
+                    
+                    # Set Arial font for all cells (including header)
+                    arial_font = ExcelFont(name='Arial', size=11)
+                    red_arial_font = ExcelFont(name='Arial', size=11, color="00FF0000")
+                    
+                    # Apply font to header row
+                    for col_idx in range(1, len(cols) + 1):
+                        ws.cell(row=1, column=col_idx).font = ExcelFont(name='Arial', size=11, bold=True)
+                    
+                    # Apply font to data rows
                     nonsteel_indices = [i for i, val in enumerate(nonsteel_mask.tolist()) if val]
-                    for idx in nonsteel_indices:
-                        row_num = idx + 2
+                    for row_idx in range(len(df_out)):
+                        row_num = row_idx + 2
+                        is_nonsteel = row_idx in nonsteel_indices
+                        cell_font = red_arial_font if is_nonsteel else arial_font
                         for col_idx in range(1, len(cols) + 1):
-                            ws.cell(row=row_num, column=col_idx).font = red_font
+                            ws.cell(row=row_num, column=col_idx).font = cell_font
+                    
                     t_format = time.time() - t_format_start
                 
                 self.export_progress_bar.setValue(70)
@@ -4157,17 +4083,9 @@ class DerivativeMill(QMainWindow):
         # Check if a map profile is selected first
         current_profile = self.profile_combo.currentText()
         if not current_profile or current_profile == "-- Select Profile --":
-            # Highlight the profile combo to get user's attention
-            self.profile_combo.setStyleSheet(
-                "QComboBox { border: 3px solid #ff4444; background-color: #ffebee; }"
-            )
-            QTimer.singleShot(1500, lambda: self.profile_combo.setStyleSheet(""))
-            
-            self.status.setText("Please select a Map Profile first")
-            self.status.setStyleSheet("background:#A4262C; color:white; font-weight:bold; padding:8px;")
-            QTimer.singleShot(3000, lambda: self.status.setStyleSheet("font-size:14pt; padding:8px; background:#f0f0f0;"))
-            
-            self.profile_combo.setFocus()
+            QMessageBox.warning(self, "No Profile", "Please select a Map Profile first.")
+            # Re-enable input fields after modal dialog
+            self._enable_input_fields()
             return
         
         try:
@@ -4193,13 +4111,18 @@ class DerivativeMill(QMainWindow):
                     self.csv_total_value = round(total, 2)
                     # Don't auto-populate CI input - just update the check
                     self.update_invoice_check()  # This will control button state
-                
+
                 self.bottom_status.setText(f"Loaded: {file_path.name}")
                 logger.info(f"Loaded: {file_path.name}")
+
+                # Ensure input fields remain editable after loading
+                self._enable_input_fields()
         except Exception as e:
             logger.error(f"Load input file failed: {e}")
             self.status.setText(f"Error loading file: {e}")
             QMessageBox.warning(self, "Error", f"Could not load file:\n{e}")
+            # Ensure fields stay enabled even after error
+            self._enable_input_fields()
 
     def open_exported_file(self, item):
         """Open the selected exported file with default application"""
@@ -4340,9 +4263,8 @@ if __name__ == "__main__":
             icon_path = TEMP_RESOURCES_DIR / "icon.ico"
         if icon_path.exists():
             app.setWindowIcon(QIcon(str(icon_path)))
-        login = LoginDialog()
-        if login.exec_() != QDialog.Accepted:
-            sys.exit(0)
+        
+        # Create and show splash screen
         splash_widget = QWidget()
         splash_widget.setFixedSize(500, 300)
         splash_widget.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
@@ -4396,12 +4318,14 @@ if __name__ == "__main__":
             (screen_geo.height() - splash_widget.height()) // 2
         )
         app.processEvents()
-        logger.info(f"Application started by user: {login.authenticated_user}")
+        
+        logger.info("Application started")
         splash_message.setText("Creating main window...\nPlease wait...")
         splash_progress.setValue(10)
         app.processEvents()
+        
         win = DerivativeMill()
-        win.setWindowTitle(f"{APP_NAME} {VERSION} - User: {login.authenticated_user}")
+        win.setWindowTitle(f"{APP_NAME} {VERSION}")
         splash_widget.close()
         win.show()
 
