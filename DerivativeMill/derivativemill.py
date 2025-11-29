@@ -34,7 +34,7 @@ from PyQt5.QtWidgets import *
 from PyQt5.QtCore import Qt, QMimeData, pyqtSignal, QTimer, QSize, QEventLoop
 from PyQt5.QtGui import QColor, QFont, QDrag, QKeySequence, QIcon, QPixmap, QPainter, QDoubleValidator
 from PyQt5.QtSvg import QSvgRenderer
-from openpyxl.styles import Font as ExcelFont
+from openpyxl.styles import Font as ExcelFont, Alignment
 import tempfile
 
 # ----------------------------------------------------------------------
@@ -268,6 +268,15 @@ class ForceEditableLineEdit(QLineEdit):
         super(ForceEditableLineEdit, self).setReadOnly(False)
         super(ForceEditableLineEdit, self).setEnabled(True)
         super().keyPressEvent(event)
+
+class AutoSelectListWidget(QListWidget):
+    """QListWidget that auto-selects first item when receiving focus via Tab"""
+    def focusInEvent(self, event):
+        """Select first item when receiving focus if nothing is selected"""
+        super().focusInEvent(event)
+        # Only auto-select if no item is currently selected and list has items
+        if not self.currentItem() and self.count() > 0:
+            self.setCurrentRow(0)
 
 class FileDropZone(QLabel):
     """Drag-and-drop zone for importing CSV/Excel files"""
@@ -722,16 +731,16 @@ class DerivativeMill(QMainWindow):
         left_side.setContentsMargins(10, 10, 10, 10)
         
         # INPUT FILES LIST — now inside Shipment File group
-        self.input_files_list = QListWidget()
+        self.input_files_list = AutoSelectListWidget()
         self.input_files_list.setSelectionMode(QListWidget.SingleSelection)
         self.input_files_list.itemClicked.connect(self.load_selected_input_file)
         # Connect itemActivated for Enter key and double-click support
         self.input_files_list.itemActivated.connect(self.load_selected_input_file)
         # Allow focus for tab navigation
         self.input_files_list.setFocusPolicy(Qt.StrongFocus)
-        refresh_input_btn = QPushButton("Refresh")
-        refresh_input_btn.setFixedHeight(25)
-        refresh_input_btn.clicked.connect(self.refresh_input_files)
+        self.refresh_input_btn = QPushButton("Refresh")
+        self.refresh_input_btn.setFixedHeight(25)
+        self.refresh_input_btn.clicked.connect(self.refresh_input_files)
 
         # INVOICE VALUES
         values_group = QGroupBox("Invoice Values")
@@ -795,7 +804,7 @@ class DerivativeMill(QMainWindow):
         file_layout.addRow("Map Profile:", self.profile_combo)
         # Input files list and refresh button (moved here)
         file_layout.addRow("Input Files:", self.input_files_list)
-        file_layout.addRow("", refresh_input_btn)
+        file_layout.addRow("", self.refresh_input_btn)
         # File display (read-only, shows selected file from Input Files list)
         self.file_label = QLabel("No file selected")
         self.file_label.setWordWrap(True)
@@ -819,6 +828,9 @@ class DerivativeMill(QMainWindow):
         self.process_btn.setFixedHeight(35)
         self.process_btn.setStyleSheet(self.get_button_style("success"))
         self.process_btn.clicked.connect(self._process_or_export)
+        # Make button respond to Enter/Return key when focused
+        self.process_btn.setAutoDefault(True)
+        self.process_btn.setDefault(False)  # Don't make it the default for the whole window
 
         actions_layout.addWidget(self.process_btn)
         actions_layout.addWidget(self.clear_btn)
@@ -830,15 +842,19 @@ class DerivativeMill(QMainWindow):
         exports_group = QGroupBox("Exported Files")
         exports_layout = QVBoxLayout()
         
-        self.exports_list = QListWidget()
+        self.exports_list = AutoSelectListWidget()
         self.exports_list.setSelectionMode(QListWidget.SingleSelection)
         self.exports_list.itemDoubleClicked.connect(self.open_exported_file)
+        # Connect itemActivated for Enter key support
+        self.exports_list.itemActivated.connect(self.open_exported_file)
+        # Allow focus for tab navigation
+        self.exports_list.setFocusPolicy(Qt.StrongFocus)
         exports_layout.addWidget(self.exports_list)
-        
-        refresh_exports_btn = QPushButton("Refresh")
-        refresh_exports_btn.setFixedHeight(25)
-        refresh_exports_btn.clicked.connect(self.refresh_exported_files)
-        exports_layout.addWidget(refresh_exports_btn)
+
+        self.refresh_exports_btn = QPushButton("Refresh")
+        self.refresh_exports_btn.setFixedHeight(25)
+        self.refresh_exports_btn.clicked.connect(self.refresh_exported_files)
+        exports_layout.addWidget(self.refresh_exports_btn)
         
         exports_group.setLayout(exports_layout)
         left_side.addWidget(exports_group)
@@ -886,6 +902,9 @@ class DerivativeMill(QMainWindow):
         # Load saved column widths
         self.load_column_widths()
 
+        # Apply green focus color stylesheet
+        self.update_table_stylesheet()
+
         preview_layout.addWidget(self.table)
         preview_group.setLayout(preview_layout)
         right_side.addWidget(preview_group, 1)
@@ -906,14 +925,18 @@ class DerivativeMill(QMainWindow):
         layout.addLayout(main_container, 1)
 
         # Set up tab order for keyboard navigation through controls
-        # Order: Map Profile → Input Files → CI Value → Net Weight → MID → Process Invoice → Clear All
+        # Order: Map Profile → Input Files → Refresh (Shipment) → CI Value → Net Weight →
+        #        MID → Process Invoice → Edit Values → Clear All → Exported Files → Refresh (Exports)
         self.setTabOrder(self.profile_combo, self.input_files_list)
-        self.setTabOrder(self.input_files_list, self.ci_input)
+        self.setTabOrder(self.input_files_list, self.refresh_input_btn)
+        self.setTabOrder(self.refresh_input_btn, self.ci_input)
         self.setTabOrder(self.ci_input, self.wt_input)
         self.setTabOrder(self.wt_input, self.mid_combo)
         self.setTabOrder(self.mid_combo, self.process_btn)
-        self.setTabOrder(self.process_btn, self.clear_btn)
-        # Skip edit_values_btn (often hidden) and exports_list (NoFocus)
+        self.setTabOrder(self.process_btn, self.edit_values_btn)
+        self.setTabOrder(self.edit_values_btn, self.clear_btn)
+        self.setTabOrder(self.clear_btn, self.exports_list)
+        self.setTabOrder(self.exports_list, self.refresh_exports_btn)
 
         self.tab_process.setLayout(layout)
         self._install_preview_shortcuts()
@@ -1044,6 +1067,57 @@ class DerivativeMill(QMainWindow):
         theme_group.setLayout(theme_layout)
         layout.addWidget(theme_group)
 
+        # Excel Viewer Settings Group
+        viewer_group = QGroupBox("Excel File Viewer")
+        viewer_layout = QFormLayout()
+
+        # Excel viewer combo box
+        viewer_combo = QComboBox()
+        if sys.platform == 'linux':
+            viewer_combo.addItems(["System Default", "Gnumeric"])
+        else:
+            viewer_combo.addItems(["System Default"])
+            viewer_combo.setEnabled(False)  # Only relevant on Linux
+
+        # Load saved preference
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("SELECT value FROM app_config WHERE key = 'excel_viewer'")
+            row = c.fetchone()
+            conn.close()
+
+            if row:
+                saved_viewer = row[0]
+                index = viewer_combo.findText(saved_viewer)
+                if index >= 0:
+                    viewer_combo.setCurrentIndex(index)
+        except:
+            pass
+
+        # Save preference when changed
+        def save_viewer_preference(viewer):
+            try:
+                conn = sqlite3.connect(str(DB_PATH))
+                c = conn.cursor()
+                c.execute("INSERT OR REPLACE INTO app_config (key, value) VALUES ('excel_viewer', ?)", (viewer,))
+                conn.commit()
+                conn.close()
+                logger.info(f"Excel viewer preference changed to: {viewer}")
+            except Exception as e:
+                logger.error(f"Failed to save excel viewer preference: {e}")
+
+        viewer_combo.currentTextChanged.connect(save_viewer_preference)
+        viewer_layout.addRow("Open Exported Files With:", viewer_combo)
+
+        viewer_info = QLabel("<small>Choose which application opens exported Excel files. (Linux only)</small>")
+        viewer_info.setWordWrap(True)
+        viewer_info.setStyleSheet("color:#666; padding:5px;")
+        viewer_layout.addRow("", viewer_info)
+
+        viewer_group.setLayout(viewer_layout)
+        layout.addWidget(viewer_group)
+
         group = QGroupBox("Folder Locations")
         glayout = QFormLayout()
         
@@ -1119,16 +1193,16 @@ class DerivativeMill(QMainWindow):
         
         # Refresh button styles to match new theme
         self.refresh_button_styles()
-        
+
         # Update file label style for new theme
         if hasattr(self, 'file_label'):
             self.update_file_label_style()
-        
+
         # Update status bar styles for new theme
         self.update_status_bar_styles()
-        
-        # Update status bar styles for new theme
-        self.update_status_bar_styles()
+
+        # Update table stylesheet for new theme
+        self.update_table_stylesheet()
         
         # Save theme preference
         try:
@@ -1231,7 +1305,20 @@ class DerivativeMill(QMainWindow):
                         border-top: 1px solid #d0d0d0;
                     }
                 """)
-    
+
+    def update_table_stylesheet(self):
+        """Update table stylesheet with green focus color for current theme"""
+        if not hasattr(self, 'table'):
+            return
+
+        # Set green focus color that works with all themes
+        self.table.setStyleSheet("""
+            QTableWidget::item:focus {
+                background-color: #90EE90;
+                border: 2px solid #228B22;
+            }
+        """)
+
     def refresh_button_styles(self):
         """Refresh all button styles to match current theme"""
         # Process tab buttons
@@ -1426,6 +1513,7 @@ class DerivativeMill(QMainWindow):
         self.selected_mid = ""
         self.table.setRowCount(0)
         self.process_btn.setEnabled(False)
+        self.process_btn.setText("Process Invoice")  # Reset button text
         self.progress.setVisible(False)
         self.invoice_check_label.setText("No file loaded")
         self.csv_total_value = 0.0
@@ -3853,6 +3941,7 @@ class DerivativeMill(QMainWindow):
         if diff <= threshold:
             self.process_btn.setEnabled(True)
             self.process_btn.setText("Export Worksheet")
+            self.process_btn.setFocus()  # Keep focus on button so user can press Enter to export
             self.status.setText("VALUES MATCH → READY TO EXPORT")
             self.status.setStyleSheet("background:#107C10; color:white; font-weight:bold; font-size:16pt;")
         else:
@@ -4020,15 +4109,48 @@ class DerivativeMill(QMainWindow):
                     self.export_progress_bar.setValue(60)
                     QApplication.processEvents()
                     
-                    # Apply red font to any row where NonSteelRatio > 0
+                    # Apply formatting: Arial font, center alignment, auto-sized columns
                     t_format_start = time.time()
                     ws = next(iter(writer.sheets.values()))
-                    red_font = Font(color="00FF0000")
+
+                    # Create font and alignment styles
+                    red_font = ExcelFont(name="Arial", color="00FF0000")
+                    normal_font = ExcelFont(name="Arial")
+                    center_alignment = Alignment(horizontal="center", vertical="center")
+
+                    # Apply red font to rows where NonSteelRatio > 0, normal font to others
                     nonsteel_indices = [i for i, val in enumerate(nonsteel_mask.tolist()) if val]
-                    for idx in nonsteel_indices:
-                        row_num = idx + 2
+                    for row_num in range(2, len(df_out) + 2):  # Start at 2 (after header)
+                        is_nonsteel = (row_num - 2) in nonsteel_indices
+                        font_to_use = red_font if is_nonsteel else normal_font
+
                         for col_idx in range(1, len(cols) + 1):
-                            ws.cell(row=row_num, column=col_idx).font = red_font
+                            cell = ws.cell(row=row_num, column=col_idx)
+                            cell.font = font_to_use
+                            cell.alignment = center_alignment
+
+                    # Apply Arial font and center alignment to header row
+                    for col_idx in range(1, len(cols) + 1):
+                        cell = ws.cell(row=1, column=col_idx)
+                        cell.font = normal_font
+                        cell.alignment = center_alignment
+
+                    # Auto-size columns based on content with padding
+                    for col_idx, column in enumerate(ws.columns, 1):
+                        max_length = 0
+                        column_letter = ws.cell(row=1, column=col_idx).column_letter
+
+                        for cell in column:
+                            try:
+                                if cell.value:
+                                    max_length = max(max_length, len(str(cell.value)))
+                            except:
+                                pass
+
+                        # Add padding (2 extra characters) and set column width
+                        adjusted_width = max_length + 2
+                        ws.column_dimensions[column_letter].width = adjusted_width
+
                     t_format = time.time() - t_format_start
                 
                 self.export_progress_bar.setValue(90)
@@ -4131,31 +4253,45 @@ class DerivativeMill(QMainWindow):
     def refresh_exported_files(self):
         """Load and display exported files from Output folder"""
         try:
-            # Remember current selection
+            # Remember current selection and focus state
             current_item = self.exports_list.currentItem()
             current_file = current_item.text() if current_item else None
-            
+            had_focus = self.exports_list.hasFocus()
+
+            # Block signals during refresh to prevent triggering events
+            self.exports_list.blockSignals(True)
             self.exports_list.clear()
             if OUTPUT_DIR.exists():
                 files = sorted(OUTPUT_DIR.glob("Upload_Sheet_*.xlsx"), key=lambda p: p.stat().st_mtime, reverse=True)
                 for f in files[:20]:  # Show last 20 files
                     self.exports_list.addItem(f.name)
-            
+
             # Restore selection if the file still exists
             if current_file:
                 items = self.exports_list.findItems(current_file, Qt.MatchExactly)
                 if items:
                     self.exports_list.setCurrentItem(items[0])
+            # If widget had focus but no previous selection, select first item
+            elif had_focus and self.exports_list.count() > 0:
+                self.exports_list.setCurrentRow(0)
+
+            # Unblock signals after refresh complete
+            self.exports_list.blockSignals(False)
         except Exception as e:
             logger.error(f"Refresh exports failed: {e}")
+            # Make sure to unblock signals even on error
+            self.exports_list.blockSignals(False)
 
     def refresh_input_files(self):
         """Load and display CSV files from Input folder"""
         try:
-            # Remember current selection
+            # Remember current selection and focus state
             current_item = self.input_files_list.currentItem()
             current_file = current_item.text() if current_item else None
-            
+            had_focus = self.input_files_list.hasFocus()
+
+            # Block signals during refresh to prevent triggering events
+            self.input_files_list.blockSignals(True)
             self.input_files_list.clear()
             if INPUT_DIR.exists():
                 files = sorted(INPUT_DIR.glob("*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -4167,8 +4303,16 @@ class DerivativeMill(QMainWindow):
                 items = self.input_files_list.findItems(current_file, Qt.MatchExactly)
                 if items:
                     self.input_files_list.setCurrentItem(items[0])
+            # If widget had focus but no previous selection, select first item
+            elif had_focus and self.input_files_list.count() > 0:
+                self.input_files_list.setCurrentRow(0)
+
+            # Unblock signals after refresh complete
+            self.input_files_list.blockSignals(False)
         except Exception as e:
             logger.error(f"Refresh input files failed: {e}")
+            # Make sure to unblock signals even on error
+            self.input_files_list.blockSignals(False)
 
     def load_selected_input_file(self, item):
         """Load the selected CSV file from Input folder"""
@@ -4234,7 +4378,7 @@ class DerivativeMill(QMainWindow):
             self._enable_input_fields()
 
     def open_exported_file(self, item):
-        """Open the selected exported file with default application"""
+        """Open the selected exported file with user's preferred application"""
         try:
             file_path = OUTPUT_DIR / item.text()
             if file_path.exists():
@@ -4244,7 +4388,23 @@ class DerivativeMill(QMainWindow):
                 elif sys.platform == 'darwin':  # macOS
                     subprocess.run(['open', str(file_path)])
                 else:  # Linux and other Unix-like systems
-                    subprocess.run(['xdg-open', str(file_path)])
+                    # Check user preference for Excel viewer
+                    viewer_preference = "System Default"
+                    try:
+                        conn = sqlite3.connect(str(DB_PATH))
+                        c = conn.cursor()
+                        c.execute("SELECT value FROM app_config WHERE key = 'excel_viewer'")
+                        row = c.fetchone()
+                        conn.close()
+                        if row:
+                            viewer_preference = row[0]
+                    except:
+                        pass
+
+                    if viewer_preference == "Gnumeric":
+                        subprocess.run(['gnumeric', str(file_path)])
+                    else:
+                        subprocess.run(['xdg-open', str(file_path)])
         except Exception as e:
             logger.error(f"Open file failed: {e}")
             QMessageBox.warning(self, "Error", f"Could not open file:\n{e}")
