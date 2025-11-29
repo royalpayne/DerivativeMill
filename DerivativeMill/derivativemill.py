@@ -1803,6 +1803,14 @@ class DerivativeMill(QMainWindow):
             self.status.setText(f"Output folder: {OUTPUT_DIR}")
             self.refresh_exported_files()
 
+    def load_file_as_dataframe(self, file_path):
+        """Load CSV or Excel file and return as DataFrame"""
+        file_path_str = str(file_path)
+        if file_path_str.lower().endswith('.xlsx') or file_path_str.lower().endswith('.xls'):
+            return pd.read_excel(file_path_str, dtype=str, keep_default_na=False).fillna("")
+        else:
+            return pd.read_csv(file_path_str, dtype=str, keep_default_na=False).fillna("")
+
     def start_processing_with_editable_preview(self):
         if not self.current_csv:
             return
@@ -1853,10 +1861,10 @@ class DerivativeMill(QMainWindow):
         self.progress.setRange(0, 0)
         self.status.setText("Processing...")
 
-        # Directly process the CSV file synchronously (single-threaded)
+        # Directly process the CSV/Excel file synchronously (single-threaded)
         try:
             self.status.setText("Loading file...")
-            df = pd.read_csv(self.current_csv, dtype=str, keep_default_na=False).fillna("")
+            df = self.load_file_as_dataframe(self.current_csv)
             vr = Path(self.current_csv).stem
             col_map = {v:k for k,v in self.shipment_mapping.items()}
             df = df.rename(columns=col_map)
@@ -4444,7 +4452,7 @@ class DerivativeMill(QMainWindow):
             self.exports_list.blockSignals(False)
 
     def refresh_input_files(self):
-        """Load and display CSV files from Input folder"""
+        """Load and display CSV/Excel files from Input folder"""
         try:
             # Remember current selection and focus state
             current_item = self.input_files_list.currentItem()
@@ -4455,7 +4463,11 @@ class DerivativeMill(QMainWindow):
             self.input_files_list.blockSignals(True)
             self.input_files_list.clear()
             if INPUT_DIR.exists():
-                files = sorted(INPUT_DIR.glob("*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
+                # Combine CSV, XLSX, and XLS files
+                csv_files = list(INPUT_DIR.glob("*.csv"))
+                xlsx_files = list(INPUT_DIR.glob("*.xlsx"))
+                xls_files = list(INPUT_DIR.glob("*.xls"))
+                files = sorted(csv_files + xlsx_files + xls_files, key=lambda p: p.stat().st_mtime, reverse=True)
                 for f in files[:50]:  # Show up to 50 files
                     self.input_files_list.addItem(f.name)
             
