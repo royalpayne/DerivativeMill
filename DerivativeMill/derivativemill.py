@@ -238,12 +238,36 @@ class ForceEditableLineEdit(QLineEdit):
 
     def mousePressEvent(self, event):
         """Force editable on mouse click"""
+        super(ForceEditableLineEdit, self).setReadOnly(False)
+        super(ForceEditableLineEdit, self).setEnabled(True)
         self.setFocus()
         super().mousePressEvent(event)
 
     def focusInEvent(self, event):
-        """Accept all focus events"""
+        """Accept all focus events and force editable state"""
+        super(ForceEditableLineEdit, self).setReadOnly(False)
+        super(ForceEditableLineEdit, self).setEnabled(True)
         super().focusInEvent(event)
+
+    def keyPressEvent(self, event):
+        """Force editable before processing any key event"""
+        from PyQt5.QtCore import Qt
+
+        # For Tab keys, manually move focus to next/previous widget
+        if event.key() == Qt.Key_Tab:
+            # Move focus to next widget in tab order
+            self.focusNextChild()
+            event.accept()
+            return
+        elif event.key() == Qt.Key_Backtab:
+            # Move focus to previous widget in tab order
+            self.focusPreviousChild()
+            event.accept()
+            return
+
+        super(ForceEditableLineEdit, self).setReadOnly(False)
+        super(ForceEditableLineEdit, self).setEnabled(True)
+        super().keyPressEvent(event)
 
 class FileDropZone(QLabel):
     """Drag-and-drop zone for importing CSV/Excel files"""
@@ -326,6 +350,26 @@ from PyQt5.QtGui import QColor
 from PyQt5.QtSvg import QSvgRenderer
 
 class DerivativeMill(QMainWindow):
+    def eventFilter(self, obj, event):
+        """Application-level event filter - intercepts ALL events before any widget processing"""
+        from PyQt5.QtCore import QEvent, Qt
+
+        # Intercept ALL keyboard events at application level
+        if event.type() == QEvent.KeyPress:
+            focused_widget = QApplication.focusWidget()
+
+            # CRITICAL FIX: Forward ALL keyboard events (including Tab) to ci_input/wt_input
+            # The ForceEditableLineEdit.keyPressEvent will handle Tab specially with focusNextChild()
+            if hasattr(self, 'ci_input') and hasattr(self, 'wt_input'):
+                if focused_widget in [self.ci_input, self.wt_input]:
+                    # Only process once per event - when it comes from QWindow
+                    if obj.__class__.__name__ == 'QWindow':
+                        # Manually send the event to the focused widget (including Tab keys)
+                        QApplication.sendEvent(focused_widget, event)
+                        return True  # We handled it, block further propagation
+
+        return False  # Let ALL other events continue normally
+
     def setup_tab_by_index(self, index):
         """Initialize tab by index using existing setup methods."""
         tab_setup_methods = {
@@ -344,6 +388,12 @@ class DerivativeMill(QMainWindow):
         self.setWindowTitle(f"{APP_NAME} {VERSION}")
         # Compact default size - fully scalable with no minimum constraint
         self.setGeometry(50, 50, 1200, 700)
+
+        # Install application-level event filter to intercept ALL keyboard events
+        QApplication.instance().installEventFilter(self)
+
+        # Track processed events to prevent duplicates
+        self._processed_events = set()
         
         # Set window icon (use TEMP_RESOURCES_DIR for bundled resources)
         icon_path = TEMP_RESOURCES_DIR / "banner_bg.png"
@@ -439,10 +489,16 @@ class DerivativeMill(QMainWindow):
         layout.setMenuBar(menubar)
         self.settings_action = settings_action
 
-        # Top status bar - for warnings and urgent alerts only
-        self.status = QLabel("")
-        self.status.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.status)
+        # Top status bar removed per user request
+        # Create a dummy status object that ignores all calls
+        class DummyStatus:
+            def setText(self, text): pass
+            def setStyleSheet(self, style): pass
+            def setAlignment(self, align): pass
+        self.status = DummyStatus()
+
+        # Add spacing between header and tabs
+        layout.addSpacing(20)
 
         self.tabs = QTabWidget()
         self.tab_process = QWidget()
@@ -669,6 +725,10 @@ class DerivativeMill(QMainWindow):
         self.input_files_list = QListWidget()
         self.input_files_list.setSelectionMode(QListWidget.SingleSelection)
         self.input_files_list.itemClicked.connect(self.load_selected_input_file)
+        # Connect itemActivated for Enter key and double-click support
+        self.input_files_list.itemActivated.connect(self.load_selected_input_file)
+        # Allow focus for tab navigation
+        self.input_files_list.setFocusPolicy(Qt.StrongFocus)
         refresh_input_btn = QPushButton("Refresh")
         refresh_input_btn.setFixedHeight(25)
         refresh_input_btn.clicked.connect(self.refresh_input_files)
@@ -682,14 +742,11 @@ class DerivativeMill(QMainWindow):
         self.ci_input.setObjectName("ci_input")
         self.ci_input.setPlaceholderText("Enter CI value...")
         self.ci_input.textChanged.connect(self.update_invoice_check)
-        # Force visual state to always look enabled
-        self.ci_input.setStyleSheet("QLineEdit { background-color: white; color: black; }")
 
         self.wt_input = ForceEditableLineEdit("")
         self.wt_input.setObjectName("wt_input")
         self.wt_input.setPlaceholderText("Enter net weight...")
-        # Force visual state to always look enabled
-        self.wt_input.setStyleSheet("QLineEdit { background-color: white; color: black; }")
+        self.wt_input.textChanged.connect(self.update_invoice_check)
 
         values_layout.addRow("CI Value (USD):", self.ci_input)
         values_layout.addRow("Net Weight (kg):", self.wt_input)
@@ -700,9 +757,7 @@ class DerivativeMill(QMainWindow):
         self.mid_combo.currentTextChanged.connect(self.on_mid_changed)
         values_layout.addRow(self.mid_label, self.mid_combo)
 
-        # Set explicit tab order: ci_input -> wt_input -> mid_combo
-        self.setTabOrder(self.ci_input, self.wt_input)
-        self.setTabOrder(self.wt_input, self.mid_combo)
+        # Removed broken setTabOrder calls - they were causing Qt warnings and possibly blocking keyboard input
 
         # Invoice check label and Edit Values button
         self.invoice_check_label = QLabel("No file loaded")
@@ -765,8 +820,8 @@ class DerivativeMill(QMainWindow):
         self.process_btn.setStyleSheet(self.get_button_style("success"))
         self.process_btn.clicked.connect(self._process_or_export)
 
-        actions_layout.addWidget(self.clear_btn)
         actions_layout.addWidget(self.process_btn)
+        actions_layout.addWidget(self.clear_btn)
         actions_layout.addStretch()
         actions_group.setLayout(actions_layout)
         left_side.addWidget(actions_group)
@@ -847,15 +902,44 @@ class DerivativeMill(QMainWindow):
         
         # Add splitter to main container
         main_container.addWidget(splitter)
-        
+
         layout.addLayout(main_container, 1)
+
+        # Set up tab order for keyboard navigation through controls
+        # Order: Map Profile → Input Files → CI Value → Net Weight → MID → Process Invoice → Clear All
+        self.setTabOrder(self.profile_combo, self.input_files_list)
+        self.setTabOrder(self.input_files_list, self.ci_input)
+        self.setTabOrder(self.ci_input, self.wt_input)
+        self.setTabOrder(self.wt_input, self.mid_combo)
+        self.setTabOrder(self.mid_combo, self.process_btn)
+        self.setTabOrder(self.process_btn, self.clear_btn)
+        # Skip edit_values_btn (often hidden) and exports_list (NoFocus)
 
         self.tab_process.setLayout(layout)
         self._install_preview_shortcuts()
 
         # Ensure input fields are enabled on startup
         self._enable_input_fields()
+
+        # Create a timer to continuously force fields to be editable
+        # This works around whatever is locking the fields
+        from PyQt5.QtCore import QTimer
+        self._field_watchdog_timer = QTimer()
+        self._field_watchdog_timer.timeout.connect(self._force_fields_editable)
+        self._field_watchdog_timer.start(100)  # Check every 100ms
+
+        # Event filter already installed in __init__, don't install again
     
+    def _force_fields_editable(self):
+        """Watchdog timer callback that forces fields to stay editable"""
+        if hasattr(self, 'ci_input'):
+            # Bypass the override and force the parent class method
+            QLineEdit.setReadOnly(self.ci_input, False)
+            QLineEdit.setEnabled(self.ci_input, True)
+        if hasattr(self, 'wt_input'):
+            QLineEdit.setReadOnly(self.wt_input, False)
+            QLineEdit.setEnabled(self.wt_input, True)
+
     def _enable_input_fields(self):
         """Ensure CI and Weight input fields are enabled and ready for input"""
         # Block signals to prevent recursion during enable
@@ -1396,13 +1480,19 @@ class DerivativeMill(QMainWindow):
             self.invoice_check_label.setText("Could not read value column")
 
         logger.info(f"Loaded: {Path(path).name}")
+
+        # Force focus to ci_input and ensure keyboard input works
+        QApplication.processEvents()  # Process any pending events first
+        self.ci_input.setFocus(Qt.OtherFocusReason)
+        self.ci_input.activateWindow()
+        logger.info(f"Set focus to ci_input: hasFocus={self.ci_input.hasFocus()}")
         
     def update_invoice_check(self):
         # Guard against re-entrancy
         if getattr(self, '_updating_invoice_check', False):
             return
         self._updating_invoice_check = True
-        
+
         try:
             if not self.current_csv:
                 self.invoice_check_label.setText("No file loaded")
@@ -1451,10 +1541,12 @@ class DerivativeMill(QMainWindow):
             has_mid = bool(self.selected_mid)
             values_match = diff <= threshold
 
-            if self.current_csv and len(self.shipment_mapping) >= 2:
+            # Changed from >= 2 to >= 1 to allow profiles with minimal column mappings
+            if self.current_csv and len(self.shipment_mapping) >= 1:
                 if self.last_processed_df is None:
-                    # Haven't processed yet - require all fields AND invoice values must match
-                    if has_weight and has_ci_value and has_mid and values_match:
+                    # Haven't processed yet - require weight, CI value, AND invoice values must match
+                    # MID can be selected later, so not required for initial processing
+                    if has_weight and has_ci_value and values_match:
                         self.process_btn.setEnabled(True)
                         self.process_btn.setText("Process Invoice")
                     else:
@@ -4117,6 +4209,23 @@ class DerivativeMill(QMainWindow):
 
                 # Ensure input fields remain editable after loading
                 self._enable_input_fields()
+
+                # CRITICAL FIX: Modal dialogs fix the keyboard lock by triggering Qt event processing
+                # When "No Profile" dialog is dismissed, _enable_input_fields() is called
+                # and the modal event loop refresh fixes keyboard routing
+                # Simulate the same effect here by processing events + enabling fields
+                QApplication.processEvents()  # Process any pending Qt events
+                self._enable_input_fields()  # Re-enable fields (same as after dialog dismissal)
+
+                # Force widget style refresh (same as reselecting profile)
+                for widget in [self.ci_input, self.wt_input]:
+                    widget.style().unpolish(widget)
+                    widget.style().polish(widget)
+
+                # Move keyboard focus to CI input
+                self.input_files_list.clearFocus()  # Remove focus from list
+                self.ci_input.setFocus(Qt.OtherFocusReason)  # Give focus to CI input
+                logger.info(f"[FOCUS] ci_input.hasFocus()={self.ci_input.hasFocus()}")
         except Exception as e:
             logger.error(f"Load input file failed: {e}")
             self.status.setText(f"Error loading file: {e}")
