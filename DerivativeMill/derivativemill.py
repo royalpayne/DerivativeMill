@@ -3174,7 +3174,12 @@ class DerivativeMill(QMainWindow):
                 # Extract data from PDF
                 if OCR_AVAILABLE and is_scanned_pdf(str(pdf_file)):
                     logger.info(f"Scanned PDF detected: {pdf_file.name}")
-                    df, metadata = extract_from_scanned_invoice(str(pdf_file))
+                    try:
+                        df, metadata = extract_from_scanned_invoice(str(pdf_file))
+                    except Exception as ocr_error:
+                        # If OCR fails, fall back to digital PDF extraction
+                        logger.warning(f"OCR extraction failed for {pdf_file.name}, falling back to digital extraction: {ocr_error}")
+                        df = self.extract_pdf_table(str(pdf_file))
                 else:
                     logger.info(f"Digital PDF detected: {pdf_file.name}")
                     df = self.extract_pdf_table(str(pdf_file))
