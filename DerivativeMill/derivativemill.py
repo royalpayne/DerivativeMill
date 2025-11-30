@@ -3730,235 +3730,210 @@ class DerivativeMill(QMainWindow):
         # Guide content
         guide_html = f"""
         <style>
-            h2 {{ color: #0078D7; margin-top: 20px; }}
-            h3 {{ color: #006D77; margin-top: 15px; }}
-            .step {{ margin-left: 20px; margin-bottom: 10px; }}
-            .note {{ background-color: #fff3cd; padding: 10px; border-left: 4px solid #ffc107; margin: 10px 0; }}
-            .tip {{ background-color: #d1ecf1; padding: 10px; border-left: 4px solid #0c5460; margin: 10px 0; }}
-            .warning {{ background-color: #f8d7da; padding: 10px; border-left: 4px solid #dc3545; margin: 10px 0; }}
+            body {{ font-family: Segoe UI, Arial, sans-serif; }}
+            h1 {{ color: #0078D7; text-align: center; border-bottom: 3px solid #0078D7; padding-bottom: 15px; margin-bottom: 30px; }}
+            h2 {{ color: #0078D7; border-left: 5px solid #0078D7; padding-left: 15px; margin-top: 30px; margin-bottom: 15px; font-size: 18px; }}
+            h3 {{ color: #006D77; margin-top: 20px; margin-bottom: 10px; font-size: 16px; }}
+            h4 {{ color: #555; margin-top: 12px; margin-bottom: 8px; font-size: 14px; }}
+            p {{ line-height: 1.6; margin: 10px 0; }}
+
+            .section {{ margin: 20px 0; padding: 15px; background-color: #f8f9fa; border-radius: 5px; }}
+            .step {{ margin-left: 20px; margin-bottom: 12px; line-height: 1.7; }}
+            .workflow {{ background-color: #e7f5ff; padding: 15px; border-left: 5px solid #0078D7; margin: 15px 0; border-radius: 3px; }}
+            .note {{ background-color: #fff3cd; padding: 12px 15px; border-left: 5px solid #ffc107; margin: 15px 0; border-radius: 3px; }}
+            .tip {{ background-color: #d1ecf1; padding: 12px 15px; border-left: 5px solid #0c5460; margin: 15px 0; border-radius: 3px; }}
+            .warning {{ background-color: #f8d7da; padding: 12px 15px; border-left: 5px solid #dc3545; margin: 15px 0; border-radius: 3px; }}
+            .key-field {{ background-color: #e3f2fd; padding: 8px 12px; border-radius: 3px; display: inline-block; margin: 3px 0; font-weight: 500; }}
+            .button-text {{ background-color: #f0f0f0; padding: 2px 6px; border-radius: 3px; font-family: monospace; }}
+
+            ul {{ margin: 10px 0 10px 25px; line-height: 1.8; }}
+            li {{ margin: 5px 0; }}
+
+            .workflow-step {{ margin: 12px 0; padding-left: 25px; }}
+            .workflow-step::before {{ content: "→ "; color: #0078D7; font-weight: bold; margin-left: -20px; margin-right: 8px; }}
         </style>
         
-        <h2>🚀 Getting Started</h2>
-        <p>{APP_NAME} is a customs documentation processing system designed to streamline invoice processing, 
-        parts management, and Section 232 tariff compliance with a two-stage review workflow.</p>
-        
-        <h2>⚙️ Appearance Settings</h2>
-        <div class="step">
-            Click the <b>⚙ Settings</b> button (gear icon) in the top-right corner to customize the application appearance:<br>
-            <ul>
-                <li><b>System Default</b> - Uses your Windows theme settings</li>
-                <li><b>Fusion (Light)</b> - Clean, cross-platform light theme</li>
-                <li><b>Windows</b> - Native Windows styling</li>
-                <li><b>Fusion (Dark)</b> - Windows 11 inspired dark theme with blue accents</li>
-                <li><b>Ocean</b> - Deep blue oceanic theme with teal highlights</li>
-                <li><b>Teal Professional</b> - Modern light theme with soft teal accents</li>
-            </ul>
-            Your theme preference is automatically saved.
-        </div>
-        
-        <h2>📋 First-Time Setup</h2>
-        <p>Before processing invoices, you need to configure your system:</p>
-        
-        <h3>1. Import Parts Database (Tab: Parts Import)</h3>
-        <div class="step">
-            <b>Step 1:</b> Click <b>"Load CSV File"</b> button<br>
-            <b>Step 2:</b> Select your parts master CSV file<br>
-            <b>Step 3:</b> Drag column names from the left to matching fields on the right:
-            <ul>
-                <li><b>Part Number</b> (Required) - Your part identifier</li>
-                <li><b>HTS Code</b> (Required) - Harmonized Tariff Schedule code</li>
-                <li><b>Country of Origin</b> (Required) - 2-letter country code</li>
-                <li><b>MID (Manufacturer ID)</b> (Required) - Manufacturer identifier</li>
-                <li><b>Description</b> (Optional) - Part description</li>
-                <li><b>Sec 232 Content Ratio</b> (Optional) - Section 232 tariff content percentage (Steel, Aluminum, Wood, Copper)</li>
-            </ul>
-            <p><b>Step 4:</b> Click <b>"IMPORT NOW"</b> to load parts into database</p>
-        </div>
-        <div class="note">
-            <b>Note:</b> Column mappings are automatically saved for future imports from the same source.
-        </div>
-        
-        <h3>2. Import Section 232 Tariff Codes (Tab: Customs Config)</h3>
-        <div class="step">
-            <b>Option A - Excel Import:</b><br>
-            • Click <b>"Import Section 232 Tariffs (CSV/Excel)"</b><br>
-            • Select the official CBP Excel file<br>
-            • System imports Section 232 tariff codes automatically (Steel, Aluminum, Wood, Copper)<br><br>
-            <b>Option B - CSV Import:</b><br>
-            • Click <b>"Import from CSV"</b><br>
-            • Map the HTS Code column<br>
-            • Map the Material column (or set default material)<br>
-            • Choose import mode (add/update or replace all)<br>
-            • Click <b>"Import"</b><br>
-        </div>
-        <div class="tip">
-            <b>Tip:</b> Use the filter box to search for specific HTS codes or materials.
-        </div>
-        
-        <h3>3. Create Invoice Mapping Profiles (Tab: Invoice Mapping Profiles)</h3>
-        <div class="step">
-            <b>Step 1:</b> Click <b>"Load CSV to Map"</b><br>
-            <b>Step 2:</b> Select a sample invoice CSV from your supplier<br>
-            <b>Step 3:</b> Drag CSV columns to required fields:<br>
-            &nbsp;&nbsp;&nbsp;&nbsp;• <b>Part Number</b> - Maps to your parts database<br>
-            &nbsp;&nbsp;&nbsp;&nbsp;• <b>Value USD</b> - Invoice line item value<br>
-            <p><b>Step 4:</b> Click <b>"Save Current Mapping As..."</b><br>
-            <b>Step 5:</b> Enter a profile name (e.g., "Supplier ABC")</p><br>
-        </div>
-        <div class="note">
-            <b>Note:</b> Create one profile per supplier for quick switching between different invoice formats.
-        </div>
-        
-        <h2>📊 Processing Invoices (Tab: Process Shipment)</h2>
-        
-        <h3>NEW: Two-Stage Processing Workflow</h3>
-        <div class="note">
-            <b>Important Change:</b> Invoice processing now uses a two-stage workflow for better data verification.
-        </div>
-        
-        <h3>Step-by-Step Workflow:</h3>
-        <div class="step">
-            <b>1. Select Map Profile</b><br>
-            • Choose the mapping profile that matches your invoice format<br><br>
-            
-            <b>2. Load Invoice File</b><br>
-            • Click <b>"Browse"</b> button to select your invoice CSV file<br>
-            • The preview table remains empty until you process the invoice<br>
-            • File path is displayed in the selection field<br><br>
-            
-            <b>3. Enter Required Information</b><br>
-            • <b>Total Weight:</b> Enter the total shipment weight<br>
-            • <b>CI Total:</b> Enter the Commercial Invoice total from your paperwork<br>
-            • <b>MID:</b> Select the Manufacturer ID from the dropdown<br><br>
-            
-            <b>4. Process Invoice (First Stage)</b><br>
-            • Click <b>"Process Invoice"</b> button (only enabled when all fields are filled)<br>
-            • System loads the raw CSV data (2 columns: Part Number and Value)<br>
-            • Button text changes to <b>"Apply Derivatives"</b><br>
-            • Status shows: <span style="color: orange;">⚠ Review data and click Apply Derivatives to process</span><br><br>
-            
-            <div class="warning">
-                <b>Review Stage:</b> This is your opportunity to verify the raw data before processing. 
-                Check for missing parts, incorrect values, or data issues.
+        <h2>🚀 Welcome to {APP_NAME}</h2>
+        <p>A professional customs documentation processing system for streamlining invoice processing, parts management, and Section 232 tariff compliance.</p>
+
+        <h2>📋 Initial Setup (One-Time Configuration)</h2>
+        <p>Complete these steps before your first invoice processing:</p>
+
+        <h3>Step 1: Import Parts Database</h3>
+        <div class="workflow">
+            <b>Location:</b> <span class="button-text">Parts Import</span> tab<br>
+            <div class="workflow-step"><span class="button-text">Load CSV File</span> - Select your parts master CSV</div>
+            <div class="workflow-step">Drag column headers to match required fields:
+                <ul style="margin-top: 8px;">
+                    <li><span class="key-field">Part Number</span> (Required)</li>
+                    <li><span class="key-field">HTS Code</span> (Required)</li>
+                    <li><span class="key-field">Country of Origin</span> (Required)</li>
+                    <li><span class="key-field">MID</span> (Required)</li>
+                    <li><span class="key-field">Description</span> (Optional)</li>
+                    <li><span class="key-field">Sec 232 Content Ratio</span> (Optional)</li>
+                </ul>
             </div>
-            
-            <b>5. Apply Derivatives (Second Stage)</b><br>
-            • Review the raw data in the 2-column table<br>
-            • Click <b>"Apply Derivatives"</b> button<br>
-            • System processes all parts and expands to 13 columns with full data<br>
-            • Section 232 items are highlighted in <b>bold</b><br>
-            • Button text changes to <b>"Export Worksheet"</b><br>
-            • Status shows total and match information<br><br>
-            
-            <b>6. Review & Edit (Optional)</b><br>
-            • Check all values in the preview table<br>
-            • Edit any cell by clicking on it<br>
-            • Use <b>"Add Row"</b> to add missing items<br>
-            • Use <b>"Delete Row"</b> to remove unwanted items<br>
-            • Use <b>"Copy Column"</b> to copy data to clipboard<br><br>
-            
-            <b>7. Verify Totals Match</b><br>
-            • Status bar shows green when preview total matches CI total<br>
-            • If values don't match, review and adjust values in the table<br><br>
-            
-            <b>8. Export Worksheet</b><br>
-            • Click <b>"Export Worksheet"</b> when totals match and data is verified<br>
-            • File saves to Output folder as Upload_Sheet_YYYYMMDD_HHMM.xlsx<br>
-            • Original CSV moves to Processed folder<br>
-            • Exported file appears in <b>"Exported Files"</b> list<br>
+            <div class="workflow-step"><span class="button-text">IMPORT NOW</span> - Load parts into database</div>
         </div>
-        
+        <div class="note">
+            <b>💡 Note:</b> Column mappings are automatically saved and reused for future imports from the same source.
+        </div>
+
+        <h3>Step 2: Import Section 232 Tariff Codes</h3>
+        <div class="workflow">
+            <b>Location:</b> <span class="button-text">Customs Config</span> tab<br>
+            <h4>Option A: Official CBP Excel File</h4>
+            <div class="workflow-step">Click <span class="button-text">Import Section 232 Tariffs</span></div>
+            <div class="workflow-step">Select the official CBP Excel file - System auto-imports for Steel, Aluminum, Wood, Copper</div>
+
+            <h4 style="margin-top: 15px;">Option B: Custom CSV File</h4>
+            <div class="workflow-step">Click <span class="button-text">Import from CSV</span></div>
+            <div class="workflow-step">Map HTS Code and Material columns</div>
+            <div class="workflow-step">Choose import mode: Add/Update or Replace All</div>
+            <div class="workflow-step">Click <span class="button-text">Import</span></div>
+        </div>
         <div class="tip">
-            <b>Tip:</b> Double-click any file in the "Exported Files" list to open it in Excel.
+            <b>💡 Tip:</b> Use the filter box to quickly search for specific HTS codes or materials.
         </div>
-        
-        <h2>🔧 Managing Parts Database (Tab: Parts View)</h2>
-        <div class="step">
-            • View all parts in the searchable table<br>
-            • Use <b>"Quick Search"</b> to filter by any field<br>
-            • Use <b>"SQL Query Builder"</b> for advanced searches<br>
-            • Click any cell to edit parts data<br>
-            • Use <b>"Add Row"</b> to create new parts<br>
-            • Use <b>"Delete Selected"</b> to remove parts<br>
-            • Click <b>"Save Changes"</b> to update the database<br>
+
+        <h3>Step 3: Create Invoice Mapping Profiles</h3>
+        <div class="workflow">
+            <b>Location:</b> <span class="button-text">Invoice Mapping Profiles</span> tab<br>
+            <div class="workflow-step"><span class="button-text">Load CSV to Map</span> - Select a sample invoice CSV from your supplier</div>
+            <div class="workflow-step">Drag CSV columns to required fields:
+                <ul style="margin-top: 8px;">
+                    <li><span class="key-field">Part Number</span> - Maps to your parts database</li>
+                    <li><span class="key-field">Value USD</span> - Invoice line item value</li>
+                </ul>
+            </div>
+            <div class="workflow-step"><span class="button-text">Save Current Mapping As...</span> - Save with supplier name</div>
         </div>
-        
-        <h2>📝 Understanding Section 232</h2>
-        <div class="step">
-            <b>What is Section 232?</b><br>
-            Section 232 refers to tariffs on materials subject to national security import restrictions (Steel, Aluminum, Wood, Copper). {APP_NAME} automatically:
+        <div class="note">
+            <b>💡 Note:</b> Create one profile per supplier for quick format switching.
+        </div>
+
+        <h2>📊 Processing Invoices (Main Workflow)</h2>
+        <p><b>Location:</b> <span class="button-text">Process Shipment</span> tab</p>
+        <p>The application uses a <b>two-stage verification workflow</b> to prevent data entry errors.</p>
+
+        <h3>Stage 1: Data Preparation</h3>
+        <div class="workflow">
+            <div class="workflow-step"><b>Select Mapping Profile</b> - Choose the profile matching your supplier's invoice format</div>
+            <div class="workflow-step"><b>Load Invoice File</b> - Browse and select your CSV invoice file</div>
+            <div class="workflow-step"><b>Enter Required Information:</b>
+                <ul style="margin-top: 8px;">
+                    <li><span class="key-field">Total Weight</span> - Shipment weight in kg</li>
+                    <li><span class="key-field">CI Total</span> - Commercial Invoice total value</li>
+                    <li><span class="key-field">MID</span> - Select Manufacturer ID</li>
+                </ul>
+            </div>
+            <div class="workflow-step"><span class="button-text">Process Invoice</span> - Loads raw CSV data for review (2 columns only)</div>
+        </div>
+        <div class="warning">
+            <b>⚠️ Review Stage:</b> Verify the raw data before proceeding. Check for missing parts, incorrect values, or duplicates.
+        </div>
+
+        <h3>Stage 2: Processing & Export</h3>
+        <div class="workflow">
+            <div class="workflow-step"><span class="button-text">Apply Derivatives</span> - Expand to full 13-column data with Section 232 processing</div>
+            <div class="workflow-step"><b>Review & Edit (Optional):</b>
+                <ul style="margin-top: 8px;">
+                    <li>Edit any cell by clicking on it</li>
+                    <li><span class="button-text">Add Row</span> - Add missing items</li>
+                    <li><span class="button-text">Delete Row</span> - Remove unwanted items</li>
+                    <li><span class="button-text">Copy Column</span> - Copy data to clipboard</li>
+                </ul>
+            </div>
+            <div class="workflow-step"><b>Verify Totals Match</b> - Status bar shows green when preview total equals CI Total</div>
+            <div class="workflow-step"><span class="button-text">Export Worksheet</span> - Generates Excel file (Output/Upload_Sheet_YYYYMMDD_HHMM.xlsx)</div>
+        </div>
+        <div class="tip">
+            <b>💡 Tip:</b> Double-click exported files in the list to open directly in Excel.
+        </div>
+
+        <h2>🔧 Managing Parts Database</h2>
+        <p><b>Location:</b> <span class="button-text">Parts View</span> tab</p>
+        <div class="section">
+            <div class="workflow-step"><b>Quick Search</b> - Filter all fields in real-time</div>
+            <div class="workflow-step"><b>SQL Query Builder</b> - Advanced filtering for complex searches</div>
+            <div class="workflow-step"><b>Edit Data</b> - Click any cell to modify part information</div>
+            <div class="workflow-step"><b>Bulk Operations:</b>
+                <ul style="margin-top: 8px;">
+                    <li><span class="button-text">Add Row</span> - Create new parts</li>
+                    <li><span class="button-text">Delete Selected</span> - Remove parts</li>
+                    <li><span class="button-text">Save Changes</span> - Update database</li>
+                </ul>
+            </div>
+        </div>
+
+        <h2>📝 Section 232 Compliance</h2>
+        <p><span class="key-field">Section 232</span> refers to national security tariffs on protected materials (Steel, Aluminum, Wood, Copper).</p>
+        <p>{APP_NAME} automatically:</p>
+        <ul>
+            <li>Identifies Section 232-subject items using HTS codes</li>
+            <li>Marks them with <b>bold formatting</b> in preview tables</li>
+            <li>Calculates percentage breakdowns in exports</li>
+            <li>Highlights non-232 items in <b>red font</b></li>
+        </ul>
+
+        <h2>❓ Troubleshooting</h2>
+        <div class="section">
+            <h4>"Process Invoice" button is disabled</h4>
+            <ul style="margin-top: 8px;">
+                <li>✓ Select a Mapping Profile</li>
+                <li>✓ Load an invoice file (use Browse button)</li>
+                <li>✓ Enter Total Weight</li>
+                <li>✓ Enter CI Total</li>
+                <li>✓ Select a MID</li>
+            </ul>
+
+            <h4>Totals don't match between preview and CI Total</h4>
+            <ul style="margin-top: 8px;">
+                <li>Check for missing or duplicate rows</li>
+                <li>Verify all line items are in the CSV file</li>
+                <li>Edit values directly in the preview table</li>
+                <li>Recalculate to confirm match</li>
+            </ul>
+
+            <h4>Part not found in database</h4>
+            <ul style="margin-top: 8px;">
+                <li>Import the part via <span class="button-text">Parts Import</span> tab</li>
+                <li>Or add manually in <span class="button-text">Parts View</span> tab with required fields</li>
+                <li>Required: Part Number, HTS Code, Country of Origin, MID</li>
+            </ul>
+
+            <h4>Need more details</h4>
+            <p>Check the <span class="button-text">Log View</span> tab for detailed operation logs and error messages.</p>
+        </div>
+
+        <h2>⚡ Keyboard Shortcuts & Features</h2>
+        <div class="section">
             <ul>
-                <li>Identifies items subject to Section 232 tariffs</li>
-                <li>Marks them with <b>bold formatting</b> in the preview</li>
-                <li>Adds "232 Status" column to exported worksheets</li>
-                <li>Highlights non-232 content items in <b>red font</b> in exports</li>
+                <li><b>Ctrl+B</b> - Toggle bold formatting on selected cells</li>
+                <li><b>Click column headers</b> - Select entire column for copying</li>
+                <li><b>Auto-refresh</b> - Active only on Process Shipment tab (optimized)</li>
+                <li><b>File management</b> - Processed files auto-move to Processed folders</li>
+                <li><b>Auto-archive</b> - Exports older than 3 days move to Output/Processed</li>
             </ul>
         </div>
-        
-        <h2>❗ Troubleshooting</h2>
-        <div class="step">
-            <b>Process Invoice button disabled?</b><br>
-            • Make sure you selected a Map Profile<br>
-            • Verify a file is loaded (using Browse button)<br>
-            • Check that Total Weight is entered<br>
-            • Check that CI Total is entered<br>
-            • Ensure MID is selected<br><br>
-            
-            <b>Two-stage workflow confusion?</b><br>
-            • First click shows raw CSV data (2 columns) for verification<br>
-            • Second click applies derivatives and shows full 13-column data<br>
-            • Orange warning status means you need to click "Apply Derivatives"<br>
-            • This prevents accidental processing of incorrect data<br><br>
-            
-            <b>Totals don't match?</b><br>
-            • Review individual line values in preview table<br>
-            • Check for missing or duplicate rows<br>
-            • Verify CSV file contains all invoice items<br>
-            • Edit values directly in the preview table<br><br>
-            
-            <b>Part not found?</b><br>
-            • Add missing parts via Parts Import tab<br>
-            • Or add manually in Parts View tab<br>
-            • Include required fields: Part Number, HTS Code, Country, MID<br><br>
-            
-            <b>Check the Log View tab for detailed error messages and system activity.</b>
+
+        <h2>🎨 Customization</h2>
+        <div class="section">
+            <p><b>Themes:</b> Click <span class="button-text">⚙ Settings</span> to choose your preferred appearance:</p>
+            <ul>
+                <li><b>System Default</b> - Windows theme</li>
+                <li><b>Fusion (Light)</b> - Clean professional light</li>
+                <li><b>Windows</b> - Native Windows appearance</li>
+                <li><b>Fusion (Dark)</b> - Modern dark with blue accents</li>
+                <li><b>Ocean</b> - Deep blue with teal highlights</li>
+                <li><b>Teal Professional</b> - Light with soft teal accents</li>
+            </ul>
+            <p style="margin-top: 10px;"><b>Folders:</b> Configure input/output directories in Settings</p>
         </div>
-        
-        <h2>💡 Quick Tips</h2>
-        <div class="tip">
-            • <b>Ctrl+B</b> in preview table toggles bold formatting on selected cells<br>
-            • Click column headers to select entire column for copying<br>
-            • Use profile names that match your supplier names<br>
-            • Keep your parts database updated for accurate processing<br>
-            • Review exported files before submitting to customs<br>
-            • The two-stage workflow helps catch data errors early<br>
-            • Auto-refresh only runs on the Process Shipment tab (optimized performance)<br>
-            • Choose your preferred theme from Settings for comfortable viewing<br>
-        </div>
-        
-        <h2>🎨 Theme Options</h2>
-        <div class="step">
-            Click the <b>⚙ Settings</b> gear icon to choose from 6 themes:<br>
-            • <b>System Default:</b> Matches your Windows settings<br>
-            • <b>Fusion (Light):</b> Clean, professional light theme<br>
-            • <b>Windows:</b> Native Windows appearance<br>
-            • <b>Fusion (Dark):</b> Modern dark theme with Windows 11 blue accents<br>
-            • <b>Ocean:</b> Deep blue theme with calming teal highlights<br>
-            • <b>Teal Professional:</b> Light theme with soft teal colors (great for long sessions)<br>
-        </div>
-        
-        <h2>⚡ Performance Optimizations</h2>
-        <div class="step">
-            Recent improvements for better responsiveness:<br>
-            • Auto-refresh only active on Process Shipment tab<br>
-            • Smart directory checking (only refreshes if files change)<br>
-            • Table sorting disabled for faster data loading<br>
-            • 10-second refresh interval (reduced overhead)<br>
-        </div>
-        
+
         <h2>📞 Support</h2>
-        <p>For additional help, check the Log View tab for detailed operation logs and error messages.</p>
-        <p><b>Version:</b> {APP_NAME} {VERSION}</p>
+        <p><b>For detailed logs and troubleshooting:</b> Check the <span class="button-text">Log View</span> tab</p>
+        <p><b>Version:</b> {APP_NAME} {VERSION} | <b>Status:</b> Production Ready</p>
         """
         
         guide_text = QLabel(guide_html)
