@@ -1007,6 +1007,9 @@ class DerivativeMill(QMainWindow):
         self.setTabOrder(self.clear_btn, self.exports_list)
         self.setTabOrder(self.exports_list, self.refresh_exports_btn)
 
+        # Populate supplier combo for batch processing
+        self.refresh_supplier_combo()
+
         self.tab_process.setLayout(layout)
         self._install_preview_shortcuts()
 
