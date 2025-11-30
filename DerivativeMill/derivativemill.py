@@ -547,6 +547,7 @@ class DerivativeMill(QMainWindow):
         self.tab_log = QWidget()
         self.tab_config = QWidget()
         self.tab_actions = QWidget()
+        self.tab_ocr_training = QWidget()
         self.tab_guide = QWidget()
         self.tabs.addTab(self.tab_process, "Process Shipment")
         self.tabs.addTab(self.tab_shipment_map, "Invoice Mapping Profiles")
@@ -555,6 +556,7 @@ class DerivativeMill(QMainWindow):
         self.tabs.addTab(self.tab_log, "Log View")
         self.tabs.addTab(self.tab_config, "Customs Config")
         self.tabs.addTab(self.tab_actions, "Section 232 Actions")
+        self.tabs.addTab(self.tab_ocr_training, "OCR Training")
         self.tabs.addTab(self.tab_guide, "User Guide")
         
         # Only tabs (no settings icon here)
@@ -676,7 +678,8 @@ class DerivativeMill(QMainWindow):
             4: self.setup_log_tab,
             5: self.setup_config_tab,
             6: self.setup_actions_tab,
-            7: self.setup_guide_tab
+            7: self.setup_ocr_training_tab,
+            8: self.setup_guide_tab
         }
         
         # Initialize the tab
@@ -4498,6 +4501,341 @@ class DerivativeMill(QMainWindow):
 
         # Refresh display
         self.filter_actions_table()
+
+    def setup_ocr_training_tab(self):
+        """OCR Training and Template Customization Tab"""
+        layout = QVBoxLayout(self.tab_ocr_training)
+
+        # Title
+        title = QLabel("<h2>OCR Training & Template Customization</h2>")
+        title.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title)
+
+        # Info box
+        info_box = QGroupBox("OCR Extraction Patterns")
+        info_layout = QVBoxLayout()
+        info_text = QLabel(
+            "Train the OCR system to recognize invoice data more accurately. "
+            "Create supplier-specific templates with custom extraction patterns (regex) "
+            "for Part Numbers, Values, and other fields."
+        )
+        info_text.setWordWrap(True)
+        info_layout.addWidget(info_text)
+        info_box.setLayout(info_layout)
+        layout.addWidget(info_box)
+
+        # Create splitter for two-column layout
+        splitter = QSplitter(Qt.Horizontal)
+
+        # LEFT COLUMN: Template Selection and Management
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+
+        # Supplier selection
+        supplier_group = QGroupBox("Supplier Templates")
+        supplier_layout = QVBoxLayout()
+
+        supplier_select_layout = QHBoxLayout()
+        supplier_select_layout.addWidget(QLabel("Supplier:"))
+        self.ocr_supplier_combo = QComboBox()
+        self.ocr_supplier_combo.addItem("(Create New)")
+        self.ocr_supplier_combo.currentTextChanged.connect(self.on_ocr_supplier_selected)
+        supplier_select_layout.addWidget(self.ocr_supplier_combo)
+        supplier_layout.addLayout(supplier_select_layout)
+
+        # Supplier name input for new templates
+        supplier_name_layout = QHBoxLayout()
+        supplier_name_layout.addWidget(QLabel("New Name:"))
+        self.ocr_new_supplier_input = QLineEdit()
+        self.ocr_new_supplier_input.setPlaceholderText("e.g., ACME_CORP")
+        supplier_name_layout.addWidget(self.ocr_new_supplier_input)
+        supplier_layout.addLayout(supplier_name_layout)
+
+        # Template buttons
+        template_btn_layout = QHBoxLayout()
+        btn_load = QPushButton("Load")
+        btn_load.setStyleSheet(self.get_button_style("info"))
+        btn_load.clicked.connect(self.load_ocr_template)
+        template_btn_layout.addWidget(btn_load)
+
+        btn_save = QPushButton("Save")
+        btn_save.setStyleSheet(self.get_button_style("success"))
+        btn_save.clicked.connect(self.save_ocr_template)
+        template_btn_layout.addWidget(btn_save)
+
+        btn_delete = QPushButton("Delete")
+        btn_delete.setStyleSheet(self.get_button_style("danger"))
+        btn_delete.clicked.connect(self.delete_ocr_template)
+        template_btn_layout.addWidget(btn_delete)
+
+        supplier_layout.addLayout(template_btn_layout)
+        supplier_group.setLayout(supplier_layout)
+        left_layout.addWidget(supplier_group)
+
+        # Test PDF section
+        test_group = QGroupBox("Test Extraction")
+        test_layout = QVBoxLayout()
+
+        test_btn = QPushButton("Select PDF to Test")
+        test_btn.setStyleSheet(self.get_button_style("info"))
+        test_btn.clicked.connect(self.select_pdf_for_ocr_test)
+        test_layout.addWidget(test_btn)
+
+        self.ocr_test_file_label = QLabel("No file selected")
+        self.ocr_test_file_label.setWordWrap(True)
+        self.ocr_test_file_label.setStyleSheet("font-size: 8pt; color: #666;")
+        test_layout.addWidget(self.ocr_test_file_label)
+
+        test_extract_btn = QPushButton("Run OCR Test")
+        test_extract_btn.setStyleSheet(self.get_button_style("success"))
+        test_extract_btn.clicked.connect(self.run_ocr_test)
+        test_layout.addWidget(test_extract_btn)
+
+        test_group.setLayout(test_layout)
+        left_layout.addWidget(test_group)
+
+        left_layout.addStretch()
+        splitter.addWidget(left_widget)
+
+        # RIGHT COLUMN: Pattern Editor
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+
+        patterns_group = QGroupBox("Extraction Patterns (Regex)")
+        patterns_layout = QVBoxLayout()
+
+        # Pattern fields
+        self.ocr_patterns = {}
+        pattern_names = {
+            'part_number_header': 'Part Number Header Pattern',
+            'part_number_value': 'Part Number Value Pattern',
+            'value_header': 'Value/Price Header Pattern',
+            'value_pattern': 'Value/Price Pattern',
+            'quantity_pattern': 'Quantity Pattern',
+            'description': 'Description Pattern'
+        }
+
+        for key, label in pattern_names.items():
+            pattern_layout = QVBoxLayout()
+            pattern_layout.addWidget(QLabel(label))
+            pattern_edit = QPlainTextEdit()
+            pattern_edit.setFixedHeight(50)
+            self.ocr_patterns[key] = pattern_edit
+            pattern_layout.addWidget(pattern_edit)
+            patterns_layout.addLayout(pattern_layout)
+
+        patterns_group.setLayout(patterns_layout)
+        right_layout.addWidget(patterns_group)
+
+        # Results display
+        results_group = QGroupBox("Extraction Results")
+        results_layout = QVBoxLayout()
+
+        self.ocr_results_text = QPlainTextEdit()
+        self.ocr_results_text.setReadOnly(True)
+        self.ocr_results_text.setFixedHeight(150)
+        results_layout.addWidget(self.ocr_results_text)
+
+        results_group.setLayout(results_layout)
+        right_layout.addWidget(results_group)
+
+        splitter.addWidget(right_widget)
+        splitter.setSizes([300, 500])
+
+        layout.addWidget(splitter)
+        self.tab_ocr_training.setLayout(layout)
+
+        # Load available templates
+        self.refresh_ocr_templates()
+
+    def refresh_ocr_templates(self):
+        """Load and display available OCR templates"""
+        try:
+            from DerivativeMill.ocr.field_detector import get_template_manager
+            manager = get_template_manager()
+            templates = manager.list_templates()
+
+            self.ocr_supplier_combo.blockSignals(True)
+            self.ocr_supplier_combo.clear()
+            self.ocr_supplier_combo.addItem("(Create New)")
+
+            for template_name in templates:
+                self.ocr_supplier_combo.addItem(template_name)
+
+            self.ocr_supplier_combo.blockSignals(False)
+
+        except Exception as e:
+            logger.error(f"Error loading templates: {e}")
+
+    def on_ocr_supplier_selected(self, supplier_name):
+        """Handle supplier selection in OCR tab"""
+        if supplier_name == "(Create New)":
+            self.ocr_new_supplier_input.setEnabled(True)
+            self.ocr_new_supplier_input.setText("")
+            # Clear pattern fields
+            for pattern_edit in self.ocr_patterns.values():
+                pattern_edit.setPlainText("")
+        else:
+            self.ocr_new_supplier_input.setEnabled(False)
+            self.load_ocr_template()
+
+    def load_ocr_template(self):
+        """Load selected OCR template"""
+        try:
+            from DerivativeMill.ocr.field_detector import get_template_manager
+            supplier_name = self.ocr_supplier_combo.currentText()
+
+            if supplier_name == "(Create New)":
+                return
+
+            manager = get_template_manager()
+            template = manager.get_template(supplier_name)
+
+            # Load patterns into UI
+            for key, pattern_edit in self.ocr_patterns.items():
+                pattern = template.patterns.get(key, "")
+                pattern_edit.setPlainText(pattern)
+
+            logger.info(f"Loaded OCR template: {supplier_name}")
+
+        except Exception as e:
+            logger.error(f"Error loading template: {e}")
+            QMessageBox.warning(self, "Error", f"Failed to load template: {str(e)}")
+
+    def save_ocr_template(self):
+        """Save OCR template"""
+        try:
+            from DerivativeMill.ocr.field_detector import SupplierTemplate, get_template_manager
+
+            supplier_name = self.ocr_supplier_combo.currentText()
+
+            if supplier_name == "(Create New)":
+                supplier_name = self.ocr_new_supplier_input.text().strip()
+                if not supplier_name:
+                    QMessageBox.warning(self, "Invalid Name", "Please enter a supplier name")
+                    return
+
+            # Collect patterns from UI
+            patterns = {}
+            for key, pattern_edit in self.ocr_patterns.items():
+                patterns[key] = pattern_edit.toPlainText().strip()
+
+            # Create and save template
+            template = SupplierTemplate(supplier_name, patterns=patterns)
+            manager = get_template_manager()
+            manager.save_template(template)
+
+            logger.success(f"Saved OCR template: {supplier_name}")
+            QMessageBox.information(self, "Success", f"Template '{supplier_name}' saved successfully")
+
+            # Refresh template list
+            self.refresh_ocr_templates()
+            self.ocr_supplier_combo.setCurrentText(supplier_name)
+
+        except Exception as e:
+            logger.error(f"Error saving template: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to save template: {str(e)}")
+
+    def delete_ocr_template(self):
+        """Delete OCR template"""
+        try:
+            supplier_name = self.ocr_supplier_combo.currentText()
+
+            if supplier_name == "(Create New)":
+                QMessageBox.warning(self, "No Template", "Please select a template to delete")
+                return
+
+            reply = QMessageBox.question(
+                self, "Confirm Delete",
+                f"Delete template '{supplier_name}'?\n\nThis action cannot be undone.",
+                QMessageBox.Yes | QMessageBox.No
+            )
+
+            if reply == QMessageBox.Yes:
+                from pathlib import Path
+                from DerivativeMill.ocr.field_detector import get_template_manager
+                manager = get_template_manager()
+                template_file = manager.templates_dir / f"{supplier_name}.json"
+
+                if template_file.exists():
+                    template_file.unlink()
+                    del manager.templates[supplier_name]
+
+                logger.success(f"Deleted OCR template: {supplier_name}")
+                QMessageBox.information(self, "Success", f"Template '{supplier_name}' deleted")
+
+                # Refresh template list
+                self.refresh_ocr_templates()
+
+        except Exception as e:
+            logger.error(f"Error deleting template: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to delete template: {str(e)}")
+
+    def select_pdf_for_ocr_test(self):
+        """Select a PDF file to test OCR extraction"""
+        pdf_path, _ = QFileDialog.getOpenFileName(
+            self, "Select PDF for OCR Test", str(INPUT_DIR),
+            "PDF Files (*.pdf);;All Files (*.*)"
+        )
+
+        if pdf_path:
+            self.ocr_test_pdf = pdf_path
+            pdf_name = Path(pdf_path).name
+            self.ocr_test_file_label.setText(f"Selected: {pdf_name}")
+
+    def run_ocr_test(self):
+        """Test OCR extraction with current patterns"""
+        if not hasattr(self, 'ocr_test_pdf'):
+            QMessageBox.warning(self, "No File", "Please select a PDF first")
+            return
+
+        try:
+            from DerivativeMill.ocr.ocr_extract import extract_from_scanned_invoice
+            from DerivativeMill.ocr.field_detector import SupplierTemplate
+
+            # Get supplier name and patterns
+            supplier_name = self.ocr_supplier_combo.currentText()
+            if supplier_name == "(Create New)":
+                supplier_name = self.ocr_new_supplier_input.text().strip() or "test"
+
+            # Collect current patterns
+            patterns = {}
+            for key, pattern_edit in self.ocr_patterns.items():
+                patterns[key] = pattern_edit.toPlainText().strip()
+
+            # Create temporary template with current patterns
+            template = SupplierTemplate(supplier_name, patterns=patterns)
+
+            # Run OCR
+            try:
+                df, metadata = extract_from_scanned_invoice(self.ocr_test_pdf, supplier_name)
+                raw_text = metadata.get('raw_text', '')
+            except Exception:
+                # Fallback to pdfplumber extraction
+                df = self.extract_pdf_table(self.ocr_test_pdf)
+                raw_text = "Digital PDF - using pdfplumber"
+
+            # Extract fields using the template
+            extracted = template.extract(raw_text if raw_text != "Digital PDF - using pdfplumber" else str(df))
+
+            # Display results
+            results = f"=== OCR Test Results ===\n\n"
+            results += f"PDF: {Path(self.ocr_test_pdf).name}\n"
+            results += f"Supplier: {supplier_name}\n"
+            results += f"Rows Extracted: {len(extracted)}\n\n"
+            results += "=== Extracted Data ===\n"
+
+            for idx, item in enumerate(extracted, 1):
+                results += f"\n{idx}. Part#: {item.get('part_number', 'N/A')}\n"
+                results += f"   Value: {item.get('value', 'N/A')}\n"
+                results += f"   Raw: {item.get('raw_line', '')}\n"
+
+            self.ocr_results_text.setPlainText(results)
+            logger.info(f"OCR test completed: {len(extracted)} items extracted")
+
+        except Exception as e:
+            logger.error(f"OCR test failed: {e}")
+            self.ocr_results_text.setPlainText(f"Error: {str(e)}")
 
     def setup_guide_tab(self):
         layout = QVBoxLayout(self.tab_guide)
