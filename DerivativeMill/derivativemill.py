@@ -4605,22 +4605,67 @@ class DerivativeMill(QMainWindow):
         patterns_group = QGroupBox("Extraction Patterns (Regex)")
         patterns_layout = QVBoxLayout()
 
-        # Pattern fields
+        # Help button
+        help_btn = QPushButton("? Pattern Guide")
+        help_btn.setStyleSheet(self.get_button_style("info"))
+        help_btn.setMaximumWidth(150)
+        help_btn.clicked.connect(self.show_pattern_help)
+        patterns_layout.addWidget(help_btn)
+
+        # Pattern fields with descriptions
         self.ocr_patterns = {}
-        pattern_names = {
-            'part_number_header': 'Part Number Header Pattern',
-            'part_number_value': 'Part Number Value Pattern',
-            'value_header': 'Value/Price Header Pattern',
-            'value_pattern': 'Value/Price Pattern',
-            'quantity_pattern': 'Quantity Pattern',
-            'description': 'Description Pattern'
+        pattern_descriptions = {
+            'part_number_header': (
+                'Part Number Header Pattern',
+                'Find the column header for part numbers\n'
+                'Examples: "Part Number", "SKU", "Item Code", "Part#"\n'
+                'Default: (part\\s*(?:number|num|no|#|code|id)|sku|product\\s*(?:number|id|code)|item\\s*(?:number|code))'
+            ),
+            'part_number_value': (
+                'Part Number Value Pattern',
+                'Match the actual part number values\n'
+                'Examples: "ABC-123", "SKU12345", "PART_001"\n'
+                'Default: ([A-Z0-9\\-_.]{3,25})'
+            ),
+            'value_header': (
+                'Value/Price Header Pattern',
+                'Find the column header for prices or values\n'
+                'Examples: "Price", "Amount", "Total", "Invoice", "Qty"\n'
+                'Default: (price|unit\\s*price|value|amount|cost|rate|total|invoice|qty|quantity)'
+            ),
+            'value_pattern': (
+                'Value/Price Pattern',
+                'Match numeric price/value amounts\n'
+                'Examples: "$100.00", "99.99", "1,500.50"\n'
+                'Default: \\$?\\s*(\\d{1,10}(?:[,\\.]?\\d{1,3})*(?:\\.\\d{2})?)'
+            ),
+            'quantity_pattern': (
+                'Quantity Pattern',
+                'Find quantity numbers\n'
+                'Examples: "qty: 5", "Qty 10", "quantity: 25"\n'
+                'Default: qty:?\\s*(\\d+)'
+            ),
+            'description': (
+                'Description Pattern',
+                'Find item description fields\n'
+                'Examples: "Description", "Item Description", "Desc"\n'
+                'Default: (description|desc|item\\s*description)'
+            )
         }
 
-        for key, label in pattern_names.items():
+        for key, (label, description) in pattern_descriptions.items():
             pattern_layout = QVBoxLayout()
-            pattern_layout.addWidget(QLabel(label))
+            pattern_layout.addWidget(QLabel(f"<b>{label}</b>"))
+
+            # Description text
+            desc_label = QLabel(description)
+            desc_label.setWordWrap(True)
+            desc_label.setStyleSheet("font-size: 8pt; color: #666; background: #f5f5f5; padding: 5px; border-radius: 3px;")
+            pattern_layout.addWidget(desc_label)
+
+            # Pattern editor
             pattern_edit = QPlainTextEdit()
-            pattern_edit.setFixedHeight(50)
+            pattern_edit.setFixedHeight(40)
             self.ocr_patterns[key] = pattern_edit
             pattern_layout.addWidget(pattern_edit)
             patterns_layout.addLayout(pattern_layout)
@@ -4684,6 +4729,94 @@ class DerivativeMill(QMainWindow):
         else:
             self.ocr_new_supplier_input.setEnabled(False)
             self.load_ocr_template()
+
+    def show_pattern_help(self):
+        """Show detailed help about regex patterns"""
+        help_text = """
+<h2>OCR Pattern Help - Regex Patterns Explained</h2>
+
+<h3>1. Part Number Header Pattern</h3>
+<b>Purpose:</b> Identifies the column header row that contains part numbers
+<b>What it does:</b> Looks for text like "Part Number", "SKU", "Item Code"
+<b>Example patterns:</b>
+• part\\s*number - matches "part number" with any whitespace
+• sku - matches "SKU" (case-insensitive)
+• item\\s*code - matches "item code"
+
+<h3>2. Part Number Value Pattern</h3>
+<b>Purpose:</b> Matches the actual part number values in the data rows
+<b>What it does:</b> Extracts values like "ABC-123", "SKU12345", "PART_001"
+<b>Example patterns:</b>
+• [A-Z0-9\\-_.]{{3,25}} - matches 3-25 alphanumeric characters with dashes/underscores
+• [A-Z0-9]+ - matches uppercase letters and numbers only
+
+<h3>3. Value/Price Header Pattern</h3>
+<b>Purpose:</b> Identifies the column header for prices or monetary values
+<b>What it does:</b> Looks for text like "Price", "Amount", "Total"
+<b>Example patterns:</b>
+• price - matches "price"
+• amount|total|value - matches "amount" OR "total" OR "value"
+• unit\\s*price - matches "unit price"
+
+<h3>4. Value/Price Pattern</h3>
+<b>Purpose:</b> Extracts actual numeric values from the invoice
+<b>What it does:</b> Matches "$100.00", "99.99", "1,500.50"
+<b>Example patterns:</b>
+• \\d+\\.\\d{{2}} - matches numbers like "100.00"
+• \\$?\\s*\\d+ - matches optional "$" followed by numbers
+
+<h3>5. Quantity Pattern</h3>
+<b>Purpose:</b> Finds quantity/count information
+<b>What it does:</b> Matches "qty: 5", "Qty 10", "quantity: 25"
+<b>Example patterns:</b>
+• qty:?\\s*\\d+ - matches "qty 5" or "qty: 5"
+• \\d+ - matches any number
+
+<h3>6. Description Pattern</h3>
+<b>Purpose:</b> Identifies item description columns
+<b>What it does:</b> Looks for "Description", "Item Description", "Desc"
+<b>Example patterns:</b>
+• description - matches "description"
+• desc|item\\s*desc - matches "desc" OR "item desc"
+
+<h3>Regex Special Characters</h3>
+• \\s = whitespace (space, tab, newline)
+• \\d = any digit (0-9)
+• + = one or more times
+• * = zero or more times
+• ? = optional (0 or 1 times)
+• | = OR (alternative)
+• [A-Z] = any uppercase letter
+• [0-9] = any digit
+• {{3,25}} = between 3 and 25 times
+• () = capture group (returns the matched text)
+• \\. = literal period (dot needs backslash)
+• \\- = literal hyphen (dash needs backslash)
+
+<h3>Quick Tips</h3>
+1. Use parentheses () to capture the part you want extracted
+2. Test your patterns with "Run OCR Test" to see results
+3. Keep patterns simple - they should match only what you need
+4. Use | (OR) to match multiple variations
+5. Case matters! Use (?i) for case-insensitive matching
+        """
+
+        # Show in a dialog
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Pattern Help")
+        dialog.resize(900, 700)
+        layout = QVBoxLayout(dialog)
+
+        text_edit = QTextEdit()
+        text_edit.setHtml(help_text)
+        text_edit.setReadOnly(True)
+        layout.addWidget(text_edit)
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dialog.close)
+        layout.addWidget(close_btn)
+
+        dialog.exec_()
 
     def load_ocr_template(self):
         """Load selected OCR template"""
