@@ -385,6 +385,102 @@ class FileDropZone(QLabel):
 # ----------------------------------------------------------------------
 # VISUAL PDF PATTERN TRAINER WITH DRAWING CANVAS
 # ----------------------------------------------------------------------
+class HighlightableTextEdit(QPlainTextEdit):
+    """Custom text edit that allows highlighting text and naming selections"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setReadOnly(False)
+        self.highlights = {}  # Maps text position to (name, color)
+        self.selected_start = -1
+        self.selected_end = -1
+
+    def contextMenuEvent(self, event):
+        """Show context menu on right-click with highlight option"""
+        cursor = self.cursorForPosition(event.pos())
+
+        # Check if user has text selected
+        if not self.textCursor().hasSelection():
+            return
+
+        menu = QMenu(self)
+        highlight_action = menu.addAction("Name This Selection...")
+        action = menu.exec_(self.mapToGlobal(event.pos()))
+
+        if action == highlight_action:
+            self.highlight_selection()
+
+    def highlight_selection(self):
+        """Prompt user to name the selected text and highlight it"""
+        cursor = self.textCursor()
+        if not cursor.hasSelection():
+            QMessageBox.warning(self, "No Selection", "Please select text first")
+            return
+
+        selected_text = cursor.selectedText()
+
+        # Get name for this selection
+        dialog = ElementNameDialog(
+            title="Name Data Element",
+            prompt=f"Name this element:\n\n'{selected_text}'",
+            parent=self
+        )
+
+        if dialog.exec_() == QDialog.Accepted:
+            name = dialog.get_text()
+            if name:
+                # Get selection range
+                start = cursor.selectionStart()
+                end = cursor.selectionEnd()
+
+                # Store highlight info
+                self.highlights[(start, end)] = name
+
+                # Apply highlighting
+                self.apply_highlights()
+
+    def apply_highlights(self):
+        """Apply all highlights to the document"""
+        # Get text format for highlighting
+        colors = [Qt.red, Qt.blue, Qt.green, Qt.magenta, Qt.yellow, Qt.cyan]
+
+        cursor = self.textCursor()
+        cursor.movePosition(QTextCursor.Start)
+        self.setTextCursor(cursor)
+
+        # Clear previous formatting
+        fmt = QTextCharFormat()
+        cursor.movePosition(QTextCursor.Start)
+        cursor.movePosition(QTextCursor.End, QTextCursor.KeepAnchor)
+        cursor.setCharFormat(fmt)
+
+        # Apply new highlights
+        for (start, end), name in self.highlights.items():
+            cursor.setPosition(start)
+            cursor.movePosition(QTextCursor.Right, QTextCursor.KeepAnchor, end - start)
+
+            # Create format with background color
+            fmt = QTextCharFormat()
+            color_idx = hash(name) % len(colors)
+            fmt.setBackground(QColor(colors[color_idx]))
+            fmt.setForeground(Qt.black)
+            fmt.setFontWeight(QFont.Bold)
+
+            cursor.setCharFormat(fmt)
+
+    def get_named_selections(self):
+        """Return dictionary of named text selections"""
+        result = {}
+        text = self.toPlainText()
+        for (start, end), name in self.highlights.items():
+            if start < len(text) and end <= len(text):
+                selected = text[start:end]
+                if name not in result:
+                    result[name] = []
+                result[name].append(selected)
+        return result
+
+
 class ElementNameDialog(QDialog):
     """Custom dialog for naming elements with proper text visibility"""
 
@@ -5181,13 +5277,23 @@ class DerivativeMill(QMainWindow):
         patterns_group.setLayout(patterns_layout)
         right_layout.addWidget(patterns_group, 1)  # Give patterns proportional space
 
-        # Results display
-        results_group = QGroupBox("Extraction Results")
+        # Results display with highlighting support
+        results_group = QGroupBox("Extraction Results - Highlight & Name Data Elements")
         results_layout = QVBoxLayout()
 
-        self.ocr_results_text = QPlainTextEdit()
-        self.ocr_results_text.setReadOnly(True)
-        self.ocr_results_text.setMinimumHeight(200)  # Minimum height instead of fixed
+        # Instructions
+        instructions = QLabel(
+            "1. Run OCR Test to extract text\n"
+            "2. Select text in results area and right-click\n"
+            "3. Choose 'Name This Selection...' to identify data elements\n"
+            "4. Highlighted selections will be used to build patterns"
+        )
+        instructions.setStyleSheet("font-size: 9pt; color: #666; background: #f5f5f5; padding: 5px; border-radius: 3px;")
+        instructions.setWordWrap(True)
+        results_layout.addWidget(instructions)
+
+        self.ocr_results_text = HighlightableTextEdit()
+        self.ocr_results_text.setMinimumHeight(200)
         self.ocr_results_text.setStyleSheet("""
             QPlainTextEdit {
                 font-family: monospace;
