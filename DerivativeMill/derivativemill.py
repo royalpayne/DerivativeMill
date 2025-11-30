@@ -3100,11 +3100,27 @@ class DerivativeMill(QMainWindow):
         """Populate the parts table with a dataframe"""
         self.parts_table.blockSignals(True)
         self.parts_table.setRowCount(len(df))
-        headers = [self.parts_table.horizontalHeaderItem(col).text() for col in range(self.parts_table.columnCount())]
+        # Map table column headers to dataframe column indices
+        # Database columns: part_number, description, hts_code, country_origin, mid, client_code, steel_ratio, non_steel_ratio, last_updated
         for i, row in df.iterrows():
-            for col, header in enumerate(headers):
-                value = str(row[header]) if header in df.columns else ""
-                self.parts_table.setItem(i, col, QTableWidgetItem(value))
+            # Column 0: part_number
+            self.parts_table.setItem(i, 0, QTableWidgetItem(str(row['part_number']) if 'part_number' in df.columns else ""))
+            # Column 1: description
+            self.parts_table.setItem(i, 1, QTableWidgetItem(str(row['description']) if 'description' in df.columns else ""))
+            # Column 2: hts_code
+            self.parts_table.setItem(i, 2, QTableWidgetItem(str(row['hts_code']) if 'hts_code' in df.columns else ""))
+            # Column 3: country_origin
+            self.parts_table.setItem(i, 3, QTableWidgetItem(str(row['country_origin']) if 'country_origin' in df.columns else ""))
+            # Column 4: mid
+            self.parts_table.setItem(i, 4, QTableWidgetItem(str(row['mid']) if 'mid' in df.columns else ""))
+            # Column 5: client_code
+            self.parts_table.setItem(i, 5, QTableWidgetItem(str(row['client_code']) if 'client_code' in df.columns else ""))
+            # Column 6: steel_ratio
+            self.parts_table.setItem(i, 6, QTableWidgetItem(str(row['steel_ratio']) if 'steel_ratio' in df.columns else ""))
+            # Column 7: non_steel_ratio
+            self.parts_table.setItem(i, 7, QTableWidgetItem(str(row['non_steel_ratio']) if 'non_steel_ratio' in df.columns else ""))
+            # Column 8: updated_date (maps to last_updated in database)
+            self.parts_table.setItem(i, 8, QTableWidgetItem(str(row['last_updated']) if 'last_updated' in df.columns else ""))
         self.parts_table.blockSignals(False)
 
     # ...existing code...
