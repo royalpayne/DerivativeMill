@@ -4691,18 +4691,23 @@ class DerivativeMill(QMainWindow):
             from ocr.field_detector import get_template_manager
             supplier_name = self.ocr_supplier_combo.currentText()
 
-            if supplier_name == "(Create New)":
+            if supplier_name == "(Create New)" or not supplier_name:
                 return
 
             manager = get_template_manager()
             template = manager.get_template(supplier_name)
 
             # Load patterns into UI
+            if not hasattr(self, 'ocr_patterns'):
+                logger.error("OCR patterns dictionary not initialized")
+                return
+
             for key, pattern_edit in self.ocr_patterns.items():
                 pattern = template.patterns.get(key, "")
                 pattern_edit.setPlainText(pattern)
 
             logger.info(f"Loaded OCR template: {supplier_name}")
+            QMessageBox.information(self, "Loaded", f"Template '{supplier_name}' loaded successfully")
 
         except Exception as e:
             logger.error(f"Error loading template: {e}")
