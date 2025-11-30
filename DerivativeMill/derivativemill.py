@@ -3772,7 +3772,7 @@ class DerivativeMill(QMainWindow):
                 <li><b>Description</b> (Optional) - Part description</li>
                 <li><b>Sec 232 Content Ratio</b> (Optional) - Section 232 tariff content percentage (Steel, Aluminum, Wood, Copper)</li>
             </ul>
-            <br><b>Step 4:</b> Click <b>"IMPORT NOW"</b> to load parts into database<br>
+            <p><b>Step 4:</b> Click <b>"IMPORT NOW"</b> to load parts into database</p>
         </div>
         <div class="note">
             <b>Note:</b> Column mappings are automatically saved for future imports from the same source.
@@ -3802,8 +3802,8 @@ class DerivativeMill(QMainWindow):
             <b>Step 3:</b> Drag CSV columns to required fields:<br>
             &nbsp;&nbsp;&nbsp;&nbsp;• <b>Part Number</b> - Maps to your parts database<br>
             &nbsp;&nbsp;&nbsp;&nbsp;• <b>Value USD</b> - Invoice line item value<br>
-            <br><b>Step 4:</b> Click <b>"Save Current Mapping As..."</b><br>
-            <b>Step 5:</b> Enter a profile name (e.g., "Supplier ABC")<br>
+            <p><b>Step 4:</b> Click <b>"Save Current Mapping As..."</b><br>
+            <b>Step 5:</b> Enter a profile name (e.g., "Supplier ABC")</p><br>
         </div>
         <div class="note">
             <b>Note:</b> Create one profile per supplier for quick switching between different invoice formats.
