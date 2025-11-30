@@ -1,14 +1,19 @@
 {
-  "supplier_name": "RB AGARWALLA",
+  "supplier_name": "RBA AGARWALLA",
   "patterns": {
     "part_number_header": "",
     "part_number_value": "([A-Z0-9\\-_\\.]{3,25})",
     "value_header": "",
-    "value_pattern": "",
+    "value_pattern": "(\\d+(?:[,\\.]?\\d{1,3})*(?:\\.\\d{2})?)",
     "quantity_pattern": "",
     "description": ""
   },
   "field_positions": {
+    "Value": [
+      " 992.1",
+      " 2,976.48",
+      " 992.1"
+    ],
     "Part Number": [
       "MSMBX-1118-C-RD",
       "MSMBX-1128-C-RD",
