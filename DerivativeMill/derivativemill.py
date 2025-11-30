@@ -1473,6 +1473,14 @@ class DerivativeMill(QMainWindow):
         self.batch_supplier_combo = QComboBox()
         self.batch_supplier_combo.setMinimumWidth(150)
         supplier_selector_layout.addWidget(self.batch_supplier_combo)
+
+        # Refresh button to reload supplier list
+        refresh_suppliers_btn = QPushButton("⟳ Refresh")
+        refresh_suppliers_btn.setMaximumWidth(80)
+        refresh_suppliers_btn.setToolTip("Refresh list of suppliers")
+        refresh_suppliers_btn.clicked.connect(self.refresh_supplier_combo)
+        supplier_selector_layout.addWidget(refresh_suppliers_btn)
+
         supplier_selector_layout.addStretch()
         batch_layout.addLayout(supplier_selector_layout)
 
@@ -3715,13 +3723,21 @@ class DerivativeMill(QMainWindow):
             self.batch_supplier_combo.clear()
             self.batch_supplier_combo.addItem("-- Select Supplier --")
             suppliers = self.get_supplier_folders()
+
+            logger.debug(f"Refreshing supplier combo: INPUT_DIR={INPUT_DIR}, suppliers={suppliers}")
+
             for supplier in suppliers:
                 self.batch_supplier_combo.addItem(supplier)
+
             # Try to restore previous selection
             idx = self.batch_supplier_combo.findText(current)
             if idx >= 0:
                 self.batch_supplier_combo.setCurrentIndex(idx)
             self.batch_supplier_combo.blockSignals(False)
+
+            # Log what's in the combo
+            items = [self.batch_supplier_combo.itemText(i) for i in range(self.batch_supplier_combo.count())]
+            logger.debug(f"Supplier combo items: {items}")
 
     def start_batch_processing(self):
         """Start batch processing of PDFs from selected supplier folder"""
