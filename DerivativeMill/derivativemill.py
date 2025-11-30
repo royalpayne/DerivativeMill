@@ -2570,16 +2570,17 @@ class DerivativeMill(QMainWindow):
                 # Get client_code if it was mapped, otherwise empty string
                 client_code = str(r.get('client_code', '')).strip() if 'client_code' in df.columns else ""
                 steel_str = str(r.get('steel_ratio', r.get('Sec 232 Content Ratio', r.get('Steel %', '')))).strip()
-                if not steel_str:
-                    steel_str = '1.0'  # Default to 100% steel if no ratio provided
                 try:
-                    steel_ratio = float(steel_str)
-                    if steel_ratio > 1.0: steel_ratio /= 100.0
-                    steel_ratio = max(0.0, min(1.0, steel_ratio))
+                    if steel_str:
+                        steel_ratio = float(steel_str)
+                        if steel_ratio > 1.0: steel_ratio /= 100.0
+                        steel_ratio = max(0.0, min(1.0, steel_ratio))
+                    else:
+                        steel_ratio = 0.0  # Default to 0% steel if no ratio provided
                     non_steel_ratio = 1.0 - steel_ratio
                 except:
-                    steel_ratio = 1.0
-                    non_steel_ratio = 0.0
+                    steel_ratio = 0.0
+                    non_steel_ratio = 1.0
                 c.execute("""INSERT INTO parts_master (part_number, description, hts_code, country_origin, mid, client_code, steel_ratio, non_steel_ratio, last_updated)
                           VALUES (?,?,?,?,?,?,?,?,?)
                           ON CONFLICT(part_number) DO UPDATE SET
