@@ -2561,15 +2561,17 @@ class DerivativeMill(QMainWindow):
             updated = inserted = 0
             now = datetime.now().isoformat()
             for _, r in df.iterrows():
-                part = str(r['part_number']).strip()
+                part = str(r.get('part_number', '')).strip()
                 if not part: continue
                 desc = str(r.get('description', r.get('Description', ''))).strip()
-                hts = str(r['hts_code']).strip()
+                hts = str(r.get('hts_code', '')).strip()
                 origin = str(r.get('country_origin', '')).strip().upper()[:2]
                 mid = str(r.get('mid', '')).strip()
                 # Get client_code if it was mapped, otherwise empty string
                 client_code = str(r.get('client_code', '')).strip() if 'client_code' in df.columns else ""
-                steel_str = str(r.get('steel_ratio', r.get('Sec 232 Content Ratio', r.get('Steel %', '1.0')))).strip()
+                steel_str = str(r.get('steel_ratio', r.get('Sec 232 Content Ratio', r.get('Steel %', '')))).strip()
+                if not steel_str:
+                    steel_str = '1.0'  # Default to 100% steel if no ratio provided
                 try:
                     steel_ratio = float(steel_str)
                     if steel_ratio > 1.0: steel_ratio /= 100.0
@@ -2943,6 +2945,8 @@ class DerivativeMill(QMainWindow):
         search_box.addWidget(QLabel("Quick Search:"))
         self.search_field_combo = QComboBox()
         self.search_field_combo.addItems(["All Fields","part_number","description","hts_code","country_origin","mid","client_code","steel_ratio","non_steel_ratio"])
+        # Refocus search input after combo selection
+        self.search_field_combo.currentIndexChanged.connect(lambda: self.search_input.setFocus())
         search_box.addWidget(self.search_field_combo)
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Type to filter...")
