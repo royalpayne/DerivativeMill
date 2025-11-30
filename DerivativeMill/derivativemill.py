@@ -545,6 +545,7 @@ class DerivativeMill(QMainWindow):
         self.tab_master = QWidget()
         self.tab_log = QWidget()
         self.tab_config = QWidget()
+        self.tab_actions = QWidget()
         self.tab_guide = QWidget()
         self.tabs.addTab(self.tab_process, "Process Shipment")
         self.tabs.addTab(self.tab_shipment_map, "Invoice Mapping Profiles")
@@ -552,6 +553,7 @@ class DerivativeMill(QMainWindow):
         self.tabs.addTab(self.tab_master, "Parts View")
         self.tabs.addTab(self.tab_log, "Log View")
         self.tabs.addTab(self.tab_config, "Customs Config")
+        self.tabs.addTab(self.tab_actions, "Section 232 Actions")
         self.tabs.addTab(self.tab_guide, "User Guide")
         
         # Only tabs (no settings icon here)
