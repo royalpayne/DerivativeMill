@@ -14,8 +14,8 @@ def test_ocr():
     """Test OCR on a sample PDF"""
 
     # Configuration - adjust these to match your test file
-    PDF_PATH = "Input/test_invoice.pdf"  # Change to your test file
-    SUPPLIER_NAME = "default"  # Change to your supplier template name
+    PDF_PATH = "Input/CH_HFA001.pdf"  # Change to your test file
+    SUPPLIER_NAME = "AROMATE"  # Change to your supplier template name
 
     pdf_path = Path(PDF_PATH)
 
