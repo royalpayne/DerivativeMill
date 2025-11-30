@@ -5182,6 +5182,13 @@ class DerivativeMill(QMainWindow):
         btn_gen_patterns.setToolTip("Auto-generate regex patterns from your highlighted text selections")
         btn_gen_patterns.clicked.connect(self.generate_patterns_from_selections)
         supplier_layout.addWidget(btn_gen_patterns)
+
+        # Validate template button
+        btn_validate = QPushButton("✓ Validate Template")
+        btn_validate.setStyleSheet(self.get_button_style("info"))
+        btn_validate.setToolTip("Test patterns against extracted text to see what matches")
+        btn_validate.clicked.connect(self.validate_ocr_template)
+        supplier_layout.addWidget(btn_validate)
         supplier_group.setLayout(supplier_layout)
         left_layout.addWidget(supplier_group)
 
@@ -5493,6 +5500,117 @@ class DerivativeMill(QMainWindow):
         except Exception as e:
             logger.error(f"Error loading template: {e}")
             QMessageBox.warning(self, "Error", f"Failed to load template: {str(e)}")
+
+    def validate_ocr_template(self):
+        """Validate current template patterns against extracted text"""
+        try:
+            if not hasattr(self, 'ocr_results_text'):
+                QMessageBox.warning(self, "No Text", "Run OCR Test first to get extraction text")
+                return
+
+            raw_text = self.ocr_results_text.toPlainText()
+            if not raw_text:
+                QMessageBox.warning(self, "No Text", "No extracted text to validate against")
+                return
+
+            # Collect current patterns
+            patterns = {}
+            for key, pattern_edit in self.ocr_patterns.items():
+                patterns[key] = pattern_edit.toPlainText().strip()
+
+            # Test patterns against text
+            import re
+            results = "=== Pattern Validation Results ===\n\n"
+
+            lines = raw_text.split('\n')
+            part_number_matches = 0
+            value_matches = 0
+            lines_with_matches = 0
+            part_number_examples = []
+            value_examples = []
+
+            for line in lines:
+                line_has_match = False
+
+                # Test part number pattern
+                if patterns.get('part_number_value'):
+                    try:
+                        matches = re.findall(patterns['part_number_value'], line)
+                        if matches:
+                            part_number_matches += len(matches)
+                            line_has_match = True
+                            # Store up to 3 examples
+                            if len(part_number_examples) < 3:
+                                part_number_examples.extend([m if isinstance(m, str) else m[0] if m else "" for m in matches][:3-len(part_number_examples)])
+                    except Exception as e:
+                        logger.debug(f"Part number regex error: {e}")
+                        pass
+
+                # Test value pattern
+                if patterns.get('value_pattern'):
+                    try:
+                        matches = re.findall(patterns['value_pattern'], line)
+                        if matches:
+                            value_matches += len(matches)
+                            line_has_match = True
+                            # Store up to 3 examples
+                            if len(value_examples) < 3:
+                                value_examples.extend([m if isinstance(m, str) else m[0] if m else "" for m in matches][:3-len(value_examples)])
+                    except Exception as e:
+                        logger.debug(f"Value pattern regex error: {e}")
+                        pass
+
+                if line_has_match:
+                    lines_with_matches += 1
+
+            results += f"Lines processed: {len(lines)}\n"
+            results += f"Lines with matches: {lines_with_matches}\n\n"
+
+            results += f"Part number pattern: {'✓ DEFINED' if patterns.get('part_number_value') else '✗ EMPTY'}\n"
+            if patterns.get('part_number_value'):
+                results += f"  Matches found: {part_number_matches}\n"
+                if part_number_examples:
+                    results += f"  Examples: {', '.join(part_number_examples[:3])}\n"
+            results += "\n"
+
+            results += f"Value pattern: {'✓ DEFINED' if patterns.get('value_pattern') else '✗ EMPTY'}\n"
+            if patterns.get('value_pattern'):
+                results += f"  Matches found: {value_matches}\n"
+                if value_examples:
+                    results += f"  Examples: {', '.join(value_examples[:3])}\n"
+            results += "\n"
+
+            # Provide actionable feedback
+            if not patterns.get('value_pattern'):
+                results += "⚠️  VALUE PATTERN IS EMPTY!\n"
+                results += "You need to highlight some value/price examples and generate a pattern.\n\n"
+                results += "To fix:\n"
+                results += "1. Look at the extracted text above\n"
+                results += "2. Highlight numbers that represent prices/values (e.g., 6, 25, 700020)\n"
+                results += "3. Right-click and name them 'Price' or 'Value'\n"
+                results += "4. Click '🤖 Generate Patterns from Selections'\n"
+                results += "5. Click '✓ Validate Template' again\n"
+            elif value_matches == 0 and part_number_matches > 0:
+                results += "⚠️  WARNING: Part numbers found but NO values found!\n"
+                results += "Your value pattern may not match the actual data format.\n\n"
+                results += "Check that:\n"
+                results += "- Your value pattern regex is correct\n"
+                results += "- Values exist on same lines as part numbers\n"
+                results += "- Pattern syntax is valid\n\n"
+                results += "Try re-generating the pattern from actual value examples in the text.\n"
+            elif value_matches > 0 and part_number_matches > 0:
+                results += "✓ Template looks good! Both patterns are matching.\n"
+                results += "Ready to use in batch processing.\n"
+            else:
+                results += "⚠️  No matches found with current patterns.\n"
+                results += "Check your pattern syntax and try again.\n"
+
+            QMessageBox.information(self, "Validation Results", results)
+            logger.info(f"Template validation: {part_number_matches} part numbers, {value_matches} values found")
+
+        except Exception as e:
+            logger.error(f"Error validating template: {e}")
+            QMessageBox.critical(self, "Validation Error", f"Error: {str(e)}")
 
     def generate_patterns_from_selections(self):
         """Generate regex patterns from highlighted text selections in OCR results"""
