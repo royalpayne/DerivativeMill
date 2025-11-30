@@ -2578,7 +2578,8 @@ class DerivativeMill(QMainWindow):
                 except:
                     steel_ratio = 1.0
                     non_steel_ratio = 0.0
-                c.execute("""INSERT INTO parts_master VALUES (?,?,?,?,?,?,?,?,?)
+                c.execute("""INSERT INTO parts_master (part_number, description, hts_code, country_origin, mid, client_code, steel_ratio, non_steel_ratio, last_updated)
+                          VALUES (?,?,?,?,?,?,?,?,?)
                           ON CONFLICT(part_number) DO UPDATE SET
                           description=excluded.description, hts_code=excluded.hts_code,
                           country_origin=excluded.country_origin, mid=excluded.mid,
@@ -3027,7 +3028,8 @@ class DerivativeMill(QMainWindow):
                     non_steel = 1.0 - steel
                 except:
                     steel = 1.0; non_steel = 0.0
-                c.execute("""INSERT INTO parts_master VALUES (?,?,?,?,?,?,?,?,?)
+                c.execute("""INSERT INTO parts_master (part_number, description, hts_code, country_origin, mid, client_code, steel_ratio, non_steel_ratio, last_updated)
+                          VALUES (?,?,?,?,?,?,?,?,?)
                           ON CONFLICT(part_number) DO UPDATE SET
                           description=excluded.description, hts_code=excluded.hts_code,
                           country_origin=excluded.country_origin, mid=excluded.mid,
