@@ -5192,7 +5192,8 @@ class DerivativeMill(QMainWindow):
             QPlainTextEdit {
                 font-family: monospace;
                 font-size: 10px;
-                background-color: #f5f5f5;
+                background-color: white;
+                color: black;
                 border: 1px solid #ccc;
                 padding: 5px;
             }
