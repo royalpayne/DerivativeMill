@@ -1325,6 +1325,69 @@ class DerivativeMill(QMainWindow):
         folders_layout.addStretch()
         tabs.addTab(folders_widget, "Folders")
 
+        # ===== TAB 3: SUPPLIER FOLDERS =====
+        suppliers_widget = QWidget()
+        suppliers_layout = QVBoxLayout(suppliers_widget)
+
+        # Info box
+        info_box = QGroupBox("Supplier Folder Management")
+        info_layout = QVBoxLayout()
+        info_text = QLabel(
+            "Manage supplier folders in your Input directory. Each supplier folder can contain PDF invoices "
+            "for batch processing. Create new suppliers or remove existing ones."
+        )
+        info_text.setWordWrap(True)
+        info_layout.addWidget(info_text)
+        info_box.setLayout(info_layout)
+        suppliers_layout.addWidget(info_box)
+
+        # Suppliers list group
+        suppliers_group = QGroupBox("Suppliers in Input Folder")
+        suppliers_group_layout = QVBoxLayout()
+
+        # List widget showing suppliers
+        self.settings_suppliers_list = QListWidget()
+        self.settings_suppliers_list.setMinimumHeight(200)
+        suppliers_group_layout.addWidget(self.settings_suppliers_list)
+
+        # Buttons layout
+        suppliers_btn_layout = QHBoxLayout()
+
+        btn_add_supplier = QPushButton("+ Add New Supplier")
+        btn_add_supplier.setStyleSheet(self.get_button_style("success"))
+        btn_add_supplier.clicked.connect(self.add_new_supplier_dialog)
+        suppliers_btn_layout.addWidget(btn_add_supplier)
+
+        btn_remove_supplier = QPushButton("- Remove Selected")
+        btn_remove_supplier.setStyleSheet(self.get_button_style("danger"))
+        btn_remove_supplier.clicked.connect(lambda: self.remove_selected_supplier(self.settings_suppliers_list))
+        suppliers_btn_layout.addWidget(btn_remove_supplier)
+
+        btn_open_supplier = QPushButton("Open Folder")
+        btn_open_supplier.setStyleSheet(self.get_button_style("default"))
+        btn_open_supplier.clicked.connect(lambda: self.open_supplier_folder(self.settings_suppliers_list))
+        suppliers_btn_layout.addWidget(btn_open_supplier)
+
+        btn_refresh_suppliers = QPushButton("Refresh List")
+        btn_refresh_suppliers.setStyleSheet(self.get_button_style("info"))
+        btn_refresh_suppliers.clicked.connect(self.refresh_suppliers_list)
+        suppliers_btn_layout.addWidget(btn_refresh_suppliers)
+
+        suppliers_group_layout.addLayout(suppliers_btn_layout)
+        suppliers_group.setLayout(suppliers_group_layout)
+        suppliers_layout.addWidget(suppliers_group)
+
+        # Status label
+        self.suppliers_count_label = QLabel("Loading suppliers...")
+        self.suppliers_count_label.setStyleSheet("font-weight:bold; padding:5px;")
+        suppliers_layout.addWidget(self.suppliers_count_label)
+
+        suppliers_layout.addStretch()
+        tabs.addTab(suppliers_widget, "Suppliers")
+
+        # Load suppliers list when dialog opens
+        self.refresh_suppliers_list()
+
         # Add tabs to main dialog layout
         layout.addWidget(tabs)
         dialog.exec_()
@@ -3147,6 +3210,149 @@ class DerivativeMill(QMainWindow):
 
         # Refresh exported files list
         self.refresh_exported_files()
+
+    def refresh_suppliers_list(self):
+        """Refresh the suppliers list in Settings dialog"""
+        if not hasattr(self, 'settings_suppliers_list'):
+            return
+
+        try:
+            suppliers = self.get_supplier_folders()
+            self.settings_suppliers_list.blockSignals(True)
+            self.settings_suppliers_list.clear()
+
+            for supplier in suppliers:
+                supplier_path = INPUT_DIR / supplier
+                pdf_count = len(list(supplier_path.glob("*.pdf")))
+                display_text = f"{supplier} ({pdf_count} PDFs)"
+                self.settings_suppliers_list.addItem(display_text)
+
+            self.suppliers_count_label.setText(f"Total: {len(suppliers)} suppliers")
+            self.settings_suppliers_list.blockSignals(False)
+
+        except Exception as e:
+            logger.error(f"Error refreshing suppliers list: {e}")
+            self.suppliers_count_label.setText("Error loading suppliers")
+
+    def add_new_supplier_dialog(self):
+        """Show dialog to create a new supplier folder"""
+        text, ok = QInputDialog.getText(
+            self, "Add New Supplier", "Enter supplier name:",
+            text="NEW_SUPPLIER"
+        )
+
+        if ok and text:
+            self.create_supplier_folder(text)
+
+    def create_supplier_folder(self, supplier_name):
+        """Create a new supplier folder in the Input directory"""
+        if not supplier_name or not supplier_name.strip():
+            QMessageBox.warning(self, "Invalid Name", "Supplier name cannot be empty")
+            return
+
+        # Sanitize folder name
+        supplier_name = supplier_name.strip()
+
+        try:
+            supplier_path = INPUT_DIR / supplier_name
+
+            if supplier_path.exists():
+                QMessageBox.warning(self, "Folder Exists", f"Supplier folder '{supplier_name}' already exists")
+                return
+
+            # Create folder
+            supplier_path.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Created supplier folder: {supplier_path}")
+
+            # Refresh displays
+            self.refresh_suppliers_list()
+            self.refresh_supplier_combo()
+
+            QMessageBox.information(self, "Success", f"Created supplier folder: {supplier_name}")
+
+        except Exception as e:
+            logger.error(f"Error creating supplier folder: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to create supplier folder:\n{str(e)}")
+
+    def remove_selected_supplier(self, list_widget):
+        """Remove selected supplier folder (empty folders only)"""
+        current_item = list_widget.currentItem()
+        if not current_item:
+            QMessageBox.warning(self, "No Selection", "Please select a supplier to remove")
+            return
+
+        # Extract supplier name from display text (remove PDF count)
+        display_text = current_item.text()
+        supplier_name = display_text.split(" (")[0]
+
+        try:
+            supplier_path = INPUT_DIR / supplier_name
+
+            if not supplier_path.exists():
+                QMessageBox.warning(self, "Not Found", f"Supplier folder '{supplier_name}' not found")
+                self.refresh_suppliers_list()
+                return
+
+            # Check if folder is empty (excluding hidden files)
+            items = [item for item in supplier_path.iterdir() if not item.name.startswith('.')]
+            if items:
+                QMessageBox.warning(
+                    self, "Folder Not Empty",
+                    f"Cannot remove '{supplier_name}' - folder contains {len(items)} file(s).\n\n"
+                    "Please remove all files first or move them to a different location."
+                )
+                return
+
+            # Confirm deletion
+            reply = QMessageBox.question(
+                self, "Confirm Deletion",
+                f"Remove supplier folder '{supplier_name}'?\n\nThis action cannot be undone.",
+                QMessageBox.Yes | QMessageBox.No
+            )
+
+            if reply == QMessageBox.Yes:
+                supplier_path.rmdir()
+                logger.info(f"Removed supplier folder: {supplier_path}")
+                self.refresh_suppliers_list()
+                self.refresh_supplier_combo()
+                QMessageBox.information(self, "Success", f"Removed supplier folder: {supplier_name}")
+
+        except Exception as e:
+            logger.error(f"Error removing supplier folder: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to remove supplier folder:\n{str(e)}")
+
+    def open_supplier_folder(self, list_widget):
+        """Open selected supplier folder in file explorer"""
+        current_item = list_widget.currentItem()
+        if not current_item:
+            QMessageBox.warning(self, "No Selection", "Please select a supplier folder to open")
+            return
+
+        # Extract supplier name from display text
+        display_text = current_item.text()
+        supplier_name = display_text.split(" (")[0]
+
+        try:
+            supplier_path = INPUT_DIR / supplier_name
+
+            if not supplier_path.exists():
+                QMessageBox.warning(self, "Not Found", f"Supplier folder '{supplier_name}' not found")
+                self.refresh_suppliers_list()
+                return
+
+            # Open folder in file explorer
+            if sys.platform == 'linux':
+                subprocess.run(['xdg-open', str(supplier_path)], check=False)
+            elif sys.platform == 'darwin':  # macOS
+                subprocess.run(['open', str(supplier_path)], check=False)
+            elif sys.platform == 'win32':  # Windows
+                subprocess.run(['explorer', str(supplier_path)], check=False)
+
+            logger.info(f"Opened supplier folder: {supplier_path}")
+
+        except Exception as e:
+            logger.error(f"Error opening supplier folder: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to open supplier folder:\n{str(e)}")
 
     def on_shipment_drop(self, field_key, column_name):
         for k, t in self.shipment_targets.items():
