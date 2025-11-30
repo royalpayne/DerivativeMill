@@ -1220,52 +1220,47 @@ class DerivativeMill(QMainWindow):
         global INPUT_DIR, OUTPUT_DIR
         input_dir_str = str(INPUT_DIR) if 'INPUT_DIR' in globals() and INPUT_DIR else "(not set)"
         output_dir_str = str(OUTPUT_DIR) if 'OUTPUT_DIR' in globals() and OUTPUT_DIR else "(not set)"
-        # Use local variables instead of instance variables
-        input_path_label = QLabel(input_dir_str)
-        input_path_label.setWordWrap(True)
-        
-        # Apply theme-aware styling
-        is_dark = hasattr(self, 'current_theme') and self.current_theme in ["Fusion (Dark)", "Ocean", "Teal Professional"]
-        if is_dark:
-            input_path_label.setStyleSheet("background:#2d2d2d; padding:5px; border:1px solid #555; color:#e0e0e0;")
-        else:
-            input_path_label.setStyleSheet("background:#f0f0f0; padding:5px; border:1px solid #ccc; color:#000000;")
-        
+
+        # Helper function to create path display widget
+        def create_path_display(path_str):
+            """Create a read-only text edit for displaying file paths"""
+            text_edit = QPlainTextEdit()
+            text_edit.setPlainText(path_str)
+            text_edit.setReadOnly(True)
+            text_edit.setFixedHeight(45)
+
+            # Apply theme-aware styling
+            is_dark = hasattr(self, 'current_theme') and self.current_theme in ["Fusion (Dark)", "Ocean", "Teal Professional"]
+            if is_dark:
+                text_edit.setStyleSheet("background:#2d2d2d; padding:5px; border:1px solid #555; color:#e0e0e0; font-family: monospace;")
+            else:
+                text_edit.setStyleSheet("background:#f0f0f0; padding:5px; border:1px solid #ccc; color:#000000; font-family: monospace;")
+
+            return text_edit
+
+        input_path_display = create_path_display(input_dir_str)
+
         input_btn = QPushButton("Change Input Folder")
-        input_btn.clicked.connect(lambda: self.select_input_folder(input_path_label))
-        glayout.addRow("Input Folder:", input_path_label)
+        input_btn.clicked.connect(lambda: self.select_input_folder(input_path_display))
+        glayout.addRow("Input Folder:", input_path_display)
         glayout.addRow("", input_btn)
-        
+
         # Output folder display and button
-        output_path_label = QLabel(output_dir_str)
-        output_path_label.setWordWrap(True)
-        
-        # Apply theme-aware styling
-        if is_dark:
-            output_path_label.setStyleSheet("background:#2d2d2d; padding:5px; border:1px solid #555; color:#e0e0e0;")
-        else:
-            output_path_label.setStyleSheet("background:#f0f0f0; padding:5px; border:1px solid #ccc; color:#000000;")
-        
+        output_path_display = create_path_display(output_dir_str)
+
         output_btn = QPushButton("Change Output Folder")
-        output_btn.clicked.connect(lambda: self.select_output_folder(output_path_label))
-        glayout.addRow("Output Folder:", output_path_label)
+        output_btn.clicked.connect(lambda: self.select_output_folder(output_path_display))
+        glayout.addRow("Output Folder:", output_path_display)
         glayout.addRow("", output_btn)
 
         # Processed PDF folder display and button
         global PROCESSED_PDF_DIR
         processed_pdf_dir_str = str(PROCESSED_PDF_DIR) if 'PROCESSED_PDF_DIR' in globals() and PROCESSED_PDF_DIR else "(not set)"
-        processed_pdf_path_label = QLabel(processed_pdf_dir_str)
-        processed_pdf_path_label.setWordWrap(True)
-
-        # Apply theme-aware styling
-        if is_dark:
-            processed_pdf_path_label.setStyleSheet("background:#2d2d2d; padding:5px; border:1px solid #555; color:#e0e0e0;")
-        else:
-            processed_pdf_path_label.setStyleSheet("background:#f0f0f0; padding:5px; border:1px solid #ccc; color:#000000;")
+        processed_pdf_path_display = create_path_display(processed_pdf_dir_str)
 
         processed_pdf_btn = QPushButton("Change Processed PDF Folder")
-        processed_pdf_btn.clicked.connect(lambda: self.select_processed_pdf_folder(processed_pdf_path_label))
-        glayout.addRow("Processed PDF Folder:", processed_pdf_path_label)
+        processed_pdf_btn.clicked.connect(lambda: self.select_processed_pdf_folder(processed_pdf_path_display))
+        glayout.addRow("Processed PDF Folder:", processed_pdf_path_display)
         glayout.addRow("", processed_pdf_btn)
 
         group.setLayout(glayout)
@@ -1816,15 +1811,18 @@ class DerivativeMill(QMainWindow):
             self._enable_input_fields()
         finally:
             self._updating_invoice_check = False
-    def select_input_folder(self, label=None):
+    def select_input_folder(self, display_widget=None):
         global INPUT_DIR, PROCESSED_DIR
         folder = QFileDialog.getExistingDirectory(self, "Select Input Folder", str(INPUT_DIR))
         if folder:
             INPUT_DIR = Path(folder)
             PROCESSED_DIR = INPUT_DIR / "Processed"
             PROCESSED_DIR.mkdir(exist_ok=True)
-            if label:
-                label.setText(str(INPUT_DIR))
+            if display_widget:
+                if isinstance(display_widget, QPlainTextEdit):
+                    display_widget.setPlainText(str(INPUT_DIR))
+                else:
+                    display_widget.setText(str(INPUT_DIR))
             conn = sqlite3.connect(str(DB_PATH))
             c = conn.cursor()
             c.execute("INSERT OR REPLACE INTO app_config VALUES ('input_dir', ?)", (str(INPUT_DIR),))
@@ -1833,14 +1831,17 @@ class DerivativeMill(QMainWindow):
             self.status.setText(f"Input folder: {INPUT_DIR}")
             self.refresh_input_files()
 
-    def select_output_folder(self, label=None):
+    def select_output_folder(self, display_widget=None):
         global OUTPUT_DIR
         folder = QFileDialog.getExistingDirectory(self, "Select Output Folder", str(OUTPUT_DIR))
         if folder:
             OUTPUT_DIR = Path(folder)
             OUTPUT_DIR.mkdir(exist_ok=True)
-            if label:
-                label.setText(str(OUTPUT_DIR))
+            if display_widget:
+                if isinstance(display_widget, QPlainTextEdit):
+                    display_widget.setPlainText(str(OUTPUT_DIR))
+                else:
+                    display_widget.setText(str(OUTPUT_DIR))
             conn = sqlite3.connect(str(DB_PATH))
             c = conn.cursor()
             c.execute("INSERT OR REPLACE INTO app_config VALUES ('output_dir', ?)", (str(OUTPUT_DIR),))
@@ -1849,14 +1850,17 @@ class DerivativeMill(QMainWindow):
             self.status.setText(f"Output folder: {OUTPUT_DIR}")
             self.refresh_exported_files()
 
-    def select_processed_pdf_folder(self, label=None):
+    def select_processed_pdf_folder(self, display_widget=None):
         global PROCESSED_PDF_DIR
         folder = QFileDialog.getExistingDirectory(self, "Select Processed PDF Folder", str(PROCESSED_PDF_DIR))
         if folder:
             PROCESSED_PDF_DIR = Path(folder)
             PROCESSED_PDF_DIR.mkdir(exist_ok=True)
-            if label:
-                label.setText(str(PROCESSED_PDF_DIR))
+            if display_widget:
+                if isinstance(display_widget, QPlainTextEdit):
+                    display_widget.setPlainText(str(PROCESSED_PDF_DIR))
+                else:
+                    display_widget.setText(str(PROCESSED_PDF_DIR))
             conn = sqlite3.connect(str(DB_PATH))
             c = conn.cursor()
             c.execute("INSERT OR REPLACE INTO app_config VALUES ('processed_pdf_dir', ?)", (str(PROCESSED_PDF_DIR),))
