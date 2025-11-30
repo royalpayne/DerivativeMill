@@ -392,7 +392,7 @@ class PDFPatternTrainerDialog(QDialog):
         super().__init__(parent)
         self.pdf_path = pdf_path
         self.setWindowTitle(f"Visual Pattern Trainer - {Path(pdf_path).name}")
-        self.resize(1200, 800)
+        self.resize(1500, 1000)  # Larger window for high-quality PDF display
 
         layout = QVBoxLayout(self)
 
@@ -414,21 +414,23 @@ class PDFPatternTrainerDialog(QDialog):
                 page_height = page.height
                 page_width = page.width
 
-                # Render page to image
+                # Render page to image with HIGH quality (300 DPI)
+                # This ensures text is readable when displayed
                 import io
                 from PIL import Image
-                pil_image = page.to_image().original
+                pil_image = page.to_image(resolution=300).original
 
-                # Convert to QPixmap
+                # Convert to QPixmap with high quality
                 image_data = io.BytesIO()
-                pil_image.save(image_data, format='PNG')
+                pil_image.save(image_data, format='PNG', quality=95)
                 image_data.seek(0)
 
                 self.pixmap = QPixmap()
                 self.pixmap.loadFromData(image_data.read())
 
-                # Scale to fit window
-                self.pixmap = self.pixmap.scaledToWidth(900, Qt.SmoothTransformation)
+                # Scale to fit window - use 1400 pixels for better readability
+                # High resolution render scaled to 1400px maintains quality
+                self.pixmap = self.pixmap.scaledToWidth(1400, Qt.SmoothTransformation)
 
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Could not load PDF: {str(e)}")
