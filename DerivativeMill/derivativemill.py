@@ -3068,8 +3068,14 @@ class DerivativeMill(QMainWindow):
             return
 
         supplier_folder = INPUT_DIR / supplier
+        logger.debug(f"Batch processing: INPUT_DIR={INPUT_DIR}, supplier={supplier}, full_path={supplier_folder}, exists={supplier_folder.exists()}")
+
         if not supplier_folder.exists():
-            QMessageBox.warning(self, "Folder Not Found", f"Supplier folder not found: {supplier}")
+            # Show more detailed error message
+            QMessageBox.warning(self, "Folder Not Found",
+                f"Supplier folder not found: {supplier}\n\n"
+                f"Expected path: {supplier_folder}\n"
+                f"Input folder: {INPUT_DIR}")
             return
 
         # Find all PDF files
