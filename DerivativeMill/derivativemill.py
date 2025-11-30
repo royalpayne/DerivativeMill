@@ -5432,7 +5432,7 @@ class DerivativeMill(QMainWindow):
             return
 
         try:
-            from ocr.ocr_extract import extract_from_scanned_invoice
+            from ocr.ocr_extract import extract_from_scanned_invoice, preview_extraction
             from ocr.field_detector import SupplierTemplate
 
             # Get supplier name and patterns
@@ -5448,17 +5448,47 @@ class DerivativeMill(QMainWindow):
             # Create temporary template with current patterns
             template = SupplierTemplate(supplier_name, patterns=patterns)
 
-            # Run OCR
-            try:
-                df, metadata = extract_from_scanned_invoice(self.ocr_test_pdf, supplier_name)
-                raw_text = metadata.get('raw_text', '')
-            except Exception:
-                # Fallback to pdfplumber extraction
-                df = self.extract_pdf_table(self.ocr_test_pdf)
-                raw_text = "Digital PDF - using pdfplumber"
+            # First, check if we can extract text from the PDF
+            preview = preview_extraction(self.ocr_test_pdf, max_lines=50)
+            raw_text = preview.get('text_preview', '')
+
+            if not raw_text or 'Error' in raw_text:
+                # Try OCR extraction
+                try:
+                    df, metadata = extract_from_scanned_invoice(self.ocr_test_pdf, supplier_name)
+                    raw_text = metadata.get('raw_text', '')
+                except Exception as ocr_error:
+                    results = f"=== OCR Test Results ===\n\n"
+                    results += f"PDF: {Path(self.ocr_test_pdf).name}\n"
+                    results += f"Supplier: {supplier_name}\n\n"
+                    results += "=== Error ===\n"
+                    results += f"Could not extract text from PDF.\n\n"
+                    results += f"Details:\n{str(ocr_error)}\n\n"
+                    results += "This may be a scanned PDF without extractable text.\n"
+                    results += "Try using the Visual Pattern Trainer to manually mark\n"
+                    results += "the data elements on the PDF instead.\n"
+                    self.ocr_results_text.setPlainText(results)
+                    logger.error(f"OCR test failed: {ocr_error}")
+                    return
 
             # Extract fields using the template
-            extracted = template.extract(raw_text if raw_text != "Digital PDF - using pdfplumber" else str(df))
+            try:
+                extracted = template.extract(raw_text)
+            except Exception as extract_error:
+                results = f"=== OCR Test Results ===\n\n"
+                results += f"PDF: {Path(self.ocr_test_pdf).name}\n"
+                results += f"Supplier: {supplier_name}\n\n"
+                results += "=== Text Found ===\n"
+                results += f"{raw_text[:500]}\n\n"
+                results += "=== Pattern Extraction Error ===\n"
+                results += f"Error: {str(extract_error)}\n\n"
+                results += "Suggestion: Check your regex patterns for:\n"
+                results += "- Invalid regex syntax\n"
+                results += "- Missing capturing groups (patterns should use parentheses)\n"
+                results += "- Pattern not matching text in the PDF\n"
+                self.ocr_results_text.setPlainText(results)
+                logger.error(f"Field extraction failed: {extract_error}")
+                return
 
             # Display results
             results = f"=== OCR Test Results ===\n\n"
@@ -5467,17 +5497,22 @@ class DerivativeMill(QMainWindow):
             results += f"Rows Extracted: {len(extracted)}\n\n"
             results += "=== Extracted Data ===\n"
 
-            for idx, item in enumerate(extracted, 1):
-                results += f"\n{idx}. Part#: {item.get('part_number', 'N/A')}\n"
-                results += f"   Value: {item.get('value', 'N/A')}\n"
-                results += f"   Raw: {item.get('raw_line', '')}\n"
+            if not extracted:
+                results += "\nNo data extracted. Check your patterns against the PDF content.\n\n"
+                results += "=== Raw Text Preview ===\n"
+                results += raw_text[:1000]
+            else:
+                for idx, item in enumerate(extracted, 1):
+                    results += f"\n{idx}. Part#: {item.get('part_number', 'N/A')}\n"
+                    results += f"   Value: {item.get('value', 'N/A')}\n"
+                    results += f"   Raw: {item.get('raw_line', '')}\n"
 
             self.ocr_results_text.setPlainText(results)
             logger.info(f"OCR test completed: {len(extracted)} items extracted")
 
         except Exception as e:
             logger.error(f"OCR test failed: {e}")
-            self.ocr_results_text.setPlainText(f"Error: {str(e)}")
+            self.ocr_results_text.setPlainText(f"Unexpected Error: {str(e)}")
 
     def open_visual_pattern_trainer(self):
         """Open visual PDF pattern training dialog"""
