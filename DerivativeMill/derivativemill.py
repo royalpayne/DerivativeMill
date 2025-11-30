@@ -37,6 +37,13 @@ from PyQt5.QtSvg import QSvgRenderer
 from openpyxl.styles import Font as ExcelFont, Alignment
 import tempfile
 
+# OCR support for scanned invoices
+try:
+    from ocr import is_scanned_pdf, extract_from_scanned_invoice
+    OCR_AVAILABLE = True
+except ImportError:
+    OCR_AVAILABLE = False
+
 # ----------------------------------------------------------------------
 # Global Logger
 # ----------------------------------------------------------------------
@@ -2691,7 +2698,26 @@ class DerivativeMill(QMainWindow):
             file_ext = Path(path).suffix.lower()
 
             if file_ext == '.pdf':
-                df = self.extract_pdf_table(path)
+                # Check if PDF is scanned (image-based) or digital (text-based)
+                if OCR_AVAILABLE and is_scanned_pdf(path):
+                    # Scanned PDF: use OCR extraction
+                    logger.info(f"Scanned PDF detected: {Path(path).name} - using OCR")
+                    df, metadata = extract_from_scanned_invoice(path)
+
+                    # Show OCR confidence and warnings to user
+                    confidence = metadata.get('success', False)
+                    if confidence:
+                        QMessageBox.information(
+                            self,
+                            "OCR Extraction Complete",
+                            f"Successfully extracted {len(df)} rows from scanned invoice.\n\n"
+                            f"Note: Please review the extracted data carefully as OCR accuracy may vary.\n"
+                            f"You can adjust the column mappings before processing."
+                        )
+                else:
+                    # Digital PDF: use pdfplumber table extraction
+                    df = self.extract_pdf_table(path)
+                    logger.info(f"Digital PDF detected: {Path(path).name} - using table extraction")
             elif file_ext == '.xlsx':
                 df = pd.read_excel(path, nrows=0, dtype=str)
             else:  # .csv
