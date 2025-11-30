@@ -4548,6 +4548,7 @@ class DerivativeMill(QMainWindow):
         supplier_name_layout.addWidget(QLabel("New Name:"))
         self.ocr_new_supplier_input = QLineEdit()
         self.ocr_new_supplier_input.setPlaceholderText("e.g., ACME_CORP")
+        self.ocr_new_supplier_input.setEnabled(True)  # Enabled by default for creating new templates
         supplier_name_layout.addWidget(self.ocr_new_supplier_input)
         supplier_layout.addLayout(supplier_name_layout)
 
