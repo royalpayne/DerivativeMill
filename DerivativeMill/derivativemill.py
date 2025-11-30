@@ -383,6 +383,139 @@ class FileDropZone(QLabel):
 
 
 # ----------------------------------------------------------------------
+# VISUAL PDF PATTERN TRAINER
+# ----------------------------------------------------------------------
+class PDFPatternTrainerDialog(QDialog):
+    """Interactive PDF viewer for visual OCR pattern training"""
+
+    def __init__(self, pdf_path, parent=None):
+        super().__init__(parent)
+        self.pdf_path = pdf_path
+        self.setWindowTitle(f"Visual Pattern Trainer - {Path(pdf_path).name}")
+        self.resize(1200, 800)
+
+        layout = QVBoxLayout(self)
+
+        # Instructions
+        instructions = QLabel(
+            "Click and drag to select data elements on the invoice.\n"
+            "Selected text will be extracted. Use this to understand your invoice format."
+        )
+        instructions.setWordWrap(True)
+        instructions.setStyleSheet("background: #f0f0f0; padding: 10px; border-radius: 3px;")
+        layout.addWidget(instructions)
+
+        # PDF display
+        try:
+            import pdfplumber
+            with pdfplumber.open(pdf_path) as pdf:
+                # Get first page
+                page = pdf.pages[0]
+                page_height = page.height
+                page_width = page.width
+
+                # Render page to image
+                import io
+                from PIL import Image
+                pil_image = page.to_image().original
+
+                # Convert to QPixmap
+                image_data = io.BytesIO()
+                pil_image.save(image_data, format='PNG')
+                image_data.seek(0)
+
+                self.pixmap = QPixmap()
+                self.pixmap.loadFromData(image_data.read())
+
+                # Scale to fit window
+                self.pixmap = self.pixmap.scaledToWidth(900, Qt.SmoothTransformation)
+
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Could not load PDF: {str(e)}")
+            self.pixmap = QPixmap()
+
+        # PDF Image label with selection capability
+        self.pdf_label = QLabel()
+        self.pdf_label.setPixmap(self.pixmap)
+        self.pdf_label.setAlignment(Qt.AlignCenter)
+        self.pdf_label.setStyleSheet("border: 1px solid #ccc; background: white;")
+
+        scroll = QScrollArea()
+        scroll.setWidget(self.pdf_label)
+        scroll.setWidgetResizable(True)
+        layout.addWidget(scroll, 1)
+
+        # Selected text display
+        selected_group = QGroupBox("Selected Text from PDF")
+        selected_layout = QVBoxLayout()
+        self.selected_text = QPlainTextEdit()
+        self.selected_text.setReadOnly(True)
+        self.selected_text.setMaximumHeight(100)
+        selected_layout.addWidget(self.selected_text)
+        selected_group.setLayout(selected_layout)
+        layout.addWidget(selected_group)
+
+        # Instructions for pattern creation
+        pattern_instructions = QLabel(
+            "<b>How to use:</b><br>"
+            "1. Look at your invoice and identify repeating patterns<br>"
+            "2. For Part Numbers: Select one complete part number from the data<br>"
+            "3. For Prices: Select one price value<br>"
+            "4. Study the selected text to understand the format<br>"
+            "5. Use this information to create regex patterns<br>"
+            "<br>"
+            "<b>Example:</b> If part numbers look like 'ABC-123' or 'XYZ-456',"
+            " the pattern might be: [A-Z]{{3}}-[0-9]{{3}}"
+        )
+        pattern_instructions.setWordWrap(True)
+        pattern_instructions.setStyleSheet("background: #fffbea; padding: 10px; border-radius: 3px; font-size: 9pt;")
+        layout.addWidget(pattern_instructions)
+
+        # Buttons
+        btn_layout = QHBoxLayout()
+        btn_close = QPushButton("Close")
+        btn_close.clicked.connect(self.close)
+        btn_layout.addStretch()
+        btn_layout.addWidget(btn_close)
+        layout.addLayout(btn_layout)
+
+        # Enable text selection
+        self.setup_selection()
+
+    def setup_selection(self):
+        """Setup mouse selection on PDF"""
+        self.selection_start = None
+        self.selection_end = None
+        self.pdf_label.mousePressEvent = self.on_mouse_press
+        self.pdf_label.mouseMoveEvent = self.on_mouse_move
+        self.pdf_label.mouseReleaseEvent = self.on_mouse_release
+
+    def on_mouse_press(self, event):
+        self.selection_start = event.pos()
+
+    def on_mouse_move(self, event):
+        # Could add visual feedback here (draw rectangle)
+        pass
+
+    def on_mouse_release(self, event):
+        if self.selection_start:
+            # Simple extraction: get OCR text from PDF and show a sample
+            try:
+                import pdfplumber
+                with pdfplumber.open(self.pdf_path) as pdf:
+                    page = pdf.pages[0]
+                    text = page.extract_text()
+
+                    # Show extracted text for analysis
+                    self.selected_text.setPlainText(
+                        "Invoice Text (first 500 characters):\n\n" + text[:500] + "\n...\n\n"
+                        "Use this to understand your invoice format and create patterns.\n"
+                        "Look for repeating text patterns that mark field boundaries."
+                    )
+            except Exception as e:
+                self.selected_text.setPlainText(f"Error: {str(e)}")
+
+# ----------------------------------------------------------------------
 # MAIN APPLICATION — FINAL DESIGN
 # ----------------------------------------------------------------------
 from PyQt5.QtGui import QColor
@@ -4592,6 +4725,12 @@ class DerivativeMill(QMainWindow):
         test_extract_btn.clicked.connect(self.run_ocr_test)
         test_layout.addWidget(test_extract_btn)
 
+        # Visual pattern training button
+        visual_btn = QPushButton("Visual Pattern Training")
+        visual_btn.setStyleSheet(self.get_button_style("warning"))
+        visual_btn.clicked.connect(self.open_visual_pattern_trainer)
+        test_layout.addWidget(visual_btn)
+
         test_group.setLayout(test_layout)
         left_layout.addWidget(test_group)
 
@@ -4980,6 +5119,19 @@ class DerivativeMill(QMainWindow):
         except Exception as e:
             logger.error(f"OCR test failed: {e}")
             self.ocr_results_text.setPlainText(f"Error: {str(e)}")
+
+    def open_visual_pattern_trainer(self):
+        """Open visual PDF pattern training dialog"""
+        if not hasattr(self, 'ocr_test_pdf'):
+            QMessageBox.warning(self, "No File", "Please select a PDF file first using 'Select PDF to Test'")
+            return
+
+        try:
+            dialog = PDFPatternTrainerDialog(self.ocr_test_pdf, self)
+            dialog.exec_()
+        except Exception as e:
+            logger.error(f"Error opening visual trainer: {e}")
+            QMessageBox.critical(self, "Error", f"Could not open visual trainer:\n{str(e)}")
 
     def setup_guide_tab(self):
         layout = QVBoxLayout(self.tab_guide)
