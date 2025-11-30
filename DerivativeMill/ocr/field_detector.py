@@ -106,28 +106,37 @@ class SupplierTemplate:
         """Extract part number from a line of text."""
         # Look for patterns like "ABC-123" or "SKU12345"
         pattern = self.patterns['part_number_value']
-        match = re.search(pattern, text)
-
-        if match:
-            return match.group(1).strip()
+        try:
+            match = re.search(pattern, text)
+            if match:
+                # Handle patterns with or without capturing groups
+                if match.groups():
+                    return match.group(1).strip()
+                else:
+                    return match.group(0).strip()
+        except (IndexError, AttributeError):
+            pass
 
         return None
 
     def _extract_value(self, text):
         """Extract numeric value (price/amount) from text."""
         pattern = self.patterns['value_pattern']
-        matches = re.findall(pattern, text)
+        try:
+            matches = re.findall(pattern, text)
 
-        if matches:
-            # Return the first numeric value found
-            value_str = matches[0]
-            # Remove commas and spaces
-            value_str = value_str.replace(',', '').replace(' ', '')
+            if matches:
+                # Return the first numeric value found
+                value_str = matches[0]
+                # Remove commas and spaces
+                value_str = value_str.replace(',', '').replace(' ', '')
 
-            try:
-                return float(value_str)
-            except ValueError:
-                return None
+                try:
+                    return float(value_str)
+                except ValueError:
+                    return None
+        except (IndexError, AttributeError):
+            return None
 
         return None
 
