@@ -10,7 +10,7 @@ Provides functionality to:
 
 from .scanned_pdf import is_scanned_pdf, pdf_to_images
 from .field_detector import extract_fields_from_text, SupplierTemplate
-from .ocr_extract import extract_from_scanned_invoice
+from .ocr_extract import extract_from_scanned_invoice, extract_with_confidence, preview_extraction
 
 __all__ = [
     'is_scanned_pdf',
@@ -18,4 +18,6 @@ __all__ = [
     'extract_fields_from_text',
     'SupplierTemplate',
     'extract_from_scanned_invoice',
+    'extract_with_confidence',
+    'preview_extraction',
 ]
