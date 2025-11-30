@@ -868,6 +868,41 @@ class DerivativeMill(QMainWindow):
         actions_group.setLayout(actions_layout)
         left_side.addWidget(actions_group)
 
+        # BATCH PROCESSING GROUP — process multiple PDFs from supplier folders
+        batch_group = QGroupBox("Batch Invoice Processing")
+        batch_layout = QVBoxLayout()
+
+        # Supplier folder selector
+        supplier_selector_layout = QHBoxLayout()
+        supplier_selector_layout.addWidget(QLabel("Supplier:"))
+        self.batch_supplier_combo = QComboBox()
+        self.batch_supplier_combo.setMinimumWidth(150)
+        supplier_selector_layout.addWidget(self.batch_supplier_combo)
+        supplier_selector_layout.addStretch()
+        batch_layout.addLayout(supplier_selector_layout)
+
+        # Process button
+        self.batch_process_btn = QPushButton("Process All PDFs")
+        self.batch_process_btn.setFixedHeight(35)
+        self.batch_process_btn.setStyleSheet(self.get_button_style("success"))
+        self.batch_process_btn.clicked.connect(self.start_batch_processing)
+        batch_layout.addWidget(self.batch_process_btn)
+
+        # Progress bar (hidden by default)
+        self.batch_progress = QProgressBar()
+        self.batch_progress.setVisible(False)
+        self.batch_progress.setMaximum(100)
+        batch_layout.addWidget(self.batch_progress)
+
+        # Status label
+        self.batch_status_label = QLabel("Ready for batch processing")
+        self.batch_status_label.setWordWrap(True)
+        self.batch_status_label.setStyleSheet("font-size: 8pt; color: #666666;")
+        batch_layout.addWidget(self.batch_status_label)
+
+        batch_group.setLayout(batch_layout)
+        left_side.addWidget(batch_group)
+
         # EXPORTED FILES GROUP — shows recent exports
         exports_group = QGroupBox("Exported Files")
         exports_layout = QVBoxLayout()
@@ -973,6 +1008,9 @@ class DerivativeMill(QMainWindow):
 
         # Ensure input fields are enabled on startup
         self._enable_input_fields()
+
+        # Refresh supplier folders for batch processing
+        self.refresh_supplier_combo()
 
         # Create a timer to continuously force fields to be editable
         # This works around whatever is locking the fields
@@ -2992,6 +3030,114 @@ class DerivativeMill(QMainWindow):
         df = pd.DataFrame(data)
         logger.info(f"AROMATE invoice extraction successful: {len(df)} items extracted")
         return df
+
+    def get_supplier_folders(self):
+        """Get list of supplier folders in Input directory"""
+        suppliers = []
+        try:
+            if INPUT_DIR.exists():
+                for folder in INPUT_DIR.iterdir():
+                    if folder.is_dir() and folder.name != "Processed":
+                        suppliers.append(folder.name)
+        except Exception as e:
+            logger.error(f"Error scanning supplier folders: {e}")
+        return sorted(suppliers)
+
+    def refresh_supplier_combo(self):
+        """Refresh the supplier dropdown in batch processing section"""
+        if hasattr(self, 'batch_supplier_combo'):
+            current = self.batch_supplier_combo.currentText()
+            self.batch_supplier_combo.blockSignals(True)
+            self.batch_supplier_combo.clear()
+            self.batch_supplier_combo.addItem("-- Select Supplier --")
+            suppliers = self.get_supplier_folders()
+            for supplier in suppliers:
+                self.batch_supplier_combo.addItem(supplier)
+            # Try to restore previous selection
+            idx = self.batch_supplier_combo.findText(current)
+            if idx >= 0:
+                self.batch_supplier_combo.setCurrentIndex(idx)
+            self.batch_supplier_combo.blockSignals(False)
+
+    def start_batch_processing(self):
+        """Start batch processing of PDFs from selected supplier folder"""
+        supplier = self.batch_supplier_combo.currentText()
+
+        if supplier == "-- Select Supplier --" or not supplier:
+            QMessageBox.warning(self, "No Supplier Selected", "Please select a supplier folder to process")
+            return
+
+        supplier_folder = INPUT_DIR / supplier
+        if not supplier_folder.exists():
+            QMessageBox.warning(self, "Folder Not Found", f"Supplier folder not found: {supplier}")
+            return
+
+        # Find all PDF files
+        pdf_files = list(supplier_folder.glob("*.pdf"))
+
+        if not pdf_files:
+            QMessageBox.information(self, "No PDFs Found", f"No PDF files found in {supplier} folder")
+            return
+
+        # Show progress bar and update status
+        self.batch_progress.setVisible(True)
+        self.batch_progress.setValue(0)
+        self.batch_progress.setMaximum(len(pdf_files))
+        self.batch_status_label.setText(f"Processing {len(pdf_files)} PDFs from {supplier}...")
+        QApplication.processEvents()
+
+        # Process each PDF
+        output_files = []
+        errors = []
+
+        for idx, pdf_file in enumerate(pdf_files):
+            try:
+                # Extract data from PDF
+                if OCR_AVAILABLE and is_scanned_pdf(str(pdf_file)):
+                    logger.info(f"Scanned PDF detected: {pdf_file.name}")
+                    df, metadata = extract_from_scanned_invoice(str(pdf_file))
+                else:
+                    logger.info(f"Digital PDF detected: {pdf_file.name}")
+                    df = self.extract_pdf_table(str(pdf_file))
+
+                # Save to individual CSV file with timestamp
+                timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                pdf_name = pdf_file.stem
+                output_file = OUTPUT_DIR / f"{pdf_name}_extracted_{timestamp}.csv"
+                df.to_csv(output_file, index=False)
+                output_files.append(output_file)
+
+                # Move PDF to processed folder
+                self.move_pdf_to_processed(str(pdf_file))
+
+                logger.info(f"Processed {pdf_file.name}: extracted {len(df)} rows")
+
+            except Exception as e:
+                errors.append((pdf_file.name, str(e)))
+                logger.error(f"Error processing {pdf_file.name}: {e}")
+
+            # Update progress
+            self.batch_progress.setValue(idx + 1)
+            QApplication.processEvents()
+
+        # Show completion message
+        self.batch_progress.setVisible(False)
+
+        if output_files:
+            file_list = "\n".join([f"  • {f.name}" for f in output_files])
+            message = f"Batch processing complete!\n\n"
+            message += f"✓ {len(output_files)} files processed\n"
+            if errors:
+                message += f"⚠ {len(errors)} files skipped\n"
+            message += f"\nOutput files:\n{file_list}"
+            QMessageBox.information(self, "Batch Processing Complete", message)
+            self.batch_status_label.setText(f"✓ Processed {len(output_files)} PDFs from {supplier}")
+        else:
+            QMessageBox.warning(self, "No Files Processed", f"Could not extract data from any PDFs\n\nErrors: {len(errors)}")
+            self.batch_status_label.setText(f"✗ Failed to process PDFs from {supplier}")
+
+        # Refresh exported files list
+        self.refresh_exported_files()
 
     def on_shipment_drop(self, field_key, column_name):
         for k, t in self.shipment_targets.items():
