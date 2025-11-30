@@ -385,6 +385,53 @@ class FileDropZone(QLabel):
 # ----------------------------------------------------------------------
 # VISUAL PDF PATTERN TRAINER WITH DRAWING CANVAS
 # ----------------------------------------------------------------------
+class ElementNameDialog(QDialog):
+    """Custom dialog for naming elements with proper text visibility"""
+
+    def __init__(self, title="Name Element", prompt="Enter name:", default_text="", parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setModal(True)
+        self.setMinimumWidth(350)
+
+        layout = QVBoxLayout(self)
+
+        # Label
+        label = QLabel(prompt)
+        layout.addWidget(label)
+
+        # Text input
+        self.text_input = QLineEdit()
+        self.text_input.setText(default_text)
+        self.text_input.setStyleSheet("""
+            QLineEdit {
+                padding: 5px;
+                border: 1px solid #ccc;
+                border-radius: 3px;
+                background-color: white;
+                color: black;
+                selection-background-color: #0078d7;
+                selection-color: white;
+            }
+        """)
+        layout.addWidget(self.text_input)
+
+        # Buttons
+        button_layout = QHBoxLayout()
+        ok_btn = QPushButton("OK")
+        cancel_btn = QPushButton("Cancel")
+        button_layout.addWidget(ok_btn)
+        button_layout.addWidget(cancel_btn)
+        layout.addLayout(button_layout)
+
+        ok_btn.clicked.connect(self.accept)
+        cancel_btn.clicked.connect(self.reject)
+
+    def get_text(self):
+        """Return the entered text"""
+        return self.text_input.text()
+
+
 class PDFDrawingCanvas(QLabel):
     """Custom label that allows drawing rectangles and naming elements"""
 
@@ -526,14 +573,16 @@ class PDFDrawingCanvas(QLabel):
 
         if self.drawing and self.current_rect and self.current_rect.width() > 10 and self.current_rect.height() > 10:
             # Ask user to name this element
-            name, ok = QInputDialog.getText(
-                self, "Name Element", "Enter name for this data element:\n(e.g., Part Number, Price, Qty)",
-                QLineEdit.Normal, ""
+            dialog = ElementNameDialog(
+                title="Name Element",
+                prompt="Enter name for this data element:\n(e.g., Part Number, Price, Qty)",
+                parent=self
             )
-
-            if ok and name:
-                self.annotations.append((self.current_rect, name))
-                self.redraw()
+            if dialog.exec_() == QDialog.Accepted:
+                name = dialog.get_text()
+                if name:
+                    self.annotations.append((self.current_rect, name))
+                    self.redraw()
 
         self.drawing = False
         self.current_rect = None
@@ -616,14 +665,17 @@ class PDFDrawingCanvas(QLabel):
         """Show dialog to rename an element"""
         rect, old_name = self.annotations[idx]
 
-        name, ok = QInputDialog.getText(
-            self, "Rename Element", "Enter new name:",
-            QLineEdit.Normal, old_name
+        dialog = ElementNameDialog(
+            title="Rename Element",
+            prompt="Enter new name:",
+            default_text=old_name,
+            parent=self
         )
-
-        if ok and name:
-            self.annotations[idx] = (rect, name)
-            self.redraw()
+        if dialog.exec_() == QDialog.Accepted:
+            name = dialog.get_text()
+            if name:
+                self.annotations[idx] = (rect, name)
+                self.redraw()
 
     def delete_annotation(self, idx):
         """Delete an annotation"""
