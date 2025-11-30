@@ -1395,6 +1395,9 @@ class DerivativeMill(QMainWindow):
         # Add tabs to main dialog layout
         layout.addWidget(tabs)
         dialog.exec_()
+
+        # After Settings dialog closes, refresh supplier combo in case suppliers were added/removed
+        self.refresh_supplier_combo()
     
     def apply_theme(self, theme_name):
         """Apply the selected theme to the application"""
