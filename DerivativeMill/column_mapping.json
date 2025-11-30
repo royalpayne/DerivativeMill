@@ -1,6 +1,7 @@
 {
-  "part_number": "Item #",
-  "hts_code": "FINAL HTS",
-  "mid": "MID",
-  "steel_ratio": "SEC 232 %"
+  "client_code": "Customer ID",
+  "part_number": "Part Number",
+  "mid": "Manufacturer",
+  "hts_code": "Tariff No",
+  "steel_ratio": "steel_ratio"
 }

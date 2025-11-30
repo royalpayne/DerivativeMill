@@ -2629,7 +2629,7 @@ class DerivativeMill(QMainWindow):
         btn_delete = QPushButton("Delete Profile")
         btn_delete.setStyleSheet(self.get_button_style("danger"))
         btn_delete.clicked.connect(self.delete_mapping_profile)
-        btn_load_csv = QPushButton("Load CSV to Map")
+        btn_load_csv = QPushButton("Load Invoice File")
         btn_load_csv.setStyleSheet(self.get_button_style("info"))
         btn_load_csv.clicked.connect(self.load_csv_for_shipment_mapping)
         btn_reset = QPushButton("Reset Current")
@@ -2679,27 +2679,100 @@ class DerivativeMill(QMainWindow):
         self.tab_shipment_map.setLayout(layout)
 
     def load_csv_for_shipment_mapping(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Select CSV/Excel", str(INPUT_DIR), "CSV/Excel Files (*.csv *.xlsx)")
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Invoice File",
+            str(INPUT_DIR),
+            "All Supported (*.csv *.xlsx *.pdf);;CSV Files (*.csv);;Excel Files (*.xlsx);;PDF Files (*.pdf)"
+        )
         if not path: return
         try:
-            # Handle both CSV and Excel files
-            if path.lower().endswith('.xlsx'):
+            # Determine file type and extract data accordingly
+            file_ext = Path(path).suffix.lower()
+
+            if file_ext == '.pdf':
+                df = self.extract_pdf_table(path)
+            elif file_ext == '.xlsx':
                 df = pd.read_excel(path, nrows=0, dtype=str)
-            else:
+            else:  # .csv
                 df = pd.read_csv(path, nrows=0, dtype=str)
+
             cols = list(df.columns)
+
+            # Clear existing labels
             for label in self.shipment_drag_labels:
                 label.setParent(None)
             self.shipment_drag_labels = []
+
+            # Add new labels from extracted columns
             left_layout = self.shipment_widget.layout().itemAt(0).widget().layout()
             for col in cols:
                 lbl = DraggableLabel(col)
                 left_layout.insertWidget(left_layout.count()-1, lbl)
                 self.shipment_drag_labels.append(lbl)
-            logger.info(f"Shipment file loaded for mapping: {Path(path).name}")
-            self.status.setText(f"Shipment file loaded: {Path(path).name}")
+
+            # Determine file type for status message
+            file_type = "PDF" if file_ext == '.pdf' else ("Excel" if file_ext == '.xlsx' else "CSV")
+            logger.info(f"{file_type} file loaded for mapping: {Path(path).name}")
+            self.status.setText(f"{file_type} file loaded: {Path(path).name}")
+
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Cannot read file:\n{e}")
+            logger.error(f"File loading failed: {str(e)}")
+
+    def extract_pdf_table(self, pdf_path):
+        """
+        Extract tabular data from PDF invoices using pdfplumber.
+
+        Attempts to find and extract the first valid table from the PDF.
+        Returns a DataFrame with the extracted data.
+
+        Args:
+            pdf_path (str): Path to PDF file
+
+        Returns:
+            pd.DataFrame: DataFrame with extracted table data
+
+        Raises:
+            Exception: If PDF cannot be processed or no table found
+        """
+        try:
+            import pdfplumber
+        except ImportError:
+            raise Exception("PDF support requires: pip install pdfplumber")
+
+        try:
+            with pdfplumber.open(pdf_path) as pdf:
+                if len(pdf.pages) == 0:
+                    raise ValueError("PDF is empty")
+
+                # Iterate through pages to find a valid table
+                for page_idx, page in enumerate(pdf.pages):
+                    tables = page.extract_tables()
+
+                    if tables and len(tables) > 0:
+                        # Use the largest table (by row count)
+                        table = max(tables, key=len)
+
+                        if len(table) > 1:  # Need headers + at least 1 data row
+                            # Convert to DataFrame
+                            headers = table[0]
+                            data = table[1:]
+
+                            # Filter out completely empty rows
+                            data = [row for row in data if any(cell for cell in row)]
+
+                            if len(data) > 0:
+                                df = pd.DataFrame(data, columns=headers)
+                                logger.info(f"PDF table extracted from page {page_idx + 1}: {df.shape}")
+                                return df
+
+                raise ValueError("No valid table found in PDF")
+
+        except ValueError as ve:
+            raise Exception(f"PDF extraction error: {str(ve)}")
+        except Exception as e:
+            raise Exception(f"PDF processing error: {str(e)}")
 
     def on_shipment_drop(self, field_key, column_name):
         for k, t in self.shipment_targets.items():
@@ -3799,8 +3872,13 @@ class DerivativeMill(QMainWindow):
         <h3>Step 3: Create Invoice Mapping Profiles</h3>
         <div class="workflow">
             <b>Location:</b> <span class="button-text">Invoice Mapping Profiles</span> tab<br>
-            <div class="workflow-step"><span class="button-text">Load CSV to Map</span> - Select a sample invoice CSV from your supplier</div>
-            <div class="workflow-step">Drag CSV columns to required fields:
+            <div class="workflow-step"><span class="button-text">Load Invoice File</span> - Select CSV, Excel, or PDF from your supplier
+                <ul style="margin-top: 8px;">
+                    <li><b>CSV/Excel:</b> Auto-detects column headers</li>
+                    <li><b>PDF:</b> Automatically extracts tables (uses the largest table if multiple)</li>
+                </ul>
+            </div>
+            <div class="workflow-step">Drag invoice columns to required fields:
                 <ul style="margin-top: 8px;">
                     <li><span class="key-field">Part Number</span> - Maps to your parts database</li>
                     <li><span class="key-field">Value USD</span> - Invoice line item value</li>
@@ -3809,7 +3887,7 @@ class DerivativeMill(QMainWindow):
             <div class="workflow-step"><span class="button-text">Save Current Mapping As...</span> - Save with supplier name</div>
         </div>
         <div class="note">
-            <b>💡 Note:</b> Create one profile per supplier for quick format switching.
+            <b>💡 Note:</b> Create one profile per supplier for quick format switching. PDF support automatically extracts tables from invoices.
         </div>
 
         <h2>📊 Processing Invoices (Main Workflow)</h2>
