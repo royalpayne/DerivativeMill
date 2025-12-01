@@ -9,17 +9,17 @@
     "description": ""
   },
   "field_positions": {
-    "PART NUMBER": [
+    "part number": [
       "MSMBX-1118-C-RD",
       "MSMBX-1128-C-RD",
       "MSMBX-1118-C-RD",
-      "MSCB-74VG"
+      "Ms2001-ST/S"
     ],
-    "PART VALUE": [
+    "part value": [
       "992.16",
-      "2,976.48 ",
+      "2976.48",
       "992.16",
-      "840.36"
+      "1175.80"
     ]
   }
 }
