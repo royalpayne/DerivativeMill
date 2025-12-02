@@ -2,6 +2,8 @@
 
 Step-by-step instructions for building the Windows 11 installation package.
 
+⚠️ **Important**: Only include production files in the distribution. The `_Archive/` directory (containing old development files) is automatically excluded from the build.
+
 ## Prerequisites
 
 1. **Windows 11 PC** with Python 3.8+ installed
@@ -167,6 +169,13 @@ pip install PyInstaller wheel
 - Main application: `DerivativeMill/derivativemill.py`
 - Spec file: `DerivativeMill_Win11_Install/scripts/build_windows.spec`
 - Requirements: `requirements.txt`
+- Documentation: `README.md`, `QUICKSTART.md`, `SETUP.md`
+
+**Explicitly Excluded from Distribution:**
+- `_Archive/` - Old development files (not included in package)
+- `venv/`, `build/`, `dist/` - Build artifacts (not included)
+- `Input/`, `Output/`, `ProcessedPDFs/` - User data (recreated by app)
+- Test files, temporary files, user-specific config
 
 **Output Files:**
 - Executable: `dist/DerivativeMill.exe`
