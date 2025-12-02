@@ -73,10 +73,12 @@ Thumbs.db
 *.dmg
 *.app/
 
-# PyInstaller
+# PyInstaller (but keep build config files)
 dist/
 build/
-*.spec
+# *.spec  - Commented out to allow build_*.spec files
+__pycache__/
+*.pyc
 
 # IDE Configuration
 .vscode/settings.json
