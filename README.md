@@ -16,6 +16,16 @@ DerivativeMill is a professional-grade application for processing customs invoic
 
 ## Quick Start
 
+### Windows 11 Users
+
+**For Windows 11 installation, see [DerivativeMill_Win11_Install/README.md](DerivativeMill_Win11_Install/README.md)**
+
+The Windows installer package includes:
+- Automated build scripts (batch and PowerShell)
+- Portable standalone executable
+- Professional installer
+- Complete installation documentation
+
 ### Minimum Requirements
 - Python 3.8 or higher
 - 4GB RAM, 500MB disk space
