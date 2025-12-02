@@ -1,8 +1,15 @@
+# DerivativeMill Application Requirements
+# Compatible with Python 3.8+
+
+# Core dependencies (cross-platform)
 PyQt5>=5.15.0
 pandas>=1.3.0
 openpyxl>=3.0.0
 pdfplumber>=0.10.0
-pytesseract>=0.3.10
-pdf2image>=1.16.0
-pillow>=9.0.0
+Pillow>=9.0.0
+
+# Platform-specific (Windows only)
 pywin32>=300; sys_platform == 'win32'
+
+# Optional: For creating executable bundles
+# PyInstaller>=6.0.0

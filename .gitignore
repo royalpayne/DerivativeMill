@@ -1,21 +1,32 @@
+# Virtual Environments
+venv/
+env/
+ENV/
+.venv
+.env
+
 # Python
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
-*.egg-info/
-dist/
 build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
 *.egg
-
-# PyInstaller
-*.spec
-
-# Virtual Environment
-venv/
-.venv/
-env/
+MANIFEST
 
 # IDE
 .vscode/
@@ -23,28 +34,58 @@ env/
 *.swp
 *.swo
 *~
-
-# OS
 .DS_Store
-Thumbs.db
-desktop.ini
+.project
+.pydevproject
+.settings/
+*.sublime-project
+*.sublime-workspace
 
-# Project specific
-Input/*
-!Input/.gitkeep
-Output/*
-!Output/.gitkeep
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
 
-# Logs
-*.log
-logs/
-
-# Database
-*.db
-*.sqlite
-*.sqlite3
+# Application data (local to installation)
+Input/
+Output/
+ProcessedPDFs/
+Resources/derivativemill.db
+*.csv
+*.xlsx
 
 # Temporary files
 *.tmp
+*.temp
+*.log
 *.bak
-*.orig
+*.backup
+*~
+
+# OS specific
+.DS_Store
+Thumbs.db
+.directory
+
+# Build artifacts
+*.msi
+*.exe
+*.dmg
+*.app/
+
+# PyInstaller
+dist/
+build/
+*.spec
+
+# IDE Configuration
+.vscode/settings.json
+.idea/workspace.xml
+
+# Database backups
+*.db-shm
+*.db-wal
+
+# User-specific settings (if saved locally)
+column_mapping.json
+shipment_mapping.json
