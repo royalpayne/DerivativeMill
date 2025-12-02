@@ -80,10 +80,7 @@ copy /Y "README.md" "dist\DerivativeMill\"
 copy /Y "QUICKSTART.md" "dist\DerivativeMill\"
 copy /Y "SETUP.md" "dist\DerivativeMill\"
 
-REM Create installation directories in the package
-mkdir "dist\DerivativeMill\Input"
-mkdir "dist\DerivativeMill\Output"
-mkdir "dist\DerivativeMill\ProcessedPDFs"
+REM Note: Data directories (Input, Output, ProcessedPDFs) are created automatically by the application on first run
 
 REM Create a batch file launcher for convenience
 (

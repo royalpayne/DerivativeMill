@@ -121,10 +121,8 @@ try {
     Copy-Item -Path "QUICKSTART.md" -Destination "$distDir\" -Force
     Copy-Item -Path "SETUP.md" -Destination "$distDir\" -Force
 
-    # Create installation directories
-    @("Input", "Output", "ProcessedPDFs") | ForEach-Object {
-        New-Item -ItemType Directory -Path "$distDir\$_" -Force | Out-Null
-    }
+    # Note: Data directories (Input, Output, ProcessedPDFs) are created automatically by the application on first run
+    Write-Success "Data directories will be created automatically on first run"
 
     # Create batch file launcher - simplified to avoid parsing issues
     $batContent = @'
