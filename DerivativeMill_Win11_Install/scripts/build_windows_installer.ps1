@@ -126,18 +126,18 @@ try {
         New-Item -ItemType Directory -Path "$distDir\$_" -Force | Out-Null
     }
 
-    # Create batch file launcher
-    $batContent = @"
+    # Create batch file launcher - simplified to avoid parsing issues
+    $batContent = @'
 @echo off
 setlocal
 cd /d "%~dp0"
 start "" "DerivativeMill.exe"
 endlocal
-"@
+'@
     Set-Content -Path "$distDir\Run_DerivativeMill.bat" -Value $batContent -Encoding ASCII
 
-    # Create INSTALL.bat
-    $installContent = @"
+    # Create INSTALL.bat - simplified version
+    $installContent = @'
 @echo off
 setlocal
 title DerivativeMill Setup
@@ -158,21 +158,16 @@ echo.
 echo Creating desktop shortcut...
 echo.
 
-REM Create desktop shortcut
-powershell -Command ^
-  "`$WshShell = New-Object -ComObject WScript.Shell; " ^
-  "`$Shortcut = `$WshShell.CreateShortcut([Environment]::GetFolderPath('Desktop') + '\DerivativeMill.lnk'); " ^
-  "`$Shortcut.TargetPath = '%~dp0DerivativeMill.exe'; " ^
-  "`$Shortcut.WorkingDirectory = '%~dp0'; " ^
-  "`$Shortcut.Save()"
+REM Create desktop shortcut using VBScript approach
+powershell -NoProfile -Command "Add-Type -AssemblyName System.Windows.Forms; $desktop = [Environment]::GetFolderPath('Desktop'); $WshShell = New-Object -ComObject WScript.Shell; $shortcut = $WshShell.CreateShortcut($desktop + '\DerivativeMill.lnk'); $shortcut.TargetPath = (Get-Location).Path + '\DerivativeMill.exe'; $shortcut.WorkingDirectory = (Get-Location).Path; $shortcut.Save()"
 
-if errorlevel 1 (
+if %errorlevel% equ 0 (
+    echo.
+    echo Successfully created desktop shortcut!
+) else (
     echo.
     echo Note: Could not create desktop shortcut automatically.
     echo You can manually create one by right-clicking DerivativeMill.exe
-) else (
-    echo.
-    echo Successfully created desktop shortcut!
 )
 
 echo.
@@ -180,7 +175,7 @@ echo Installation complete. You can now run DerivativeMill.exe
 echo.
 pause
 endlocal
-"@
+'@
     Set-Content -Path "$distDir\INSTALL.bat" -Value $installContent -Encoding ASCII
 
     # Create portable ZIP package
