@@ -1723,11 +1723,11 @@ class DerivativeMill(QMainWindow):
         palette.setColor(QPalette.ToolTipText, QColor(33, 33, 33))
         palette.setColor(QPalette.Text, QColor(33, 33, 33))  # Dark grey text
         palette.setColor(QPalette.Button, QColor(70, 150, 180))  # Softer, brighter teal for buttons
-        palette.setColor(QPalette.ButtonText, QColor(255, 255, 255))  # White text on buttons
+        palette.setColor(QPalette.ButtonText, QColor(33, 33, 33))  # Dark grey text on buttons
         palette.setColor(QPalette.BrightText, QColor(255, 90, 90))  # Softer red
         palette.setColor(QPalette.Link, QColor(50, 130, 160))  # Appealing link color
         palette.setColor(QPalette.Highlight, QColor(80, 180, 210))  # Bright, appealing highlight
-        palette.setColor(QPalette.HighlightedText, QColor(255, 255, 255))  # White highlighted text
+        palette.setColor(QPalette.HighlightedText, QColor(33, 33, 33))  # Dark grey highlighted text
         return palette
 
     def get_button_style(self, button_type="default"):
