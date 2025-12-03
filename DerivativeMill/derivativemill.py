@@ -1696,7 +1696,7 @@ class DerivativeMill(QMainWindow):
         # Deep ocean blue backgrounds
         palette.setColor(QPalette.Window, QColor(28, 57, 87))  # Deep ocean blue
         palette.setColor(QPalette.WindowText, QColor(230, 245, 255))  # Light blue-white text
-        palette.setColor(QPalette.Base, QColor(52, 71, 92))  # Result preview background (#34475C)
+        palette.setColor(QPalette.Base, QColor(28, 56, 86))  # Result preview background (#1C3856)
         palette.setColor(QPalette.AlternateBase, QColor(35, 65, 95))  # Lighter ocean blue
         palette.setColor(QPalette.ToolTipBase, QColor(200, 230, 255))  # Light blue
         palette.setColor(QPalette.ToolTipText, QColor(15, 35, 55))  # Dark blue
