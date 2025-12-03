@@ -1723,7 +1723,7 @@ class DerivativeMill(QMainWindow):
         palette.setColor(QPalette.Button, QColor(224, 246, 247))  # Light cyan for buttons (#E0F6F7)
         palette.setColor(QPalette.ButtonText, QColor(33, 33, 33))  # Dark text on buttons
         palette.setColor(QPalette.Window, QColor(224, 246, 247))  # Light cyan background (#E0F6F7)
-        palette.setColor(QPalette.Base, QColor(231, 245, 250))  # Result preview background (#E7F5FA)
+        palette.setColor(QPalette.Base, QColor(239, 249, 249))  # Result preview background (#EFF9F9)
         palette.setColor(QPalette.Mid, QColor(206, 243, 245))  # Light cyan for column headers (#CEF3F5)
 
         return palette
