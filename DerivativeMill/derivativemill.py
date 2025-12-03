@@ -554,7 +554,7 @@ class DerivativeMill(QMainWindow):
         # Set font color based on theme
         dark_mode_teal_color = "#42A0BD"  # Matches enabled Process Invoice button color in dark mode
         light_mode_color = "#555555"  # Original color for light mode
-        color = dark_mode_teal_color if hasattr(self, 'current_theme') and self.current_theme in ["Fusion (Dark)", "Ocean", "Teal Professional"] else light_mode_color
+        color = dark_mode_teal_color if hasattr(self, 'current_theme') and self.current_theme in ["Fusion (Dark)", "Ocean"] else light_mode_color
         app_name.setStyleSheet(f"""
             font-size: 22px;
             font-weight: bold;
@@ -1104,7 +1104,7 @@ class DerivativeMill(QMainWindow):
             c.execute("SELECT value FROM app_config WHERE key = 'theme'")
             row = c.fetchone()
             conn.close()
-            
+
             if row:
                 saved_theme = row[0]
                 index = theme_combo.findText(saved_theme)
@@ -1353,7 +1353,7 @@ class DerivativeMill(QMainWindow):
             text_edit.setFixedHeight(45)
 
             # Apply theme-aware styling
-            is_dark = hasattr(self, 'current_theme') and self.current_theme in ["Fusion (Dark)", "Ocean", "Teal Professional"]
+            is_dark = hasattr(self, 'current_theme') and self.current_theme in ["Fusion (Dark)", "Ocean"]
             if is_dark:
                 text_edit.setStyleSheet("background:#2d2d2d; padding:5px; border:1px solid #555; color:#e0e0e0; font-family: monospace;")
             else:
@@ -1466,9 +1466,9 @@ class DerivativeMill(QMainWindow):
         """Update file label background based on current theme"""
         if not hasattr(self, 'current_theme'):
             self.current_theme = "System Default"
-        
+
         # Use white background for light themes, darker background for dark themes
-        if self.current_theme in ["Fusion (Dark)", "Ocean", "Teal Professional"]:
+        if self.current_theme in ["Fusion (Dark)", "Ocean"]:
             self.file_label.setStyleSheet("background:#2d2d2d; padding:5px; border:1px solid #555; color:#e0e0e0;")
         else:
             self.file_label.setStyleSheet("background:white; padding:5px; border:1px solid #ccc;")
@@ -1478,7 +1478,7 @@ class DerivativeMill(QMainWindow):
         if not hasattr(self, 'current_theme'):
             self.current_theme = "System Default"
         
-        is_dark = self.current_theme in ["Fusion (Dark)", "Ocean", "Teal Professional"]
+        is_dark = self.current_theme in ["Fusion (Dark)", "Ocean"]
         
         if is_dark:
             # Dark theme status bars
@@ -1508,7 +1508,7 @@ class DerivativeMill(QMainWindow):
         if not hasattr(self, 'current_theme'):
             self.current_theme = "System Default"
         
-        is_dark = self.current_theme in ["Fusion (Dark)", "Ocean", "Teal Professional"]
+        is_dark = self.current_theme in ["Fusion (Dark)", "Ocean"]
         
         if is_dark:
             # Dark theme status bars
@@ -1751,7 +1751,7 @@ class DerivativeMill(QMainWindow):
         highlight = palette.color(QPalette.Highlight)
         
         # Check if we're in a dark theme
-        is_dark_theme = hasattr(self, 'current_theme') and self.current_theme in ["Fusion (Dark)", "Ocean", "Teal Professional"]
+        is_dark_theme = hasattr(self, 'current_theme') and self.current_theme in ["Fusion (Dark)", "Ocean"]
         
         # In dark themes, all buttons use teal
         if is_dark_theme:
@@ -1809,7 +1809,7 @@ class DerivativeMill(QMainWindow):
             CSS stylesheet string that adapts background color to current theme
         """
         # Check if we're in a dark theme
-        is_dark_theme = hasattr(self, 'current_theme') and self.current_theme in ["Fusion (Dark)", "Ocean", "Teal Professional"]
+        is_dark_theme = hasattr(self, 'current_theme') and self.current_theme in ["Fusion (Dark)", "Ocean"]
 
         if is_dark_theme:
             # Dark theme: dark background with light text
@@ -1899,7 +1899,7 @@ class DerivativeMill(QMainWindow):
             if not self.current_csv:
                 self.invoice_check_label.setText("No file loaded")
                 # Gold color in dark theme (text-shadow not supported in Qt)
-                if hasattr(self, 'current_theme') and self.current_theme in ["Fusion (Dark)", "Ocean", "Teal Professional"]:
+                if hasattr(self, 'current_theme') and self.current_theme in ["Fusion (Dark)", "Ocean"]:
                     self.invoice_check_label.setStyleSheet("background:transparent; color: gold; font-weight:bold; font-size:7pt; padding:3px;")
                 else:
                     self.invoice_check_label.setStyleSheet("background:transparent; color: #A4262C; font-weight:bold; font-size:7pt; padding:3px;")
