@@ -1355,6 +1355,9 @@ class DerivativeMill(QMainWindow):
         # Refresh button styles to match new theme
         self.refresh_button_styles()
 
+        # Refresh text input styles to match new theme
+        self.refresh_input_styles()
+
         # Update file label style for new theme
         if hasattr(self, 'file_label'):
             self.update_file_label_style()
@@ -1581,7 +1584,26 @@ class DerivativeMill(QMainWindow):
                 elif btn.text() == "Refresh View":
                     btn.setStyleSheet(self.get_button_style("info"))
 
-    
+    def refresh_input_styles(self):
+        """Refresh all text input styles to match current theme"""
+        input_style = self.get_input_style()
+
+        # Parts View tab inputs
+        if hasattr(self, 'query_value'):
+            self.query_value.setStyleSheet(input_style)
+        if hasattr(self, 'custom_sql_input'):
+            self.custom_sql_input.setStyleSheet(input_style)
+        if hasattr(self, 'search_input'):
+            self.search_input.setStyleSheet(input_style)
+
+        # Customs Config tab inputs
+        if hasattr(self, 'tariff_filter'):
+            self.tariff_filter.setStyleSheet(input_style)
+
+        # Section 232 Actions tab inputs
+        if hasattr(self, 'actions_filter'):
+            self.actions_filter.setStyleSheet(input_style)
+
     def get_dark_palette(self):
         """Create a Windows 11 dark mode inspired theme"""
         from PyQt5.QtGui import QPalette, QColor
@@ -1715,6 +1737,23 @@ class DerivativeMill(QMainWindow):
                 background-color: rgb({disabled_bg.red()}, {disabled_bg.green()}, {disabled_bg.blue()});
             }}
         """
+
+    def get_input_style(self):
+        """
+        Generate theme-aware text input (QLineEdit) styles.
+
+        Returns:
+            CSS stylesheet string that adapts background color to current theme
+        """
+        # Check if we're in a dark theme
+        is_dark_theme = hasattr(self, 'current_theme') and self.current_theme in ["Fusion (Dark)", "Ocean", "Teal Professional"]
+
+        if is_dark_theme:
+            # Dark theme: dark background with light text
+            return "QLineEdit { color: #e0e0e0; background-color: #2d2d2d; padding: 5px; border: 1px solid #555; }"
+        else:
+            # Light theme: light background with dark text
+            return "QLineEdit { color: #000000; background-color: #f5f5f5; padding: 5px; border: 1px solid #ccc; }"
 
     def clear_all(self):
         self.current_csv = None
@@ -3194,7 +3233,7 @@ class DerivativeMill(QMainWindow):
         self.query_value.setPlaceholderText("Enter value...")
         self.query_value.setReadOnly(False)
         self.query_value.setEnabled(True)
-        self.query_value.setStyleSheet("QLineEdit { color: white; background-color: #333333; padding: 5px; border: 1px solid #555; }")
+        self.query_value.setStyleSheet(self.get_input_style())
         query_controls.addWidget(self.query_value, 1)
         
         btn_run_query = QPushButton("Run Query")
@@ -3216,7 +3255,7 @@ class DerivativeMill(QMainWindow):
         self.custom_sql_input.setPlaceholderText("SELECT * FROM parts_master WHERE ...")
         self.custom_sql_input.setReadOnly(False)
         self.custom_sql_input.setEnabled(True)
-        self.custom_sql_input.setStyleSheet("QLineEdit { color: white; background-color: #333333; padding: 5px; border: 1px solid #555; }")
+        self.custom_sql_input.setStyleSheet(self.get_input_style())
         custom_sql_layout.addWidget(self.custom_sql_input, 1)
         btn_run_custom = QPushButton("Execute")
         btn_run_custom.setStyleSheet(self.get_button_style("success"))
@@ -3242,7 +3281,7 @@ class DerivativeMill(QMainWindow):
         self.search_input.setPlaceholderText("Type to filter...")
         self.search_input.setReadOnly(False)
         self.search_input.setEnabled(True)
-        self.search_input.setStyleSheet("QLineEdit { color: white; background-color: #333333; padding: 5px; border: 1px solid #555; }")
+        self.search_input.setStyleSheet(self.get_input_style())
         self.search_input.textChanged.connect(self.filter_parts_table)
         search_box.addWidget(self.search_input, 1)
         layout.addLayout(search_box)
@@ -3475,6 +3514,7 @@ class DerivativeMill(QMainWindow):
         filter_bar.addWidget(QLabel("Filter:"))
         self.tariff_filter = QLineEdit()
         self.tariff_filter.setPlaceholderText("Search HTS code, classification, or chapter...")
+        self.tariff_filter.setStyleSheet(self.get_input_style())
         self.tariff_filter.textChanged.connect(self.filter_tariff_table)
         filter_bar.addWidget(self.tariff_filter)
 
@@ -3803,6 +3843,7 @@ class DerivativeMill(QMainWindow):
         filter_bar = QHBoxLayout()
         self.actions_filter = QLineEdit()
         self.actions_filter.setPlaceholderText("Search tariff number, action, or description...")
+        self.actions_filter.setStyleSheet(self.get_input_style())
         self.actions_filter.textChanged.connect(self.filter_actions_table)
         filter_bar.addWidget(self.actions_filter)
         
