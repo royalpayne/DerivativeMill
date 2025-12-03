@@ -1720,9 +1720,10 @@ class DerivativeMill(QMainWindow):
         palette = app.style().standardPalette()
 
         # Override button and column header colors with custom teal-cyan
-        palette.setColor(QPalette.Button, QColor(180, 243, 246))  # Bright cyan for buttons and column headers (#B4F3F6)
+        palette.setColor(QPalette.Button, QColor(180, 243, 246))  # Bright cyan for buttons (#B4F3F6)
         palette.setColor(QPalette.ButtonText, QColor(33, 33, 33))  # Dark text on buttons
         palette.setColor(QPalette.Window, QColor(206, 243, 245))  # Light cyan background (#CEF3F5)
+        palette.setColor(QPalette.Mid, QColor(206, 243, 245))  # Light cyan for column headers (#CEF3F5)
 
         return palette
 
