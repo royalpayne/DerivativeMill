@@ -492,7 +492,7 @@ class DerivativeMill(QMainWindow):
             tab_setup_methods[index]()
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(f"{APP_NAME} {VERSION}")
+        self.setWindowTitle(APP_NAME)
         # Compact default size - fully scalable with no minimum constraint
         self.setGeometry(50, 50, 1200, 700)
 
@@ -671,7 +671,13 @@ class DerivativeMill(QMainWindow):
         
         bottom_bar_layout.addWidget(self.export_progress_widget)
         self.export_progress_widget.hide()
-        
+
+        # Add version label in bottom right corner
+        self.version_label = QLabel(VERSION)
+        self.version_label.setStyleSheet("font-size: 7pt; color: #999999;")
+        self.version_label.setAlignment(Qt.AlignRight)
+        bottom_bar_layout.addWidget(self.version_label)
+
         self.bottom_bar = bottom_bar  # Store reference for theme updates
         bottom_bar.setFixedHeight(20)
         layout.addWidget(bottom_bar)
@@ -5108,7 +5114,7 @@ if __name__ == "__main__":
         app.processEvents()
         
         win = DerivativeMill()
-        win.setWindowTitle(f"{APP_NAME} {VERSION}")
+        win.setWindowTitle(APP_NAME)
         splash_widget.close()
         win.show()
 
