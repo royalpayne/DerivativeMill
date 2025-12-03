@@ -1347,6 +1347,8 @@ class DerivativeMill(QMainWindow):
         # Helper function to create path display widget
         def create_path_display(path_str):
             """Create a read-only text edit for displaying file paths"""
+            from PyQt5.QtGui import QPalette
+
             text_edit = QPlainTextEdit()
             text_edit.setPlainText(path_str)
             text_edit.setReadOnly(True)
