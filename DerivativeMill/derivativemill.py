@@ -1471,14 +1471,21 @@ class DerivativeMill(QMainWindow):
 
     def update_file_label_style(self):
         """Update file label background based on current theme"""
+        from PyQt5.QtGui import QPalette
+
         if not hasattr(self, 'current_theme'):
             self.current_theme = "System Default"
 
-        # Use white background for light themes, darker background for dark themes
-        if self.current_theme in ["Fusion (Dark)", "Ocean"]:
-            self.file_label.setStyleSheet("background:#2d2d2d; padding:5px; border:1px solid #555; color:#e0e0e0;")
-        else:
-            self.file_label.setStyleSheet("background:white; padding:5px; border:1px solid #ccc;")
+        # Use palette Base color for consistent styling with result preview
+        app = QApplication.instance()
+        palette = app.palette()
+        base_color = palette.color(QPalette.Base)
+        text_color = palette.color(QPalette.Text)
+
+        bg_color = base_color.name()
+        fg_color = text_color.name()
+
+        self.file_label.setStyleSheet(f"background:{bg_color}; padding:5px; border:1px solid #555; color:{fg_color};")
     
     def update_status_bar_styles(self):
         """Update status bar backgrounds based on current theme"""
