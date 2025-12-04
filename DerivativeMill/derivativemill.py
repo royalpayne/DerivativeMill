@@ -33,6 +33,7 @@ import time
 import shutil
 import traceback
 import subprocess
+import configparser
 from pathlib import Path
 from datetime import datetime
 import pandas as pd
@@ -122,8 +123,56 @@ SHIPMENT_MAPPING_FILE = BASE_DIR / "shipment_mapping.json"
 for p in (RESOURCES_DIR, INPUT_DIR, OUTPUT_DIR, PROCESSED_DIR, OUTPUT_PROCESSED_DIR):
     p.mkdir(exist_ok=True)
 
-# Database location
-DB_PATH = RESOURCES_DIR / DB_NAME
+# ==============================================================================
+# Shared Configuration File
+# ==============================================================================
+# The config.ini file stores settings shared across all users (e.g., database path).
+# User-specific settings remain in QSettings (Windows registry).
+
+CONFIG_FILE = BASE_DIR / "config.ini"
+
+def load_shared_config():
+    """Load shared configuration from config.ini file."""
+    config = configparser.ConfigParser()
+    if CONFIG_FILE.exists():
+        config.read(str(CONFIG_FILE))
+    return config
+
+def save_shared_config(config):
+    """Save shared configuration to config.ini file."""
+    with open(str(CONFIG_FILE), 'w') as f:
+        config.write(f)
+
+def get_database_path():
+    """
+    Get the database path from shared config or use default.
+    
+    Returns:
+        Path object pointing to the SQLite database file.
+    """
+    config = load_shared_config()
+    if config.has_option('Database', 'path'):
+        custom_path = config.get('Database', 'path')
+        if custom_path and Path(custom_path).exists():
+            return Path(custom_path)
+    # Default to local Resources folder
+    return RESOURCES_DIR / DB_NAME
+
+def set_database_path(path):
+    """
+    Set a custom database path in shared config.
+    
+    Args:
+        path: Path string to the database file (can be network path).
+    """
+    config = load_shared_config()
+    if not config.has_section('Database'):
+        config.add_section('Database')
+    config.set('Database', 'path', str(path))
+    save_shared_config(config)
+
+# Database location - reads from config.ini or defaults to local
+DB_PATH = get_database_path()
 
 def get_232_info(hts_code):
     """
@@ -1330,11 +1379,17 @@ class DerivativeMill(QMainWindow):
         db_info_group = QGroupBox("Current Database")
         db_info_layout = QFormLayout()
 
-        # Determine current database type
-        db_type_label = QLabel("SQLite (Local)")
         db_path_label = QLabel(str(DB_PATH))
         db_path_label.setWordWrap(True)
         db_path_label.setStyleSheet("font-family: monospace; font-size: 9pt;")
+
+        # Check if using shared or local database
+        config = load_shared_config()
+        if config.has_option('Database', 'path'):
+            db_type_text = "Shared (Network)"
+        else:
+            db_type_text = "Local"
+        db_type_label = QLabel(db_type_text)
 
         db_info_layout.addRow("Type:", db_type_label)
         db_info_layout.addRow("Location:", db_path_label)
@@ -1342,146 +1397,107 @@ class DerivativeMill(QMainWindow):
         db_info_group.setLayout(db_info_layout)
         database_layout.addWidget(db_info_group)
 
-        # PostgreSQL Configuration
-        pg_group = QGroupBox("PostgreSQL Configuration (Multi-User Sync)")
-        pg_layout = QFormLayout()
+        # Shared Database Configuration
+        shared_group = QGroupBox("Shared Database (Multi-User)")
+        shared_layout = QVBoxLayout()
 
-        pg_host_input = QLineEdit("localhost")
-        pg_port_input = QLineEdit("5432")
-        pg_database_input = QLineEdit("derivativemill")
-        pg_user_input = QLineEdit("postgres")
-        pg_password_input = QLineEdit()
-        pg_password_input.setEchoMode(QLineEdit.Password)
+        shared_info = QLabel(
+            "Configure a shared database location for multiple users.\n"
+            "This setting is stored in config.ini next to the application and applies to all users.\n\n"
+            "User-specific settings (window size, theme, etc.) remain personal."
+        )
+        shared_info.setWordWrap(True)
+        shared_layout.addWidget(shared_info)
 
-        pg_layout.addRow("Host:", pg_host_input)
-        pg_layout.addRow("Port:", pg_port_input)
-        pg_layout.addRow("Database:", pg_database_input)
-        pg_layout.addRow("Username:", pg_user_input)
-        pg_layout.addRow("Password:", pg_password_input)
+        # Path input row
+        path_row = QHBoxLayout()
+        shared_path_input = QLineEdit()
+        shared_path_input.setPlaceholderText("e.g., \\\\server\\share\\derivativemill.db")
+        if config.has_option('Database', 'path'):
+            shared_path_input.setText(config.get('Database', 'path'))
+        path_row.addWidget(shared_path_input)
 
-        # Test connection button
-        pg_test_btn = QPushButton("Test Connection")
-        pg_test_btn.setStyleSheet(self.get_button_style("info"))
+        browse_btn = QPushButton("Browse...")
+        def browse_database():
+            path, _ = QFileDialog.getOpenFileName(
+                dialog, "Select Database File", 
+                str(Path.home()),
+                "SQLite Database (*.db);;All Files (*.*)"
+            )
+            if path:
+                shared_path_input.setText(path)
+        browse_btn.clicked.connect(browse_database)
+        path_row.addWidget(browse_btn)
+        shared_layout.addLayout(path_row)
 
-        def test_pg_connection():
-            try:
-                import psycopg2
-                conn = psycopg2.connect(
-                    host=pg_host_input.text(),
-                    port=int(pg_port_input.text()),
-                    database=pg_database_input.text(),
-                    user=pg_user_input.text(),
-                    password=pg_password_input.text()
-                )
-                conn.close()
-                QMessageBox.information(dialog, "Success", "Successfully connected to PostgreSQL!")
-            except ImportError:
-                QMessageBox.warning(dialog, "Missing Dependency", 
-                    "psycopg2 is not installed.\n\nRun: pip install psycopg2-binary")
-            except Exception as e:
-                QMessageBox.critical(dialog, "Connection Failed", f"Failed to connect:\n{e}")
+        # Action buttons
+        btn_row = QHBoxLayout()
 
-        pg_test_btn.clicked.connect(test_pg_connection)
-        pg_layout.addRow("", pg_test_btn)
+        apply_btn = QPushButton("Apply Shared Path")
+        apply_btn.setStyleSheet(self.get_button_style("success"))
+        def apply_shared_path():
+            new_path = shared_path_input.text().strip()
+            if not new_path:
+                QMessageBox.warning(dialog, "No Path", "Please enter a database path.")
+                return
+            
+            path_obj = Path(new_path)
+            if not path_obj.exists():
+                reply = QMessageBox.question(dialog, "Database Not Found",
+                    f"The file does not exist:\n{new_path}\n\n"
+                    "Would you like to create a new database at this location?\n"
+                    "(A copy of your current database will be created)",
+                    QMessageBox.Yes | QMessageBox.No)
+                if reply == QMessageBox.Yes:
+                    try:
+                        # Copy current database to new location
+                        path_obj.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(str(DB_PATH), str(path_obj))
+                    except Exception as e:
+                        QMessageBox.critical(dialog, "Error", f"Failed to create database:\n{e}")
+                        return
+                else:
+                    return
+            
+            # Save to config.ini
+            set_database_path(new_path)
+            db_path_label.setText(new_path)
+            db_type_label.setText("Shared (Network)")
+            QMessageBox.information(dialog, "Success", 
+                f"Database path updated to:\n{new_path}\n\n"
+                "Restart the application to use the new database.")
+        apply_btn.clicked.connect(apply_shared_path)
+        btn_row.addWidget(apply_btn)
 
-        # Migrate and Switch buttons
-        pg_btn_layout = QHBoxLayout()
+        reset_btn = QPushButton("Use Local Database")
+        reset_btn.setStyleSheet(self.get_button_style("warning"))
+        def reset_to_local():
+            config = load_shared_config()
+            if config.has_option('Database', 'path'):
+                config.remove_option('Database', 'path')
+                save_shared_config(config)
+            shared_path_input.clear()
+            local_path = RESOURCES_DIR / DB_NAME
+            db_path_label.setText(str(local_path))
+            db_type_label.setText("Local")
+            QMessageBox.information(dialog, "Reset", 
+                "Database reset to local.\n\nRestart the application to apply changes.")
+        reset_btn.clicked.connect(reset_to_local)
+        btn_row.addWidget(reset_btn)
 
-        pg_migrate_btn = QPushButton("Migrate Data to PostgreSQL")
-        pg_migrate_btn.setStyleSheet(self.get_button_style("warning"))
+        shared_layout.addLayout(btn_row)
 
-        def migrate_to_postgresql():
-            reply = QMessageBox.question(dialog, "Confirm Migration",
-                "This will copy all data from your local SQLite database to PostgreSQL.\n\n"
-                "The local database will not be modified.\n\n"
-                "Continue?",
-                QMessageBox.Yes | QMessageBox.No)
+        # Warning about concurrent access
+        warning_label = QLabel(
+            "<small><b>Note:</b> SQLite on network shares works best for sequential access. "
+            "Avoid having multiple users edit the same record simultaneously.</small>"
+        )
+        warning_label.setWordWrap(True)
+        warning_label.setStyleSheet("color:#666; padding:5px;")
+        shared_layout.addWidget(warning_label)
 
-            if reply == QMessageBox.Yes:
-                try:
-                    import psycopg2
-                    import pandas as pd
-
-                    # Connect to PostgreSQL
-                    pg_conn = psycopg2.connect(
-                        host=pg_host_input.text(),
-                        port=int(pg_port_input.text()),
-                        database=pg_database_input.text(),
-                        user=pg_user_input.text(),
-                        password=pg_password_input.text()
-                    )
-                    pg_cursor = pg_conn.cursor()
-
-                    # Create tables
-                    pg_cursor.execute("""CREATE TABLE IF NOT EXISTS parts_master (
-                        part_number TEXT PRIMARY KEY, description TEXT, hts_code TEXT, 
-                        country_origin TEXT, mid TEXT, client_code TEXT, 
-                        steel_ratio REAL DEFAULT 1.0, non_steel_ratio REAL DEFAULT 0.0, last_updated TEXT
-                    )""")
-                    pg_cursor.execute("""CREATE TABLE IF NOT EXISTS tariff_232 (
-                        hts_code TEXT PRIMARY KEY, material TEXT, classification TEXT,
-                        chapter TEXT, chapter_description TEXT, declaration_required TEXT, notes TEXT
-                    )""")
-                    pg_cursor.execute("""CREATE TABLE IF NOT EXISTS sec_232_actions (
-                        tariff_no TEXT PRIMARY KEY, action TEXT, description TEXT,
-                        advalorem_rate TEXT, effective_date TEXT, expiration_date TEXT,
-                        specific_rate TEXT, additional_declaration TEXT, note TEXT, link TEXT
-                    )""")
-                    pg_cursor.execute("""CREATE TABLE IF NOT EXISTS mapping_profiles (
-                        profile_name TEXT PRIMARY KEY, mapping_json TEXT, created_date TEXT
-                    )""")
-                    pg_cursor.execute("""CREATE TABLE IF NOT EXISTS app_config (
-                        key TEXT PRIMARY KEY, value TEXT
-                    )""")
-                    pg_conn.commit()
-
-                    # Migrate data from SQLite
-                    sqlite_conn = sqlite3.connect(str(DB_PATH))
-                    tables = ['parts_master', 'tariff_232', 'sec_232_actions', 'mapping_profiles', 'app_config']
-                    migrated = 0
-
-                    for table in tables:
-                        try:
-                            df = pd.read_sql(f"SELECT * FROM {table}", sqlite_conn)
-                            if not df.empty:
-                                for _, row in df.iterrows():
-                                    cols = ', '.join(df.columns)
-                                    placeholders = ', '.join(['%s'] * len(df.columns))
-                                    pg_cursor.execute(
-                                        f"INSERT INTO {table} ({cols}) VALUES ({placeholders}) ON CONFLICT DO NOTHING",
-                                        tuple(row)
-                                    )
-                                migrated += len(df)
-                        except Exception as e:
-                            logger.warning(f"Error migrating {table}: {e}")
-
-                    pg_conn.commit()
-                    pg_conn.close()
-                    sqlite_conn.close()
-
-                    QMessageBox.information(dialog, "Migration Complete", 
-                        f"Successfully migrated {migrated} records to PostgreSQL!\n\n"
-                        "Click 'Switch to PostgreSQL' to start using the remote database.")
-
-                except ImportError:
-                    QMessageBox.warning(dialog, "Missing Dependency", 
-                        "psycopg2 is not installed.\n\nRun: pip install psycopg2-binary")
-                except Exception as e:
-                    QMessageBox.critical(dialog, "Migration Failed", f"Error during migration:\n{e}")
-
-        pg_migrate_btn.clicked.connect(migrate_to_postgresql)
-        pg_btn_layout.addWidget(pg_migrate_btn)
-
-        pg_layout.addRow("", pg_btn_layout)
-
-        pg_info = QLabel("<small>PostgreSQL enables multiple users to access the same database simultaneously. "
-                        "Install with: pip install psycopg2-binary</small>")
-        pg_info.setWordWrap(True)
-        pg_info.setStyleSheet("color:#666; padding:5px;")
-        pg_layout.addRow("", pg_info)
-
-        pg_group.setLayout(pg_layout)
-        database_layout.addWidget(pg_group)
+        shared_group.setLayout(shared_layout)
+        database_layout.addWidget(shared_group)
 
         database_layout.addStretch()
         tabs.addTab(database_widget, "Database")
