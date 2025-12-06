@@ -3047,6 +3047,16 @@ class DerivativeMill(QMainWindow):
         )
         if not path: return
         try:
+            # Get header row value from input field
+            header_row = 0  # Default: first row is header
+            if hasattr(self, 'header_row_input') and self.header_row_input.text().strip():
+                try:
+                    header_row_value = int(self.header_row_input.text().strip())
+                    # Convert from 1-based to 0-based indexing
+                    header_row = max(0, header_row_value - 1)
+                except ValueError:
+                    header_row = 0
+
             # Determine file type and extract data accordingly
             file_ext = Path(path).suffix.lower()
 
@@ -3057,9 +3067,9 @@ class DerivativeMill(QMainWindow):
                 # Move PDF to processed folder after successful extraction
                 self.move_pdf_to_processed(path)
             elif file_ext == '.xlsx':
-                df = pd.read_excel(path, nrows=0, dtype=str)
+                df = pd.read_excel(path, nrows=0, dtype=str, header=header_row)
             else:  # .csv
-                df = pd.read_csv(path, nrows=0, dtype=str)
+                df = pd.read_csv(path, nrows=0, dtype=str, header=header_row)
 
             cols = list(df.columns)
 
