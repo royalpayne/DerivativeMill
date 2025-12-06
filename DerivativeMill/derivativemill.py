@@ -22,8 +22,12 @@ try:
     from DerivativeMill.version import get_version
     VERSION = get_version()
 except ImportError:
-    # Fallback if version.py is not available
-    VERSION = "v0.6"
+    try:
+        from version import get_version
+        VERSION = get_version()
+    except ImportError:
+        # Fallback if version.py is not available
+        VERSION = "v0.6"
 
 
 import sys
@@ -258,7 +262,7 @@ def init_database():
             link TEXT
         )""")
         c.execute("""CREATE TABLE IF NOT EXISTS mapping_profiles (
-            profile_name TEXT PRIMARY KEY, mapping_json TEXT, created_date TEXT
+            profile_name TEXT PRIMARY KEY, mapping_json TEXT, created_date TEXT, header_row INTEGER DEFAULT 1
         )""")
         c.execute("""CREATE TABLE IF NOT EXISTS app_config (
             key TEXT PRIMARY KEY, value TEXT
@@ -273,6 +277,16 @@ def init_database():
                 logger.info("Added client_code column to parts_master")
         except Exception as e:
             logger.warning(f"Failed to check/add client_code column: {e}")
+
+        # Migration: Add header_row column to mapping_profiles if it doesn't exist
+        try:
+            c.execute("PRAGMA table_info(mapping_profiles)")
+            columns = [col[1] for col in c.fetchall()]
+            if 'header_row' not in columns:
+                c.execute("ALTER TABLE mapping_profiles ADD COLUMN header_row INTEGER DEFAULT 1")
+                logger.info("Added header_row column to mapping_profiles")
+        except Exception as e:
+            logger.warning(f"Failed to check/add header_row column: {e}")
 
         conn.commit()
         conn.close()
@@ -601,7 +615,7 @@ class DerivativeMill(QMainWindow):
 
 
 
-        # Add a native menu bar with a Settings action (gear icon)
+        # Add a native menu bar with Settings and Log View actions
         menubar = QMenuBar(self)
         settings_menu = menubar.addMenu("Settings")
         # Use a standard gear icon from QStyle
@@ -609,6 +623,14 @@ class DerivativeMill(QMainWindow):
         settings_action = QAction(gear_icon, "Settings", self)
         settings_action.triggered.connect(self.show_settings_dialog)
         settings_menu.addAction(settings_action)
+        
+        # Add Log View menu
+        log_menu = menubar.addMenu("Log View")
+        log_icon = self.style().standardIcon(QStyle.SP_FileDialogContentsView)
+        log_action = QAction(log_icon, "View Log", self)
+        log_action.triggered.connect(self.show_log_dialog)
+        log_menu.addAction(log_action)
+        
         layout.setMenuBar(menubar)
         self.settings_action = settings_action
 
@@ -628,14 +650,13 @@ class DerivativeMill(QMainWindow):
         self.tab_shipment_map = QWidget()
         self.tab_import = QWidget()
         self.tab_master = QWidget()
-        self.tab_log = QWidget()
+        self.tab_log = QWidget()  # Keep widget for log functionality
         self.tab_config = QWidget()
         self.tab_actions = QWidget()
         self.tabs.addTab(self.tab_process, "Process Shipment")
         self.tabs.addTab(self.tab_shipment_map, "Invoice Mapping Profiles")
         self.tabs.addTab(self.tab_import, "Parts Import")
         self.tabs.addTab(self.tab_master, "Parts View")
-        self.tabs.addTab(self.tab_log, "Log View")
         self.tabs.addTab(self.tab_config, "Customs Config")
         self.tabs.addTab(self.tab_actions, "Section 232 Actions")
         
@@ -757,13 +778,13 @@ class DerivativeMill(QMainWindow):
             return
 
         # Map tab index to setup method
+        # Tab order: 0=Process, 1=Mapping, 2=Import, 3=Master, 4=Config, 5=Actions
         tab_setup_methods = {
             1: self.setup_shipment_mapping_tab,
             2: self.setup_import_tab,
             3: self.setup_master_tab,
-            4: self.setup_log_tab,
-            5: self.setup_config_tab,
-            6: self.setup_actions_tab
+            4: self.setup_config_tab,
+            5: self.setup_actions_tab
         }
         
         # Initialize the tab
@@ -1105,6 +1126,57 @@ class DerivativeMill(QMainWindow):
             # Force immediate visual update
             self.wt_input.update()
             self.wt_input.blockSignals(False)
+
+    def show_log_dialog(self):
+        """Show the application log in a dialog window"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Application Log")
+        dialog.resize(900, 600)
+        layout = QVBoxLayout(dialog)
+
+        # Title
+        title = QLabel("<h2>Application Log</h2>")
+        title.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title)
+
+        # Log text area
+        log_text = QTextEdit()
+        log_text.setReadOnly(True)
+        log_text.setFont(QFont("Consolas", 9))
+        log_text.setPlainText(logger.get_logs())
+        layout.addWidget(log_text)
+
+        # Button row
+        btn_layout = QHBoxLayout()
+        
+        btn_refresh = QPushButton("Refresh")
+        btn_refresh.setStyleSheet("background:#28a745; color:white; font-weight:bold;")
+        btn_refresh.clicked.connect(lambda: log_text.setPlainText(logger.get_logs()))
+        
+        btn_copy = QPushButton("Copy to Clipboard")
+        btn_copy.setStyleSheet("background:#0078D7; color:white; font-weight:bold;")
+        btn_copy.clicked.connect(lambda: QApplication.clipboard().setText(log_text.toPlainText()))
+        
+        btn_clear = QPushButton("Clear Log")
+        btn_clear.setStyleSheet("background:#dc3545; color:white; font-weight:bold;")
+        btn_clear.clicked.connect(lambda: (logger.logs.clear(), log_text.clear()))
+        
+        btn_close = QPushButton("Close")
+        btn_close.clicked.connect(dialog.accept)
+        
+        btn_layout.addWidget(btn_refresh)
+        btn_layout.addWidget(btn_copy)
+        btn_layout.addWidget(btn_clear)
+        btn_layout.addStretch()
+        btn_layout.addWidget(btn_close)
+        layout.addLayout(btn_layout)
+
+        # Auto-refresh timer
+        refresh_timer = QTimer(dialog)
+        refresh_timer.timeout.connect(lambda: log_text.setPlainText(logger.get_logs()))
+        refresh_timer.start(1000)
+
+        dialog.exec_()
 
     def show_settings_dialog(self):
         dialog = QDialog(self)

@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Derivative Mill - Process & Network Flowcharts</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.6.1/mermaid.min.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        h1 {
+            color: #2c3e50;
+            text-align: center;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 10px;
+        }
+        h2 {
+            color: #34495e;
+            margin-top: 40px;
+            border-left: 4px solid #3498db;
+            padding-left: 10px;
+        }
+        .chart-container {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .mermaid {
+            display: flex;
+            justify-content: center;
+        }
+        .description {
+            background: #ecf0f1;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        @media print {
+            body { background: white; }
+            .chart-container { box-shadow: none; border: 1px solid #ddd; }
+            h1, h2 { page-break-after: avoid; }
+            .chart-container { page-break-inside: avoid; }
+        }
+    </style>
+</head>
+<body>
+    <h1>🏭 Derivative Mill - System Documentation</h1>
+    
+    <h2>1. Application Process Flowchart</h2>
+    <div class="description">
+        <strong>Overview:</strong> This flowchart shows the complete invoice processing workflow from file import through customs documentation export.
+    </div>
+    <div class="chart-container">
+        <div class="mermaid">
+flowchart TD
+    subgraph INPUT["📥 INPUT STAGE"]
+        A[Start] --> B[Select Invoice File]
+        B --> C[Load Excel/CSV File]
+        C --> E[Parse Columns]
+    end
+
+    subgraph MAPPING["🔗 COLUMN MAPPING"]
+        E --> F{Mapping Profile Exists?}
+        F -->|Yes| G[Load Saved Profile]
+        F -->|No| H[Manual Column Mapping]
+        G --> I[Map Invoice Columns]
+        H --> I
+        I --> J[Validate Required Fields]
+        J -->|Missing Fields| H
+        J -->|Complete| K[Create Data Frame]
+    end
+
+    subgraph PARTS["📦 PARTS LOOKUP"]
+        K --> L[Extract Part Numbers]
+        L --> M{Part in Database?}
+        M -->|Yes| N[Load HTS Code & Origin]
+        M -->|No| O[Mark 'Not Found' in 232 Status]
+        N --> P[Merge Part Data]
+        O --> P
+    end
+
+    subgraph TARIFF["🏛️ SECTION 232 PROCESSING"]
+        P --> Q{HTS Code Available?}
+        Q -->|Yes| R[Lookup HTS in tariff_232]
+        Q -->|No| S[Skip 232 Lookup]
+        R --> T{Found in tariff_232?}
+        T -->|Yes| U[Get Material & Declaration Code from DB]
+        T -->|No| W[No 232 Required]
+        U --> X[Combine Results]
+        S --> X
+        W --> X
+    end
+
+    subgraph REVIEW["✅ VERIFICATION"]
+        X --> Y[Display in Preview Table]
+        Y --> Z{User Review}
+        Z -->|Edit Required| ZA[Manual Corrections]
+        ZA --> Y
+        Z -->|Approved| ZB[Mark Verified]
+    end
+
+    subgraph EXPORT["📤 EXPORT"]
+        ZB --> ZC{Export Format}
+        ZC -->|Excel| ZD[Generate Customs Workbook]
+        ZC -->|Save Parts| ZE[Update Parts Database]
+        ZD --> ZF[Apply Formatting]
+        ZE --> ZF
+        ZF --> ZG[Save to Output Folder]
+        ZG --> ZH[Move Input to Processed]
+        ZH --> ZI[End]
+    end
+
+    style INPUT fill:#e8f5e9
+    style MAPPING fill:#e3f2fd
+    style PARTS fill:#fff3e0
+    style TARIFF fill:#fce4ec
+    style REVIEW fill:#f3e5f5
+    style EXPORT fill:#e0f2f1
+        </div>
+    </div>
+
+    <h2>2. Network Architecture - Shared Database Design</h2>
+    <div class="description">
+        <strong>Overview:</strong> This diagram shows the multi-user network setup with a shared SQLite database on a network drive.
+    </div>
+    <div class="chart-container">
+        <div class="mermaid">
+flowchart TB
+    subgraph USERS["👥 USER WORKSTATIONS"]
+        U1["🖥️ User 1 PC<br/>DerivativeMill.exe<br/>QSettings (personal)"]
+        U2["🖥️ User 2 PC<br/>DerivativeMill.exe<br/>QSettings (personal)"]
+        U3["🖥️ User 3 PC<br/>DerivativeMill.exe<br/>QSettings (personal)"]
+    end
+
+    subgraph CONFIG["⚙️ SHARED CONFIGURATION"]
+        CF["config.ini<br/>───────────<br/>[Database]<br/>path = \\\\server\\share\\derivativemill.db"]
+    end
+
+    subgraph NETWORK["🌐 NETWORK SHARE"]
+        direction TB
+        NS["📁 \\\\server\\customs_data\\"]
+        DB[("🗄️ derivativemill.db<br/>───────────<br/>• parts_master<br/>• tariff_232<br/>• sec_232_actions<br/>• mapping_profiles<br/>• app_config")]
+        NS --> DB
+    end
+
+    U1 -->|"reads"| CF
+    U2 -->|"reads"| CF
+    U3 -->|"reads"| CF
+
+    CF -->|"points to"| NS
+
+    U1 <-->|"SQLite Connection<br/>(sequential access)"| DB
+    U2 <-->|"SQLite Connection<br/>(sequential access)"| DB
+    U3 <-->|"SQLite Connection<br/>(sequential access)"| DB
+
+    style USERS fill:#e3f2fd
+    style CONFIG fill:#fff9c4
+    style NETWORK fill:#c8e6c9
+    style DB fill:#a5d6a7
+        </div>
+    </div>
+
+    <h2>3. Data Flow - Settings Storage</h2>
+    <div class="description">
+        <strong>Overview:</strong> Shows how settings are separated between shared (config.ini) and personal (QSettings/Registry).
+    </div>
+    <div class="chart-container">
+        <div class="mermaid">
+flowchart LR
+    subgraph APP["DerivativeMill Application"]
+        A[Application Startup]
+    end
+
+    subgraph SHARED["📄 config.ini (Shared)"]
+        B["Database Path<br/>\\\\server\\share\\db"]
+    end
+
+    subgraph PERSONAL["🔐 QSettings (Personal)"]
+        C["Window Size/Position"]
+        D["Theme Preference"]
+        E["Column Widths"]
+        F["Last Used Directories"]
+    end
+
+    subgraph REGISTRY["Windows Registry"]
+        G["HKEY_CURRENT_USER\\<br/>Software\\DerivativeMill"]
+    end
+
+    A -->|"Read shared config"| B
+    A -->|"Read user prefs"| PERSONAL
+    PERSONAL --> G
+
+    style SHARED fill:#fff9c4
+    style PERSONAL fill:#e1bee7
+    style REGISTRY fill:#ffccbc
+        </div>
+    </div>
+
+    <h2>4. Database Schema</h2>
+    <div class="description">
+        <strong>Overview:</strong> Entity relationship diagram showing the database tables and their relationships.
+    </div>
+    <div class="chart-container">
+        <div class="mermaid">
+erDiagram
+    parts_master {
+        TEXT part_number PK
+        TEXT description
+        TEXT hts_code FK
+        TEXT country_origin
+        TEXT mid
+        TEXT client_code
+        REAL steel_ratio
+        REAL non_steel_ratio
+        TEXT last_updated
+    }
+
+    tariff_232 {
+        TEXT hts_code PK
+        TEXT material
+        TEXT classification
+        TEXT chapter
+        TEXT chapter_description
+        TEXT declaration_required
+        TEXT notes
+    }
+
+    sec_232_actions {
+        TEXT tariff_no PK
+        TEXT action
+        TEXT description
+        TEXT advalorem_rate
+        TEXT effective_date
+        TEXT expiration_date
+        TEXT specific_rate
+        TEXT additional_declaration
+        TEXT note
+        TEXT link
+    }
+
+    mapping_profiles {
+        TEXT profile_name PK
+        TEXT mapping_json
+        TEXT created_date
+    }
+
+    app_config {
+        TEXT key PK
+        TEXT value
+    }
+
+    parts_master ||--o| tariff_232 : "hts_code lookup"
+        </div>
+    </div>
+
+    <h2>5. Deployment Checklist</h2>
+    <div class="chart-container">
+        <div class="mermaid">
+flowchart TD
+    subgraph SETUP["🔧 INITIAL SETUP (Admin)"]
+        A1[Create Network Share Folder] --> A2[Copy derivativemill.db to Share]
+        A2 --> A3[Set Read/Write Permissions]
+        A3 --> A4[Create config.ini with DB Path]
+    end
+
+    subgraph DEPLOY["📦 DEPLOY TO USERS"]
+        B1[Copy DerivativeMill.exe] --> B2[Copy config.ini]
+        B2 --> B3[Copy Resources Folder]
+        B3 --> B4[Create Desktop Shortcut]
+    end
+
+    subgraph VERIFY["✅ VERIFICATION"]
+        C1[Launch Application] --> C2{Settings > Database Tab}
+        C2 --> C3[Verify 'Shared Network' Type]
+        C3 --> C4[Verify Correct Path Shown]
+        C4 --> C5[Test Parts Lookup]
+    end
+
+    SETUP --> DEPLOY --> VERIFY
+
+    style SETUP fill:#bbdefb
+    style DEPLOY fill:#c8e6c9
+    style VERIFY fill:#fff9c4
+        </div>
+    </div>
+
+    <script>
+        mermaid.initialize({ 
+            startOnLoad: true,
+            theme: 'default',
+            flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis'
+            }
+        });
+    </script>
+
+    <div style="margin-top: 40px; padding: 20px; background: #ecf0f1; border-radius: 8px;">
+        <h3>📋 Quick Reference</h3>
+        <table style="width: 100%; border-collapse: collapse;">
+            <tr style="background: #3498db; color: white;">
+                <th style="padding: 10px; text-align: left;">File</th>
+                <th style="padding: 10px; text-align: left;">Location</th>
+                <th style="padding: 10px; text-align: left;">Purpose</th>
+            </tr>
+            <tr>
+                <td style="padding: 10px; border-bottom: 1px solid #ddd;"><code>DerivativeMill.exe</code></td>
+                <td style="padding: 10px; border-bottom: 1px solid #ddd;">Each user's PC</td>
+                <td style="padding: 10px; border-bottom: 1px solid #ddd;">Main application executable</td>
+            </tr>
+            <tr>
+                <td style="padding: 10px; border-bottom: 1px solid #ddd;"><code>config.ini</code></td>
+                <td style="padding: 10px; border-bottom: 1px solid #ddd;">Next to .exe (same for all users)</td>
+                <td style="padding: 10px; border-bottom: 1px solid #ddd;">Shared database path configuration</td>
+            </tr>
+            <tr>
+                <td style="padding: 10px; border-bottom: 1px solid #ddd;"><code>derivativemill.db</code></td>
+                <td style="padding: 10px; border-bottom: 1px solid #ddd;">Network share (e.g., \\server\customs\)</td>
+                <td style="padding: 10px; border-bottom: 1px solid #ddd;">Shared parts and tariff database</td>
+            </tr>
+            <tr>
+                <td style="padding: 10px; border-bottom: 1px solid #ddd;"><code>Resources/</code></td>
+                <td style="padding: 10px; border-bottom: 1px solid #ddd;">Next to .exe</td>
+                <td style="padding: 10px; border-bottom: 1px solid #ddd;">Icons, templates, reference files</td>
+            </tr>
+        </table>
+    </div>
+
+    <footer style="text-align: center; margin-top: 40px; color: #7f8c8d;">
+        <p>Derivative Mill v0.6 - Customs Documentation Processing System</p>
+        <p>Generated: <script>document.write(new Date().toLocaleDateString())</script></p>
+    </footer>
+</body>
+</html>

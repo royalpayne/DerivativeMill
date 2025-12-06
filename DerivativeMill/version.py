@@ -10,7 +10,7 @@ Semantic Versioning:
 - PATCH: Bug fixes and minor updates (0.60.1, 0.60.2, etc.)
 """
 
-__version__ = "v0.60.1"
+__version__ = "v0.61.0"
 
 def get_version():
     """Get the current version"""
