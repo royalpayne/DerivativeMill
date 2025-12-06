@@ -1979,11 +1979,26 @@ class DerivativeMill(QMainWindow):
                 df = pd.read_excel(path, dtype=str, header=header_row)
             else:
                 df = pd.read_csv(path, dtype=str, header=header_row)
+
+            # Try to calculate total before renaming (using original column names)
+            # and after renaming (using mapped names)
+            value_column = None
+            if 'value_usd' in self.shipment_mapping:
+                # Get the original column name mapped to value_usd
+                original_col_name = self.shipment_mapping['value_usd']
+                if original_col_name in df.columns:
+                    value_column = original_col_name
+
+            # If we found the value column, calculate total
+            if value_column:
+                total = pd.to_numeric(df[value_column], errors='coerce').sum()
+                self.csv_total_value = round(total, 2)
+
+            # Now rename columns for other uses
             df = df.rename(columns=col_map)
 
-            if 'value_usd' in df.columns:
-                total = pd.to_numeric(df['value_usd'], errors='coerce').sum()
-                self.csv_total_value = round(total, 2)
+            # Update invoice check if we have a total
+            if value_column:
                 self.update_invoice_check()  # This will control button state
         except Exception as e:
             logger.error(f"browse_file value read failed: {e}")
