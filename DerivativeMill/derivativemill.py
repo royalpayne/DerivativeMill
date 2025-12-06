@@ -1962,11 +1962,23 @@ class DerivativeMill(QMainWindow):
         self.table.setRowCount(0)
 
         try:
+            # Get skip rows value from input field
+            skip_rows = 0
+            if hasattr(self, 'skip_rows_input') and self.skip_rows_input.text().strip():
+                try:
+                    skip_rows_value = int(self.skip_rows_input.text().strip())
+                    # Convert from 1-based to 0-based indexing, and account for header
+                    # If user enters 1, start at row 0 (header)
+                    # If user enters 2, skip 1 row (header), start at row 1
+                    skip_rows = max(0, skip_rows_value - 1)
+                except ValueError:
+                    skip_rows = 0
+
             col_map = {v: k for k, v in self.shipment_mapping.items()}
             if Path(path).suffix.lower() == ".xlsx":
-                df = pd.read_excel(path, dtype=str)
+                df = pd.read_excel(path, dtype=str, skiprows=skip_rows if skip_rows > 0 else None)
             else:
-                df = pd.read_csv(path, dtype=str)
+                df = pd.read_csv(path, dtype=str, skiprows=skip_rows if skip_rows > 0 else None)
             df = df.rename(columns=col_map)
 
             if 'value_usd' in df.columns:
@@ -2141,11 +2153,23 @@ class DerivativeMill(QMainWindow):
 
     def load_file_as_dataframe(self, file_path):
         """Load CSV or Excel file and return as DataFrame"""
+        # Get skip rows value from input field
+        skip_rows = 0
+        if hasattr(self, 'skip_rows_input') and self.skip_rows_input.text().strip():
+            try:
+                skip_rows_value = int(self.skip_rows_input.text().strip())
+                # Convert from 1-based to 0-based indexing
+                # If user enters 1, start at row 0 (header)
+                # If user enters 2, skip 1 row (header), start at row 1
+                skip_rows = max(0, skip_rows_value - 1)
+            except ValueError:
+                skip_rows = 0
+
         file_path_str = str(file_path)
         if file_path_str.lower().endswith('.xlsx') or file_path_str.lower().endswith('.xls'):
-            return pd.read_excel(file_path_str, dtype=str, keep_default_na=False).fillna("")
+            return pd.read_excel(file_path_str, dtype=str, keep_default_na=False, skiprows=skip_rows if skip_rows > 0 else None).fillna("")
         else:
-            return pd.read_csv(file_path_str, dtype=str, keep_default_na=False).fillna("")
+            return pd.read_csv(file_path_str, dtype=str, keep_default_na=False, skiprows=skip_rows if skip_rows > 0 else None).fillna("")
 
     def start_processing_with_editable_preview(self):
         if not self.current_csv:
@@ -2950,6 +2974,14 @@ class DerivativeMill(QMainWindow):
 
         # Load profiles immediately after creating the combo box
         self.load_mapping_profiles()
+
+        # Add skip rows input
+        top_bar.addWidget(QLabel("Start Row:"))
+        self.skip_rows_input = QLineEdit()
+        self.skip_rows_input.setPlaceholderText("1")
+        self.skip_rows_input.setMaximumWidth(50)
+        self.skip_rows_input.setToolTip("Row number to start importing (1 = first row, 2 = skip header, etc.)")
+        top_bar.addWidget(self.skip_rows_input)
 
         btn_save = QPushButton("Save Current Mapping As...")
         btn_save.setStyleSheet(self.get_button_style("success"))
