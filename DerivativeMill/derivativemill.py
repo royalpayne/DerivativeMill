@@ -2681,7 +2681,9 @@ class DerivativeMill(QMainWindow):
             "hts_code": "HTS Code *",
             "mid": "MID *",
             "steel_ratio": "Sec 232 Content Ratio *",
-            "client_code": "Client Code"
+            "client_code": "Client Code",
+            "description": "Description",
+            "country_origin": "Country of Origin"
         }
         drop_labels = {
             "steel_ratio": "Sec232 ratio"
