@@ -3321,19 +3321,28 @@ class DerivativeMill(QMainWindow):
         if self.profile_combo.findText(name) != -1:
             if QMessageBox.question(self, "Overwrite?", f"Profile '{name}' exists. Overwrite?") != QMessageBox.Yes:
                 return
-        
+
         mapping_str = json.dumps(self.shipment_mapping)
+
+        # Get header row value from input field
+        header_row_value = 1  # Default
+        if hasattr(self, 'header_row_input') and self.header_row_input.text().strip():
+            try:
+                header_row_value = int(self.header_row_input.text().strip())
+            except ValueError:
+                header_row_value = 1
+
         try:
             conn = sqlite3.connect(str(DB_PATH))
             c = conn.cursor()
-            c.execute("INSERT OR REPLACE INTO mapping_profiles (profile_name, mapping_json) VALUES (?, ?)",
-                      (name, mapping_str))
+            c.execute("INSERT OR REPLACE INTO mapping_profiles (profile_name, mapping_json, header_row) VALUES (?, ?, ?)",
+                      (name, mapping_str, header_row_value))
             conn.commit()
             conn.close()
             self.load_mapping_profiles()
             # Only update the combo on the Invoice Mapping Profiles tab (where save button is)
             self.profile_combo_map.setCurrentText(name)
-            logger.success(f"Mapping profile saved: {name}")
+            logger.success(f"Mapping profile saved: {name} (header_row={header_row_value})")
             self.status.setText(f"Profile saved: {name}")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Save failed: {e}")
@@ -3361,19 +3370,27 @@ class DerivativeMill(QMainWindow):
                 label.deleteLater()
             self.shipment_drag_labels.clear()
 
+            # Reset header row to default
+            if hasattr(self, 'header_row_input'):
+                self.header_row_input.setText("1")
+
             self.bottom_status.setText("Profile cleared")
             return
 
         try:
             conn = sqlite3.connect(str(DB_PATH))
             c = conn.cursor()
-            c.execute("SELECT mapping_json FROM mapping_profiles WHERE profile_name = ?", (name,))
+            c.execute("SELECT mapping_json, header_row FROM mapping_profiles WHERE profile_name = ?", (name,))
             row = c.fetchone()
             conn.close()
             if row:
                 self.shipment_mapping = json.loads(row[0])
+                # Restore header row value
+                header_row_value = row[1] if len(row) > 1 and row[1] is not None else 1
+                if hasattr(self, 'header_row_input'):
+                    self.header_row_input.setText(str(header_row_value))
                 self.apply_current_mapping()
-                logger.info(f"Profile loaded: {name}")
+                logger.info(f"Profile loaded: {name} (header_row={header_row_value})")
                 self.bottom_status.setText(f"Loaded profile: {name}")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Load failed: {e}")
@@ -5036,18 +5053,30 @@ class DerivativeMill(QMainWindow):
                 else:
                     df = pd.read_csv(file_path, dtype=str, header=header_row)
 
+                # DEBUG: Log DataFrame info
+                logger.info(f"[CSV TOTAL DEBUG] DataFrame columns after reading with header={header_row}: {df.columns.tolist()}")
+                logger.info(f"[CSV TOTAL DEBUG] Shipment mapping: {self.shipment_mapping}")
+
                 # Calculate total using original column name before renaming
                 value_column = None
                 if 'value_usd' in self.shipment_mapping:
                     original_col_name = self.shipment_mapping['value_usd']
+                    logger.info(f"[CSV TOTAL DEBUG] Looking for column '{original_col_name}' in DataFrame")
+                    logger.info(f"[CSV TOTAL DEBUG] Column exists: {original_col_name in df.columns}")
                     if original_col_name in df.columns:
                         value_column = original_col_name
+                        logger.info(f"[CSV TOTAL DEBUG] First 5 values in {original_col_name}: {df[original_col_name].head().tolist()}")
+                else:
+                    logger.warning("[CSV TOTAL DEBUG] 'value_usd' not found in shipment_mapping")
 
                 if value_column:
                     total = pd.to_numeric(df[value_column], errors='coerce').sum()
                     self.csv_total_value = round(total, 2)
+                    logger.info(f"[CSV TOTAL DEBUG] Calculated total: ${self.csv_total_value:,.2f}")
                     # Don't auto-populate CI input - just update the check
                     self.update_invoice_check()  # This will control button state
+                else:
+                    logger.warning("[CSV TOTAL DEBUG] No value column found, CSV total will be 0.00")
 
                 # Rename columns for other uses
                 df = df.rename(columns=col_map)
