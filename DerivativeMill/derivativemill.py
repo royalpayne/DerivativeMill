@@ -3912,12 +3912,6 @@ class DerivativeMill(QMainWindow):
         optional_fields = {
             "quantity": "Quantity",
             "hts_code": "HTS Code",
-            "steel_ratio": "Steel Ratio",
-            "aluminum_ratio": "Aluminum Ratio",
-            "copper_ratio": "Copper Ratio",
-            "wood_ratio": "Wood Ratio",
-            "auto_ratio": "Auto Ratio",
-            "non_steel_ratio": "Non-Steel Ratio",
             "cbp_qty1": "CBP Qty1"
         }
         for key, name in optional_fields.items():
