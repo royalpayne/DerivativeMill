@@ -3205,9 +3205,14 @@ class DerivativeMill(QMainWindow):
             country_of_cast = r.get('country_of_cast', '')
             country_of_smelt = r.get('country_of_smelt', '')
 
-            country_melt_list.append(country_of_melt if country_of_melt else melt)
-            country_cast_list.append(country_of_cast if country_of_cast else melt)
-            prim_country_smelt_list.append(country_of_smelt if country_of_smelt else melt)
+            # Check for NaN/null values and use default if empty
+            melt_code = country_of_melt if pd.notna(country_of_melt) and str(country_of_melt).strip() else melt
+            cast_code = country_of_cast if pd.notna(country_of_cast) and str(country_of_cast).strip() else melt
+            smelt_code = country_of_smelt if pd.notna(country_of_smelt) and str(country_of_smelt).strip() else melt
+
+            country_melt_list.append(melt_code)
+            country_cast_list.append(cast_code)
+            prim_country_smelt_list.append(smelt_code)
             prim_smelt_flag_list.append(smelt_flag)
             flag_list.append(flag)
 
