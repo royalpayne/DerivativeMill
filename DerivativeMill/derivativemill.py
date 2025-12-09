@@ -2300,24 +2300,53 @@ class DerivativeMill(QMainWindow):
             }
         """)
 
-    def get_preview_row_color(self, is_steel_row):
-        """Get the color for preview table rows based on steel content"""
+    def get_preview_row_color(self, material_flag):
+        """Get the color for preview table rows based on Section 232 material type
+
+        Args:
+            material_flag: String like '232_Steel', '232_Aluminum', '232_Copper', '232_Wood', '232_Auto', 'Non_232', or boolean for backward compatibility
+
+        Returns:
+            QColor: Color for the row based on material type
+        """
+        # Default colors for each material type
+        default_colors = {
+            '232_Steel': '#4a4a4a',      # Dark gray
+            '232_Aluminum': '#3498db',   # Blue
+            '232_Copper': '#e67e22',     # Orange
+            '232_Wood': '#27ae60',       # Green
+            '232_Auto': '#9b59b6',       # Purple
+            'Non_232': '#ff0000'         # Red
+        }
+
+        # Handle backward compatibility - if passed a boolean
+        if isinstance(material_flag, bool):
+            material_flag = '232_Steel' if material_flag else 'Non_232'
+
+        # Determine material type from flag
+        if not material_flag or material_flag == 'Non_232':
+            color_key = 'preview_non232_color'
+            default_color = default_colors['Non_232']
+        elif material_flag.startswith('232_'):
+            # Map flag to color key
+            material = material_flag  # e.g., '232_Steel'
+            color_key = f'preview_{material.lower().replace("232_", "")}_color'  # e.g., 'preview_steel_color'
+            default_color = default_colors.get(material, default_colors['232_Steel'])
+        else:
+            # Unknown flag, treat as non-232
+            color_key = 'preview_non232_color'
+            default_color = default_colors['Non_232']
+
         try:
             conn = sqlite3.connect(str(DB_PATH))
             c = conn.cursor()
-            if is_steel_row:
-                c.execute("SELECT value FROM app_config WHERE key = 'preview_steel_color'")
-                row = c.fetchone()
-                conn.close()
-                return QColor(row[0]) if row else QColor("#4a4a4a")
-            else:
-                c.execute("SELECT value FROM app_config WHERE key = 'preview_non232_color'")
-                row = c.fetchone()
-                conn.close()
-                return QColor(row[0]) if row else QColor("#ff0000")
+            c.execute("SELECT value FROM app_config WHERE key = ?", (color_key,))
+            row = c.fetchone()
+            conn.close()
+            return QColor(row[0]) if row else QColor(default_color)
         except:
-            # Return defaults if database query fails
-            return QColor("#4a4a4a") if is_steel_row else QColor("#ff0000")
+            # Return default if database query fails
+            return QColor(default_color)
 
     def refresh_preview_colors(self):
         """Refresh all row colors in the preview table based on current settings"""
@@ -2329,13 +2358,12 @@ class DerivativeMill(QMainWindow):
             self.table.blockSignals(True)
 
             for row in range(self.table.rowCount()):
-                # Check the 232 Status column (index 14) to determine row type
-                status_item = self.table.item(row, 14)
+                # Check the 232 Status column (index 15) to determine material type
+                status_item = self.table.item(row, 15)
                 status_text = status_item.text() if status_item else ''
-                
-                # Row is 232 content if status contains 232_ prefix (232_Steel, 232_Aluminum, etc.)
-                is_232_row = status_text.startswith('232_')
-                row_color = self.get_preview_row_color(is_232_row)
+
+                # Get color based on material flag (232_Steel, 232_Aluminum, etc.)
+                row_color = self.get_preview_row_color(status_text)
 
                 # Update color for all items in this row
                 for col in range(self.table.columnCount()):
@@ -3476,8 +3504,8 @@ class DerivativeMill(QMainWindow):
                 if idx not in [10, 11, 12, 13, 14, 15]:  # Not Steel%, Al%, Cu%, Wood%, Auto%, 232 Status
                     item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsEditable)
 
-            # Set font colors: 232 content rows charcoal gray, non-232 rows red
-            row_color = self.get_preview_row_color(is_232_row)
+            # Set font colors based on Section 232 material type
+            row_color = self.get_preview_row_color(flag)
             for item in items:
                 item.setForeground(row_color)
                 f = item.font()
