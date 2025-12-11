@@ -355,6 +355,11 @@ def init_database():
         c.execute("""CREATE TABLE IF NOT EXISTS app_config (
             key TEXT PRIMARY KEY, value TEXT
         )""")
+        c.execute("""CREATE TABLE IF NOT EXISTS output_column_mappings (
+            profile_name TEXT PRIMARY KEY,
+            mapping_json TEXT,
+            created_date TEXT
+        )""")
 
         # Migration: Add client_code column to parts_master if it doesn't exist
         try:
@@ -456,16 +461,26 @@ def init_database():
         except Exception as e:
             logger.warning(f"Failed to check/add country_of_smelt column: {e}")
 
+        # Migration: Add Sec301_Exclusion_Tariff column to parts_master if it doesn't exist
+        try:
+            c.execute("PRAGMA table_info(parts_master)")
+            columns = [col[1] for col in c.fetchall()]
+            if 'Sec301_Exclusion_Tariff' not in columns:
+                c.execute("ALTER TABLE parts_master ADD COLUMN Sec301_Exclusion_Tariff TEXT")
+                logger.info("Added Sec301_Exclusion_Tariff column to parts_master")
+        except Exception as e:
+            logger.warning(f"Failed to check/add Sec301_Exclusion_Tariff column: {e}")
+
         # Migration: Reset column visibility settings if we have outdated settings
         # (This handles upgrades from versions with fewer columns)
         try:
             c.execute("SELECT COUNT(*) FROM app_config WHERE key LIKE 'preview_col_visible_%'")
             count_row = c.fetchone()
             saved_count = count_row[0] if count_row else 0
-            if 0 < saved_count < 15:
+            if 0 < saved_count < 17:
                 # We have old settings - clear them to reset all columns to visible
                 c.execute("DELETE FROM app_config WHERE key LIKE 'preview_col_visible_%'")
-                logger.info(f"Cleared outdated column visibility settings (had {saved_count}, need 15)")
+                logger.info(f"Cleared outdated column visibility settings (had {saved_count}, need 17)")
         except Exception as e:
             logger.warning(f"Failed to check/reset column visibility: {e}")
 
@@ -739,12 +754,9 @@ class DerivativeMill(QMainWindow):
     def setup_tab_by_index(self, index):
         """Initialize tab by index using existing setup methods."""
         tab_setup_methods = {
-            1: self.setup_shipment_mapping_tab,
-            2: self.setup_import_tab,
-            3: self.setup_master_tab,
-            4: self.setup_log_tab,
-            5: self.setup_config_tab,
-            6: self.setup_actions_tab
+            1: self.setup_master_tab
+            # Invoice Mapping, Output Mapping, and Parts Import moved to Configuration menu
+            # Customs Config and Section 232 Actions moved to References menu
         }
         if index in tab_setup_methods:
             tab_setup_methods[index]()
@@ -772,6 +784,7 @@ class DerivativeMill(QMainWindow):
         
         self.current_csv = None
         self.shipment_mapping = {}
+        self.output_column_mapping = None  # Will be initialized in setup_output_mapping_tab
         self.profile_header_row = 1  # Default header row (1 = first row)
         self.selected_mid = ""
         self.current_worker = None
@@ -860,7 +873,21 @@ class DerivativeMill(QMainWindow):
         log_action = QAction(log_icon, "View Log", self)
         log_action.triggered.connect(self.show_log_dialog)
         log_menu.addAction(log_action)
-        
+
+        # Add References menu
+        references_menu = menubar.addMenu("References")
+        references_icon = self.style().standardIcon(QStyle.SP_FileDialogInfoView)
+        references_action = QAction(references_icon, "References...", self)
+        references_action.triggered.connect(self.show_references_dialog)
+        references_menu.addAction(references_action)
+
+        # Add Configuration menu
+        config_menu = menubar.addMenu("Configuration")
+        config_icon = self.style().standardIcon(QStyle.SP_FileDialogDetailedView)
+        config_action = QAction(config_icon, "Configuration...", self)
+        config_action.triggered.connect(self.show_configuration_dialog)
+        config_menu.addAction(config_action)
+
         # Add Help menu
         help_menu = menubar.addMenu("Help")
         
@@ -895,17 +922,16 @@ class DerivativeMill(QMainWindow):
         self.tabs = QTabWidget()
         self.tab_process = QWidget()
         self.tab_shipment_map = QWidget()
+        self.tab_output_map = QWidget()
         self.tab_import = QWidget()
         self.tab_master = QWidget()
         self.tab_log = QWidget()  # Keep widget for log functionality
         self.tab_config = QWidget()
         self.tab_actions = QWidget()
         self.tabs.addTab(self.tab_process, "Process Shipment")
-        self.tabs.addTab(self.tab_shipment_map, "Invoice Mapping Profiles")
-        self.tabs.addTab(self.tab_import, "Parts Import")
         self.tabs.addTab(self.tab_master, "Parts View")
-        self.tabs.addTab(self.tab_config, "Customs Config")
-        self.tabs.addTab(self.tab_actions, "Section 232 Actions")
+        # Invoice Mapping, Output Mapping, and Parts Import moved to Configuration menu
+        # Customs Config and Section 232 Actions moved to References menu
         
         # Only tabs (no settings icon here)
         tabs_container = QWidget()
@@ -1025,13 +1051,11 @@ class DerivativeMill(QMainWindow):
             return
 
         # Map tab index to setup method
-        # Tab order: 0=Process, 1=Mapping, 2=Import, 3=Master, 4=Config, 5=Actions
+        # Tab order: 0=Process, 1=Parts View
         tab_setup_methods = {
-            1: self.setup_shipment_mapping_tab,
-            2: self.setup_import_tab,
-            3: self.setup_master_tab,
-            4: self.setup_config_tab,
-            5: self.setup_actions_tab
+            1: self.setup_master_tab
+            # Invoice Mapping, Output Mapping, and Parts Import moved to Configuration menu
+            # Customs Config and Section 232 Actions moved to References menu
         }
         
         # Initialize the tab
@@ -1159,10 +1183,11 @@ class DerivativeMill(QMainWindow):
 
         # Invoice check label and Edit Values button
         self.invoice_check_label = QLabel("No file loaded")
-        self.invoice_check_label.setWordWrap(True)
+        self.invoice_check_label.setWordWrap(False)  # Don't wrap - keep invoice total on one line
         self.invoice_check_label.setStyleSheet("font-size: 7pt;")
         self.invoice_check_label.setAlignment(Qt.AlignCenter)
-        self.invoice_check_label.setFixedWidth(120)  # Match Edit Values button width
+        self.invoice_check_label.setMinimumWidth(180)  # Wider minimum to fit invoice totals
+        self.invoice_check_label.setMaximumWidth(250)  # Allow more space for larger amounts
 
         vbox_check = QVBoxLayout()
         vbox_check.setSpacing(12)
@@ -1268,9 +1293,9 @@ class DerivativeMill(QMainWindow):
         preview_layout = QVBoxLayout()
 
         self.table = QTableWidget()
-        self.table.setColumnCount(16)
+        self.table.setColumnCount(17)
         self.table.setHorizontalHeaderLabels([
-            "Product No","Value","HTS","MID","CBP_qty1","Dec","Melt","Cast","Smelt","Flag","Steel%","Al%","Cu%","Wood%","Auto%","232 Status"
+            "Product No","Value","HTS","MID","CBP_qty1","Dec","Melt","Cast","Smelt","Flag","Steel%","Al%","Cu%","Wood%","Auto%","Non-232%","232 Status"
         ])
         # Make columns manually resizable instead of auto-stretch
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
@@ -1422,6 +1447,104 @@ class DerivativeMill(QMainWindow):
         refresh_timer = QTimer(dialog)
         refresh_timer.timeout.connect(lambda: log_text.setPlainText(logger.get_logs()))
         refresh_timer.start(1000)
+
+        dialog.exec_()
+
+    def show_references_dialog(self):
+        """Show the References dialog with Customs Config and Section 232 Actions tabs"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("References")
+        dialog.resize(1000, 700)
+        layout = QVBoxLayout(dialog)
+
+        # Create tab widget
+        tabs = QTabWidget()
+
+        # Create new tab widgets for the dialog
+        tab_config = QWidget()
+        tab_actions = QWidget()
+
+        # Temporarily swap the instance variables so setup methods populate the new widgets
+        original_tab_config = self.tab_config
+        original_tab_actions = self.tab_actions
+
+        self.tab_config = tab_config
+        self.tab_actions = tab_actions
+
+        # Setup the tabs
+        self.setup_config_tab()
+        self.setup_actions_tab()
+
+        # Restore original references (though they may be deleted)
+        self.tab_config = original_tab_config
+        self.tab_actions = original_tab_actions
+
+        # Add the new tabs to the dialog
+        tabs.addTab(tab_config, "Customs Config")
+        tabs.addTab(tab_actions, "Section 232 Actions")
+
+        layout.addWidget(tabs)
+
+        # Close button
+        btn_layout = QHBoxLayout()
+        btn_close = QPushButton("Close")
+        btn_close.clicked.connect(dialog.accept)
+        btn_close.setStyleSheet(self.get_button_style("default"))
+        btn_layout.addStretch()
+        btn_layout.addWidget(btn_close)
+        layout.addLayout(btn_layout)
+
+        dialog.exec_()
+
+    def show_configuration_dialog(self):
+        """Show the Configuration dialog with Invoice Mapping, Output Mapping, and Parts Import tabs"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Configuration")
+        dialog.resize(1000, 700)
+        layout = QVBoxLayout(dialog)
+
+        # Create tab widget
+        tabs = QTabWidget()
+
+        # Create new tab widgets for the dialog
+        tab_shipment_map = QWidget()
+        tab_output_map = QWidget()
+        tab_import = QWidget()
+
+        # Temporarily swap the instance variables so setup methods populate the new widgets
+        original_tab_shipment_map = self.tab_shipment_map
+        original_tab_output_map = self.tab_output_map
+        original_tab_import = self.tab_import
+
+        self.tab_shipment_map = tab_shipment_map
+        self.tab_output_map = tab_output_map
+        self.tab_import = tab_import
+
+        # Setup the tabs
+        self.setup_shipment_mapping_tab()
+        self.setup_output_mapping_tab()
+        self.setup_import_tab()
+
+        # Restore original references (though they may be deleted)
+        self.tab_shipment_map = original_tab_shipment_map
+        self.tab_output_map = original_tab_output_map
+        self.tab_import = original_tab_import
+
+        # Add the new tabs to the dialog
+        tabs.addTab(tab_shipment_map, "Invoice Mapping Profiles")
+        tabs.addTab(tab_output_map, "Output Mapping")
+        tabs.addTab(tab_import, "Parts Import")
+
+        layout.addWidget(tabs)
+
+        # Close button
+        btn_layout = QHBoxLayout()
+        btn_close = QPushButton("Close")
+        btn_close.clicked.connect(dialog.accept)
+        btn_close.setStyleSheet(self.get_button_style("default"))
+        btn_layout.addStretch()
+        btn_layout.addWidget(btn_close)
+        layout.addLayout(btn_layout)
 
         dialog.exec_()
 
@@ -1636,7 +1759,11 @@ class DerivativeMill(QMainWindow):
         non232_color_btn = create_color_button('preview_non232_color', '#ff0000')
         colors_layout.addRow("Non-232 Rows:", non232_color_btn)
 
-        colors_info = QLabel("<small>Choose font colors for each Section 232 material type in the preview table.</small>")
+        # Section 301 exclusion background color picker
+        sec301_color_btn = create_color_button('preview_sec301_bg_color', '#ffc8c8')
+        colors_layout.addRow("Sec301 Exclusion Background:", sec301_color_btn)
+
+        colors_info = QLabel("<small>Choose font colors for each Section 232 material type and background color for Section 301 exclusions in the preview table.</small>")
         colors_info.setWordWrap(True)
         colors_info.setStyleSheet("color:#666; padding:5px;")
         colors_layout.addRow("", colors_info)
@@ -1650,8 +1777,8 @@ class DerivativeMill(QMainWindow):
         
         # Column names and their default visibility
         column_names = [
-            "Product No", "Value", "HTS", "MID", "CBP_qty1", "Dec", 
-            "Melt", "Cast", "Smelt", "Flag", "Steel%", "Al%", "Cu%", "Wood%", "232 Status"
+            "Product No", "Value", "HTS", "MID", "CBP_qty1", "Dec",
+            "Melt", "Cast", "Smelt", "Flag", "Steel%", "Al%", "Cu%", "Wood%", "Auto%", "Non-232%", "232 Status"
         ]
         
         # Create checkboxes in a grid layout
@@ -2361,6 +2488,25 @@ class DerivativeMill(QMainWindow):
             # Return default if database query fails
             return QColor(default_color)
 
+    def get_sec301_bg_color(self):
+        """Get the background color for Section 301 exclusion rows
+
+        Returns:
+            QColor: Background color for Sec301 exclusion rows
+        """
+        default_color = '#ffc8c8'  # Light red background
+
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("SELECT value FROM app_config WHERE key = ?", ('preview_sec301_bg_color',))
+            row = c.fetchone()
+            conn.close()
+            return QColor(row[0]) if row else QColor(default_color)
+        except:
+            # Return default if database query fails
+            return QColor(default_color)
+
     def refresh_preview_colors(self):
         """Refresh all row colors in the preview table based on current settings"""
         if not hasattr(self, 'table') or self.table.rowCount() == 0:
@@ -2371,8 +2517,8 @@ class DerivativeMill(QMainWindow):
             self.table.blockSignals(True)
 
             for row in range(self.table.rowCount()):
-                # Check the 232 Status column (index 15) to determine material type
-                status_item = self.table.item(row, 15)
+                # Check the 232 Status column (index 16) to determine material type
+                status_item = self.table.item(row, 16)
                 status_text = status_item.text() if status_item else ''
 
                 # Get color based on material flag (232_Steel, 232_Aluminum, etc.)
@@ -2404,14 +2550,14 @@ class DerivativeMill(QMainWindow):
             count_row = c.fetchone()
             saved_count = count_row[0] if count_row else 0
             
-            if saved_count < 15:
+            if saved_count < 17:
                 # Clear old settings and reset all columns to visible
                 c.execute("DELETE FROM app_config WHERE key LIKE 'preview_col_visible_%'")
-                for col_idx in range(15):
+                for col_idx in range(17):
                     c.execute("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)",
                               (f'preview_col_visible_{col_idx}', '1'))
                 conn.commit()
-                logger.info(f"Reset column visibility settings (had {saved_count}, need 15)")
+                logger.info(f"Reset column visibility settings (had {saved_count}, need 17)")
                 # Show all columns
                 for col_idx in range(self.table.columnCount()):
                     self.table.setColumnHidden(col_idx, False)
@@ -2695,14 +2841,14 @@ class DerivativeMill(QMainWindow):
             if 'value_usd' in self.shipment_mapping:
                 # Get the original column name mapped to value_usd
                 original_col_name = self.shipment_mapping['value_usd']
-                logger.debug(f"Looking for value column: '{original_col_name}' in {df.columns.tolist()}")
+                logger.info(f"[INVOICE TOTAL] Looking for value column: '{original_col_name}' in columns: {df.columns.tolist()}")
                 if original_col_name in df.columns:
                     value_column = original_col_name
-                    logger.info(f"Found value column: '{value_column}'")
+                    logger.info(f"[INVOICE TOTAL] Found value column: '{value_column}'")
                 else:
-                    logger.warning(f"Value column '{original_col_name}' not found in file columns: {df.columns.tolist()}")
+                    logger.warning(f"[INVOICE TOTAL] Value column '{original_col_name}' not found in file columns: {df.columns.tolist()}")
             else:
-                logger.warning(f"'value_usd' not mapped in shipment_mapping: {self.shipment_mapping}")
+                logger.warning(f"[INVOICE TOTAL] 'value_usd' not mapped in shipment_mapping: {self.shipment_mapping}")
 
             # Get part number column to filter rows
             if 'part_number' in self.shipment_mapping:
@@ -2729,9 +2875,9 @@ class DerivativeMill(QMainWindow):
             # Now rename columns for other uses
             df = df.rename(columns=col_map)
 
-            # Update invoice check if we have a total
+            # Update invoice check - this will display the total and control button state
             if value_column:
-                self.update_invoice_check()  # This will control button state
+                self.update_invoice_check()
         except Exception as e:
             logger.error(f"browse_file value read failed: {e}")
             self.invoice_check_label.setText("Could not read value column")
@@ -2752,6 +2898,7 @@ class DerivativeMill(QMainWindow):
 
         try:
             if not self.current_csv:
+                self.invoice_check_label.setWordWrap(False)  # Single line display
                 self.invoice_check_label.setText("No file loaded")
                 # Gold color in dark theme (text-shadow not supported in Qt)
                 if hasattr(self, 'current_theme') and self.current_theme in ["Fusion (Dark)", "Ocean"]:
@@ -2769,20 +2916,23 @@ class DerivativeMill(QMainWindow):
 
             diff = abs(user_val - self.csv_total_value)
             threshold = 0.01
-            
+
             # Update the invoice check label and Edit Values button
             if user_val == 0.0:
-                self.invoice_check_label.setText(f"Invoice Total: ${self.csv_total_value:,.2f}")
+                self.invoice_check_label.setWordWrap(False)  # Single line display
+                self.invoice_check_label.setText(f"Total: ${self.csv_total_value:,.2f}")
                 self.invoice_check_label.setStyleSheet("background:#0078D4; color:white; font-weight:bold; font-size:7pt; padding:3px;")
                 self.edit_values_btn.setVisible(False)
             elif diff <= threshold:
+                self.invoice_check_label.setWordWrap(False)  # Single line display
                 self.invoice_check_label.setText(f"✓ Match: ${self.csv_total_value:,.2f}")
                 self.invoice_check_label.setStyleSheet("background:#107C10; color:white; font-weight:bold; font-size:7pt; padding:3px;")
                 self.edit_values_btn.setVisible(False)
             else:
-                # Values don't match - show comparison and Edit Values button
+                # Values don't match - show comparison and Edit Values button (two lines)
+                self.invoice_check_label.setWordWrap(True)  # Allow two lines for mismatch display
                 self.invoice_check_label.setText(
-                    f"Invoice Total: ${self.csv_total_value:,.2f}\n"
+                    f"Total: ${self.csv_total_value:,.2f}\n"
                     f"Difference: ${diff:,.2f}"
                 )
                 self.invoice_check_label.setStyleSheet("background:#ff9800; color:white; font-weight:bold; font-size:7pt; padding:3px;")
@@ -3007,7 +3157,7 @@ class DerivativeMill(QMainWindow):
             # Invoice diff
             self.handle_invoice_diff(csv_total, user_ci)
             conn = sqlite3.connect(str(DB_PATH))
-            parts = pd.read_sql("SELECT part_number, hts_code, steel_ratio, aluminum_ratio, copper_ratio, wood_ratio, auto_ratio, non_steel_ratio, cbp_qty1, country_of_melt, country_of_cast, country_of_smelt FROM parts_master", conn)
+            parts = pd.read_sql("SELECT part_number, hts_code, steel_ratio, aluminum_ratio, copper_ratio, wood_ratio, auto_ratio, non_steel_ratio, cbp_qty1, country_of_melt, country_of_cast, country_of_smelt, Sec301_Exclusion_Tariff FROM parts_master", conn)
             conn.close()
             df = df.merge(parts, on='part_number', how='left', suffixes=('', '_master'), indicator=True)
             # Track parts not found in the database
@@ -3019,9 +3169,10 @@ class DerivativeMill(QMainWindow):
             merge_fields = ['hts_code', 'steel_ratio', 'aluminum_ratio', 'copper_ratio', 'wood_ratio', 'auto_ratio', 'non_steel_ratio', 'cbp_qty1']
             for field in merge_fields:
                 master_col = f'{field}_master'
-                if master_col in df.columns:
+                if field in df.columns and master_col in df.columns:
                     # Invoice has this column mapped - prefer invoice value, fall back to master
-                    df[field] = df[field].fillna(df[master_col])
+                    # Use combine_first to handle both NaN and empty strings
+                    df[field] = df[field].replace('', pd.NA).fillna(df[master_col])
                 elif field not in df.columns and master_col in df.columns:
                     # Invoice doesn't have this column - use master value
                     df[field] = df[master_col]
@@ -3271,7 +3422,7 @@ class DerivativeMill(QMainWindow):
         preview_cols = [
             'Product No','ValueUSD','HTSCode','MID','cbp_qty','DecTypeCd',
             'CountryofMelt','CountryOfCast','PrimCountryOfSmelt','PrimSmeltFlag',
-            'SteelRatio','AluminumRatio','CopperRatio','WoodRatio','AutoRatio','_232_flag','_not_in_db'
+            'SteelRatio','AluminumRatio','CopperRatio','WoodRatio','AutoRatio','_232_flag','_not_in_db','Sec301_Exclusion_Tariff'
         ]
         preview_df = df[preview_cols].copy()
         self.on_done(preview_df, vr, None)
@@ -3481,6 +3632,7 @@ class DerivativeMill(QMainWindow):
             copper_ratio_val = r.get('CopperRatio', 0.0) or 0.0
             wood_ratio_val = r.get('WoodRatio', 0.0) or 0.0
             auto_ratio_val = r.get('AutoRatio', 0.0) or 0.0
+            non_steel_ratio_val = r.get('NonSteelRatio', 0.0) or 0.0
             is_232_row = steel_ratio_val > 0.0 or aluminum_ratio_val > 0.0 or copper_ratio_val > 0.0 or wood_ratio_val > 0.0 or auto_ratio_val > 0.0
 
             # Display percentages
@@ -3488,15 +3640,25 @@ class DerivativeMill(QMainWindow):
             copper_display = f"{copper_ratio_val*100:.1f}%" if copper_ratio_val > 0 else ""
             wood_display = f"{wood_ratio_val*100:.1f}%" if wood_ratio_val > 0 else ""
             auto_display = f"{auto_ratio_val*100:.1f}%" if auto_ratio_val > 0 else ""
+            non_steel_display = f"{non_steel_ratio_val*100:.1f}%" if non_steel_ratio_val > 0 else ""
 
             # Check if part is not in database - show "Not Found" in 232 Status column
             not_in_db = r.get('_not_in_db', False)
             status_display = "Not Found" if not_in_db else flag
 
+            # Get Sec301 exclusion tariff value
+            sec301_exclusion = str(r.get('Sec301_Exclusion_Tariff', '')).strip()
+            has_sec301_exclusion = bool(sec301_exclusion and sec301_exclusion not in ['', 'nan', 'None'])
+
+            # Create HTS item with tooltip if Sec301 exclusion exists
+            hts_item = QTableWidgetItem(str(r.get('HTSCode','')))
+            if has_sec301_exclusion:
+                hts_item.setToolTip(f"Sec301 Exclusion Tariff: {sec301_exclusion}")
+
             items = [
                 QTableWidgetItem(str(r['Product No'])),
                 value_item,
-                QTableWidgetItem(str(r.get('HTSCode',''))),
+                hts_item,
                 QTableWidgetItem(str(r.get('MID',''))),
                 QTableWidgetItem(str(r.get('cbp_qty', ''))),
                 QTableWidgetItem(str(r.get('DecTypeCd',''))),
@@ -3509,12 +3671,13 @@ class DerivativeMill(QMainWindow):
                 QTableWidgetItem(copper_display),
                 QTableWidgetItem(wood_display),
                 QTableWidgetItem(auto_display),
+                QTableWidgetItem(non_steel_display),
                 QTableWidgetItem(status_display)
             ]
 
-            # Make all items editable except Steel%, Al%, Cu%, Wood%, Auto%, and 232 Status
+            # Make all items editable except Steel%, Al%, Cu%, Wood%, Auto%, Non-232%, and 232 Status
             for idx, item in enumerate(items):
-                if idx not in [10, 11, 12, 13, 14, 15]:  # Not Steel%, Al%, Cu%, Wood%, Auto%, 232 Status
+                if idx not in [10, 11, 12, 13, 14, 15, 16]:  # Not Steel%, Al%, Cu%, Wood%, Auto%, Non-232%, 232 Status
                     item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsEditable)
 
             # Set font colors based on Section 232 material type
@@ -3526,8 +3689,22 @@ class DerivativeMill(QMainWindow):
                 item.setFont(f)
                 item.setTextAlignment(Qt.AlignCenter)  # Center text in all columns
 
+                # Add red border for rows with Sec301 exclusion
+                if has_sec301_exclusion:
+                    item.setData(Qt.UserRole + 1, 'sec301_exclusion')  # Mark for border styling
+
             for j, it in enumerate(items):
                 self.table.setItem(i, j, it)
+
+            # Apply background color to entire row if Sec301 exclusion exists
+            if has_sec301_exclusion:
+                # Get user-configured Sec301 background color
+                sec301_bg_color = self.get_sec301_bg_color()
+                for j in range(len(items)):
+                    cell_item = self.table.item(i, j)
+                    if cell_item:
+                        # Set background color using saved preference
+                        cell_item.setBackground(sec301_bg_color)
 
         self.table.setSortingEnabled(True)  # Re-enable sorting after populating
         self.table.blockSignals(False)
@@ -3568,8 +3745,19 @@ class DerivativeMill(QMainWindow):
         btn_import.setFixedSize(100, 28)
         btn_import.setStyleSheet(self.get_button_style("success") + "QPushButton { font-size:10pt; padding:4px; }")
         btn_import.clicked.connect(self.start_parts_import)
+
+        btn_update_sec301 = QPushButton("Update Sec301 Exclusion")
+        btn_update_sec301.setStyleSheet(self.get_button_style("info"))
+        btn_update_sec301.clicked.connect(self.update_sec301_single)
+
+        btn_import_sec301 = QPushButton("Import Sec301 CSV")
+        btn_import_sec301.setStyleSheet(self.get_button_style("info"))
+        btn_import_sec301.clicked.connect(self.import_sec301_csv)
+
         btn_layout.addWidget(btn_load)
         btn_layout.addWidget(btn_reset)
+        btn_layout.addWidget(btn_update_sec301)
+        btn_layout.addWidget(btn_import_sec301)
         btn_layout.addStretch()
         btn_layout.addWidget(btn_import)
         layout.addWidget(button_widget)
@@ -3631,6 +3819,7 @@ class DerivativeMill(QMainWindow):
             "country_of_melt": "Country of Melt",
             "country_of_cast": "Country of Cast",
             "country_of_smelt": "Country of Smelt",
+            "Sec301_Exclusion_Tariff": "Sec301 Exclusion Tariff",
             "client_code": "Client Code",
             "description": "Description",
             "country_origin": "Country of Origin"
@@ -3857,6 +4046,8 @@ class DerivativeMill(QMainWindow):
                 country_of_melt = str(r.get('country_of_melt', '')).strip().upper()[:2] if 'country_of_melt' in df.columns else ""
                 country_of_cast = str(r.get('country_of_cast', '')).strip().upper()[:2] if 'country_of_cast' in df.columns else ""
                 country_of_smelt = str(r.get('country_of_smelt', '')).strip().upper()[:2] if 'country_of_smelt' in df.columns else ""
+                # Get Sec301_Exclusion_Tariff if mapped, otherwise empty string
+                sec301_exclusion = str(r.get('Sec301_Exclusion_Tariff', '')).strip() if 'Sec301_Exclusion_Tariff' in df.columns else ""
 
                 # Helper function to parse ratio values
                 def parse_ratio(value_str):
@@ -3891,8 +4082,8 @@ class DerivativeMill(QMainWindow):
 
                 c.execute("""INSERT INTO parts_master (part_number, description, hts_code, country_origin, mid, client_code,
                           steel_ratio, non_steel_ratio, last_updated, cbp_qty1, aluminum_ratio, copper_ratio, wood_ratio, auto_ratio,
-                          country_of_melt, country_of_cast, country_of_smelt)
-                          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                          country_of_melt, country_of_cast, country_of_smelt, Sec301_Exclusion_Tariff)
+                          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                           ON CONFLICT(part_number) DO UPDATE SET
                           description=excluded.description, hts_code=excluded.hts_code,
                           country_origin=excluded.country_origin, mid=excluded.mid,
@@ -3901,10 +4092,11 @@ class DerivativeMill(QMainWindow):
                           cbp_qty1=excluded.cbp_qty1, aluminum_ratio=excluded.aluminum_ratio,
                           copper_ratio=excluded.copper_ratio, wood_ratio=excluded.wood_ratio,
                           auto_ratio=excluded.auto_ratio, country_of_melt=excluded.country_of_melt,
-                          country_of_cast=excluded.country_of_cast, country_of_smelt=excluded.country_of_smelt""",
+                          country_of_cast=excluded.country_of_cast, country_of_smelt=excluded.country_of_smelt,
+                          Sec301_Exclusion_Tariff=excluded.Sec301_Exclusion_Tariff""",
                           (part, desc, hts, origin, mid, client_code, steel_ratio, non_steel_ratio, now,
                            cbp_qty1, aluminum_ratio, copper_ratio, wood_ratio, auto_ratio,
-                           country_of_melt, country_of_cast, country_of_smelt))
+                           country_of_melt, country_of_cast, country_of_smelt, sec301_exclusion))
                 if c.rowcount:
                     inserted += 1 if conn.total_changes > updated+inserted else 0
                     updated += 1 if conn.total_changes == updated+inserted else 0
@@ -3921,6 +4113,211 @@ class DerivativeMill(QMainWindow):
             logger.error(f"Import failed: {e}")
             QMessageBox.critical(self, "Error", f"Import failed: {str(e)}")
             self.status.setText("Import failed")
+
+    def update_sec301_single(self):
+        """Update Section 301 Exclusion Tariff for a single part number"""
+        # Create dialog for input
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Update Sec301 Exclusion Tariff")
+        dialog.setMinimumWidth(400)
+        layout = QVBoxLayout(dialog)
+
+        # Instructions
+        instructions = QLabel("Enter the part number and Section 301 Exclusion Tariff to update:")
+        instructions.setWordWrap(True)
+        layout.addWidget(instructions)
+
+        # Form layout
+        form_layout = QFormLayout()
+
+        part_number_input = QLineEdit()
+        part_number_input.setPlaceholderText("e.g., PART12345")
+        form_layout.addRow("Part Number:", part_number_input)
+
+        sec301_input = QLineEdit()
+        sec301_input.setPlaceholderText("e.g., 9903.88.15")
+        form_layout.addRow("Sec301 Exclusion Tariff:", sec301_input)
+
+        layout.addLayout(form_layout)
+
+        # Buttons
+        button_box = QHBoxLayout()
+        btn_update = QPushButton("Update")
+        btn_update.setStyleSheet(self.get_button_style("success"))
+        btn_cancel = QPushButton("Cancel")
+        btn_cancel.setStyleSheet(self.get_button_style("danger"))
+
+        btn_update.clicked.connect(dialog.accept)
+        btn_cancel.clicked.connect(dialog.reject)
+
+        button_box.addWidget(btn_update)
+        button_box.addWidget(btn_cancel)
+        layout.addLayout(button_box)
+
+        # Show dialog
+        if dialog.exec_() == QDialog.Accepted:
+            part_number = part_number_input.text().strip()
+            sec301_tariff = sec301_input.text().strip()
+
+            if not part_number:
+                QMessageBox.warning(self, "Input Required", "Please enter a part number.")
+                return
+
+            try:
+                conn = sqlite3.connect(str(DB_PATH))
+                c = conn.cursor()
+
+                # Check if part exists
+                c.execute("SELECT part_number FROM parts_master WHERE part_number=?", (part_number,))
+                exists = c.fetchone()
+
+                if not exists:
+                    QMessageBox.warning(self, "Part Not Found",
+                                      f"Part number '{part_number}' not found in database.\n\n"
+                                      "Please import the part first using the regular import function.")
+                    conn.close()
+                    return
+
+                # Update the Sec301_Exclusion_Tariff
+                now = datetime.now().isoformat()
+                c.execute("""UPDATE parts_master
+                            SET Sec301_Exclusion_Tariff=?, last_updated=?
+                            WHERE part_number=?""",
+                         (sec301_tariff, now, part_number))
+                conn.commit()
+                conn.close()
+
+                # Refresh parts table if visible
+                if hasattr(self, 'parts_table'):
+                    self.refresh_parts_table()
+
+                QMessageBox.information(self, "Success",
+                                      f"Updated Sec301 Exclusion Tariff for part '{part_number}'")
+                logger.info(f"Updated Sec301 Exclusion Tariff for {part_number}: {sec301_tariff}")
+                self.status.setText(f"Updated Sec301 for {part_number}")
+
+            except Exception as e:
+                logger.error(f"Failed to update Sec301 exclusion: {e}")
+                QMessageBox.critical(self, "Error", f"Failed to update:\n{e}")
+
+    def import_sec301_csv(self):
+        """Import Section 301 Exclusion Tariffs from CSV file"""
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Sec301 Exclusions CSV File",
+            "",
+            "CSV Files (*.csv);;Excel Files (*.xlsx);;All Files (*.*)"
+        )
+        if not path:
+            return
+
+        try:
+            # Read the file
+            if path.lower().endswith('.xlsx'):
+                df = pd.read_excel(path, dtype=str, keep_default_na=False)
+            else:
+                df = pd.read_csv(path, dtype=str, keep_default_na=False)
+
+            df = df.fillna("").rename(columns=str.strip)
+
+            # Show column mapping dialog
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Map CSV Columns")
+            dialog.setMinimumWidth(500)
+            layout = QVBoxLayout(dialog)
+
+            instructions = QLabel(
+                "<b>Map your CSV columns to the required fields:</b><br><br>"
+                "Select which columns from your CSV contain the Part Number and Sec301 Exclusion Tariff."
+            )
+            instructions.setWordWrap(True)
+            layout.addWidget(instructions)
+
+            form_layout = QFormLayout()
+
+            part_combo = QComboBox()
+            part_combo.addItems(["-- Select Column --"] + list(df.columns))
+            form_layout.addRow("Part Number Column:", part_combo)
+
+            sec301_combo = QComboBox()
+            sec301_combo.addItems(["-- Select Column --"] + list(df.columns))
+            form_layout.addRow("Sec301 Exclusion Tariff Column:", sec301_combo)
+
+            layout.addLayout(form_layout)
+
+            # Buttons
+            button_box = QHBoxLayout()
+            btn_import = QPushButton("Import")
+            btn_import.setStyleSheet(self.get_button_style("success"))
+            btn_cancel = QPushButton("Cancel")
+            btn_cancel.setStyleSheet(self.get_button_style("danger"))
+
+            btn_import.clicked.connect(dialog.accept)
+            btn_cancel.clicked.connect(dialog.reject)
+
+            button_box.addWidget(btn_import)
+            button_box.addWidget(btn_cancel)
+            layout.addLayout(button_box)
+
+            # Show dialog
+            if dialog.exec_() == QDialog.Accepted:
+                part_col = part_combo.currentText()
+                sec301_col = sec301_combo.currentText()
+
+                if part_col == "-- Select Column --" or sec301_col == "-- Select Column --":
+                    QMessageBox.warning(self, "Selection Required",
+                                      "Please select both columns before importing.")
+                    return
+
+                # Process the import
+                conn = sqlite3.connect(str(DB_PATH))
+                c = conn.cursor()
+                updated = 0
+                not_found = []
+                now = datetime.now().isoformat()
+
+                for _, row in df.iterrows():
+                    part_number = str(row.get(part_col, '')).strip()
+                    sec301_tariff = str(row.get(sec301_col, '')).strip()
+
+                    if not part_number:
+                        continue
+
+                    # Check if part exists
+                    c.execute("SELECT part_number FROM parts_master WHERE part_number=?", (part_number,))
+                    exists = c.fetchone()
+
+                    if exists:
+                        c.execute("""UPDATE parts_master
+                                    SET Sec301_Exclusion_Tariff=?, last_updated=?
+                                    WHERE part_number=?""",
+                                 (sec301_tariff, now, part_number))
+                        updated += 1
+                    else:
+                        not_found.append(part_number)
+
+                conn.commit()
+                conn.close()
+
+                # Refresh parts table if visible
+                if hasattr(self, 'parts_table'):
+                    self.refresh_parts_table()
+
+                # Show results
+                result_msg = f"Updated {updated} part(s) with Sec301 Exclusion Tariffs."
+                if not_found:
+                    result_msg += f"\n\n{len(not_found)} part(s) not found in database:\n"
+                    result_msg += "\n".join(not_found[:10])  # Show first 10
+                    if len(not_found) > 10:
+                        result_msg += f"\n... and {len(not_found) - 10} more"
+
+                QMessageBox.information(self, "Import Complete", result_msg)
+                logger.info(f"Imported Sec301 exclusions: {updated} updated, {len(not_found)} not found")
+                self.status.setText(f"Imported {updated} Sec301 exclusions")
+
+        except Exception as e:
+            logger.error(f"Failed to import Sec301 CSV: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to import CSV:\n{e}")
 
     def setup_shipment_mapping_tab(self):
         logger.debug(f"setup_shipment_mapping_tab called - tab_shipment_map={self.tab_shipment_map}")
@@ -4018,6 +4415,224 @@ class DerivativeMill(QMainWindow):
         scroll.setWidget(scroll_widget)
         layout.addWidget(scroll, 1)
         self.tab_shipment_map.setLayout(layout)
+
+    def setup_output_mapping_tab(self):
+        """Setup the Output XLSX Mapping tab for customizing export column names and order"""
+        layout = QVBoxLayout(self.tab_output_map)
+        title = QLabel("<h2>Output XLSX Column Mapping</h2><p>Customize column names and order for exported files</p>")
+        title.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title)
+
+        # Top bar with profile management
+        top_bar_widget = QWidget()
+        top_bar = QHBoxLayout(top_bar_widget)
+        self.output_profile_combo = QComboBox()
+        self.output_profile_combo.setMinimumWidth(300)
+        self.output_profile_combo.currentTextChanged.connect(self.load_output_mapping_profile)
+        top_bar.addWidget(QLabel("Saved Profiles:"))
+        top_bar.addWidget(self.output_profile_combo)
+
+        # Load existing profiles
+        self.load_output_mapping_profiles()
+
+        btn_save_output = QPushButton("Save Current Mapping As...")
+        btn_save_output.setStyleSheet(self.get_button_style("success"))
+        btn_save_output.clicked.connect(self.save_output_mapping_profile)
+
+        btn_delete_output = QPushButton("Delete Profile")
+        btn_delete_output.setStyleSheet(self.get_button_style("danger"))
+        btn_delete_output.clicked.connect(self.delete_output_mapping_profile)
+
+        btn_reset_output = QPushButton("Reset to Default")
+        btn_reset_output.setStyleSheet(self.get_button_style("info"))
+        btn_reset_output.clicked.connect(self.reset_output_mapping)
+
+        top_bar.addWidget(btn_reset_output)
+        top_bar.addWidget(btn_save_output)
+        top_bar.addWidget(btn_delete_output)
+        top_bar.addStretch()
+        layout.addWidget(top_bar_widget)
+
+        # Instructions
+        instructions = QLabel(
+            "<p><b>Instructions:</b> Modify the column names below to customize your export file. "
+            "These are the internal field names mapped to export column headers.</p>"
+        )
+        instructions.setWordWrap(True)
+        layout.addWidget(instructions)
+
+        # Scrollable area for column mappings
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll_widget = QWidget()
+        scroll_layout = QVBoxLayout(scroll_widget)
+
+        # Create form for column name mappings
+        form_widget = QWidget()
+        form_layout = QFormLayout(form_widget)
+        form_layout.setLabelAlignment(Qt.AlignRight)
+
+        # Default column mappings (internal_name: display_name)
+        self.default_output_columns = {
+            'Product No': 'Product No',
+            'ValueUSD': 'ValueUSD',
+            'HTSCode': 'HTSCode',
+            'MID': 'MID',
+            'CalcWtNet': 'CalcWtNet',
+            'DecTypeCd': 'DecTypeCd',
+            'CountryofMelt': 'CountryofMelt',
+            'CountryOfCast': 'CountryOfCast',
+            'PrimCountryOfSmelt': 'PrimCountryOfSmelt',
+            'PrimSmeltFlag': 'PrimSmeltFlag',
+            'SteelRatio': 'SteelRatio',
+            'AluminumRatio': 'AluminumRatio',
+            'CopperRatio': 'CopperRatio',
+            'WoodRatio': 'WoodRatio',
+            'AutoRatio': 'AutoRatio',
+            '232_Status': '232_Status'
+        }
+
+        # Initialize current mapping if not exists or is None
+        if not hasattr(self, 'output_column_mapping') or self.output_column_mapping is None:
+            self.output_column_mapping = self.default_output_columns.copy()
+
+        # Create text inputs for each column
+        self.output_column_inputs = {}
+        for internal_name, display_name in self.output_column_mapping.items():
+            line_edit = QLineEdit(display_name)
+            line_edit.setMinimumWidth(200)
+            line_edit.textChanged.connect(lambda text, key=internal_name: self.update_output_column_name(key, text))
+            self.output_column_inputs[internal_name] = line_edit
+            form_layout.addRow(f"{internal_name}:", line_edit)
+
+        scroll_layout.addWidget(form_widget)
+        scroll.setWidget(scroll_widget)
+        layout.addWidget(scroll, 1)
+        self.tab_output_map.setLayout(layout)
+
+    def update_output_column_name(self, internal_name, new_name):
+        """Update the output column mapping when user changes a name"""
+        self.output_column_mapping[internal_name] = new_name
+
+    def reset_output_mapping(self):
+        """Reset output column mapping to default values"""
+        self.output_column_mapping = self.default_output_columns.copy()
+        for internal_name, line_edit in self.output_column_inputs.items():
+            line_edit.blockSignals(True)
+            line_edit.setText(self.default_output_columns[internal_name])
+            line_edit.blockSignals(False)
+        self.status.setText("Output mapping reset to default")
+        logger.info("Output column mapping reset to default")
+
+    def load_output_mapping_profiles(self):
+        """Load output mapping profiles from database"""
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            df = pd.read_sql("SELECT profile_name FROM output_column_mappings ORDER BY created_date DESC", conn)
+            conn.close()
+
+            if hasattr(self, 'output_profile_combo'):
+                self.output_profile_combo.blockSignals(True)
+                self.output_profile_combo.clear()
+                self.output_profile_combo.addItem("-- Select Profile --")
+                for name in df['profile_name'].tolist():
+                    self.output_profile_combo.addItem(name)
+                self.output_profile_combo.blockSignals(False)
+
+            logger.info(f"Loaded {len(df)} output mapping profiles")
+        except Exception as e:
+            logger.error(f"Failed to load output mapping profiles: {e}")
+
+    def load_output_mapping_profile(self, profile_name):
+        """Load selected output mapping profile"""
+        if not profile_name or profile_name == "-- Select Profile --":
+            return
+
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("SELECT mapping_json FROM output_column_mappings WHERE profile_name=?", (profile_name,))
+            row = c.fetchone()
+            conn.close()
+
+            if row:
+                self.output_column_mapping = json.loads(row[0])
+                # Update UI inputs
+                for internal_name, line_edit in self.output_column_inputs.items():
+                    line_edit.blockSignals(True)
+                    line_edit.setText(self.output_column_mapping.get(internal_name, internal_name))
+                    line_edit.blockSignals(False)
+
+                self.status.setText(f"Loaded output mapping profile: {profile_name}")
+                logger.info(f"Loaded output mapping profile: {profile_name}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to load profile:\n{e}")
+            logger.error(f"Failed to load output mapping profile: {e}")
+
+    def save_output_mapping_profile(self):
+        """Save current output column mapping as a named profile"""
+        name, ok = QInputDialog.getText(self, "Save Output Mapping Profile", "Enter profile name:")
+        if not ok or not name.strip():
+            return
+        name = name.strip()
+
+        # Check if profile exists
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("SELECT profile_name FROM output_column_mappings WHERE profile_name=?", (name,))
+            exists = c.fetchone()
+
+            if exists:
+                reply = QMessageBox.question(self, "Overwrite?", f"Profile '{name}' exists. Overwrite?")
+                if reply != QMessageBox.Yes:
+                    conn.close()
+                    return
+
+            mapping_str = json.dumps(self.output_column_mapping)
+            now = datetime.now().isoformat()
+
+            c.execute("""INSERT OR REPLACE INTO output_column_mappings (profile_name, mapping_json, created_date)
+                         VALUES (?,?,?)""", (name, mapping_str, now))
+            conn.commit()
+            conn.close()
+
+            self.load_output_mapping_profiles()
+            self.output_profile_combo.setCurrentText(name)
+            self.status.setText(f"Saved output mapping profile: {name}")
+            logger.info(f"Saved output mapping profile: {name}")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to save profile:\n{e}")
+            logger.error(f"Failed to save output mapping profile: {e}")
+
+    def delete_output_mapping_profile(self):
+        """Delete selected output mapping profile"""
+        profile_name = self.output_profile_combo.currentText()
+        if not profile_name or profile_name == "-- Select Profile --":
+            QMessageBox.information(self, "No Profile Selected", "Please select a profile to delete.")
+            return
+
+        reply = QMessageBox.question(self, "Confirm Delete",
+                                     f"Delete profile '{profile_name}'?",
+                                     QMessageBox.Yes | QMessageBox.No)
+        if reply != QMessageBox.Yes:
+            return
+
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("DELETE FROM output_column_mappings WHERE profile_name=?", (profile_name,))
+            conn.commit()
+            conn.close()
+
+            self.load_output_mapping_profiles()
+            self.status.setText(f"Deleted output mapping profile: {profile_name}")
+            logger.info(f"Deleted output mapping profile: {profile_name}")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to delete profile:\n{e}")
+            logger.error(f"Failed to delete output mapping profile: {e}")
 
     def load_csv_for_shipment_mapping(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -4156,32 +4771,49 @@ class DerivativeMill(QMainWindow):
         return df
 
     def on_shipment_drop(self, field_key, column_name):
-        for k, t in self.shipment_targets.items():
-            if t.column_name == column_name and k != field_key:
-                t.column_name = None
-                t.setText(f"Drop {t.field_key} here")
-                t.setProperty("occupied", False)
-                t.style().unpolish(t); t.style().polish(t)
+        # Check if shipment_targets is valid
+        if hasattr(self, 'shipment_targets') and self.shipment_targets:
+            try:
+                for k, t in self.shipment_targets.items():
+                    if t and hasattr(t, 'setText'):
+                        if t.column_name == column_name and k != field_key:
+                            t.column_name = None
+                            t.setText(f"Drop {t.field_key} here")
+                            t.setProperty("occupied", False)
+                            t.style().unpolish(t); t.style().polish(t)
+            except (RuntimeError, AttributeError):
+                pass  # Widgets have been deleted
+
         self.shipment_mapping[field_key] = column_name
         SHIPMENT_MAPPING_FILE.write_text(json.dumps(self.shipment_mapping, indent=2))
         logger.info(f"Shipment mapping saved: {field_key} to {column_name}")
 
     def reset_current_mapping(self):
         self.shipment_mapping = {}
-        
-        # Clear drop targets (right side)
-        for target in self.shipment_targets.values():
-            target.column_name = None
-            target.setText(f"Drop {target.field_key} here")
-            target.setProperty("occupied", False)
-            target.style().unpolish(target); target.style().polish(target)
-        
-        # Clear CSV columns drag labels (left side)
-        for label in self.shipment_drag_labels:
-            label.setParent(None)
-            label.deleteLater()
-        self.shipment_drag_labels = []
-        
+
+        # Clear drop targets (right side) - only if they exist and are valid
+        if hasattr(self, 'shipment_targets') and self.shipment_targets:
+            try:
+                for target in self.shipment_targets.values():
+                    if target and hasattr(target, 'setText'):
+                        target.column_name = None
+                        target.setText(f"Drop {target.field_key} here")
+                        target.setProperty("occupied", False)
+                        target.style().unpolish(target); target.style().polish(target)
+            except (RuntimeError, AttributeError):
+                pass  # Widgets have been deleted
+
+        # Clear CSV columns drag labels (left side) - only if they exist and are valid
+        if hasattr(self, 'shipment_drag_labels') and self.shipment_drag_labels:
+            try:
+                for label in self.shipment_drag_labels:
+                    if label and hasattr(label, 'setParent'):
+                        label.setParent(None)
+                        label.deleteLater()
+                self.shipment_drag_labels = []
+            except (RuntimeError, AttributeError):
+                pass  # Widgets have been deleted
+
         self.status.setText("Current mapping reset")
 
     def load_mapping_profiles(self):
@@ -4257,22 +4889,36 @@ class DerivativeMill(QMainWindow):
             self.shipment_mapping = {}
             self.profile_header_row = 1  # Reset to default
 
-            # Clear drop targets
-            for target in self.shipment_targets.values():
-                target.column_name = None
-                target.setText(f"Drop {target.field_key.replace('_', ' ')} here")
-                target.setProperty("occupied", False)
-                target.style().unpolish(target)
-                target.style().polish(target)
+            # Clear drop targets (only if they exist and are valid)
+            if hasattr(self, 'shipment_targets') and self.shipment_targets:
+                try:
+                    for target in self.shipment_targets.values():
+                        if target and hasattr(target, 'setText'):
+                            target.column_name = None
+                            target.setText(f"Drop {target.field_key.replace('_', ' ')} here")
+                            target.setProperty("occupied", False)
+                            target.style().unpolish(target)
+                            target.style().polish(target)
+                except (RuntimeError, AttributeError):
+                    pass  # Widgets have been deleted
 
-            # Clear draggable CSV columns
-            for label in self.shipment_drag_labels:
-                label.deleteLater()
-            self.shipment_drag_labels.clear()
+            # Clear draggable CSV columns (only if they exist and are valid)
+            if hasattr(self, 'shipment_drag_labels') and self.shipment_drag_labels:
+                try:
+                    for label in self.shipment_drag_labels:
+                        if label and hasattr(label, 'deleteLater'):
+                            label.deleteLater()
+                    self.shipment_drag_labels.clear()
+                except (RuntimeError, AttributeError):
+                    pass  # Widgets have been deleted
 
-            # Reset header row to default
-            if hasattr(self, 'header_row_input'):
-                self.header_row_input.setText("1")
+            # Reset header row to default (only if widget exists and is valid)
+            if hasattr(self, 'header_row_input') and self.header_row_input:
+                try:
+                    if hasattr(self.header_row_input, 'setText'):
+                        self.header_row_input.setText("1")
+                except (RuntimeError, AttributeError):
+                    pass  # Widget has been deleted
 
             self.bottom_status.setText("Profile cleared")
             return
@@ -4289,8 +4935,12 @@ class DerivativeMill(QMainWindow):
                 header_row_value = row[1] if len(row) > 1 and row[1] is not None else 1
                 # Store as instance variable for use in Process Shipments tab
                 self.profile_header_row = header_row_value
-                if hasattr(self, 'header_row_input'):
-                    self.header_row_input.setText(str(header_row_value))
+                if hasattr(self, 'header_row_input') and self.header_row_input:
+                    try:
+                        if hasattr(self.header_row_input, 'setText'):
+                            self.header_row_input.setText(str(header_row_value))
+                    except (RuntimeError, AttributeError):
+                        pass  # Widget has been deleted
                 self.apply_current_mapping()
                 logger.info(f"Profile loaded: {name} (header_row={header_row_value})")
                 self.bottom_status.setText(f"Loaded profile: {name}")
@@ -4319,6 +4969,21 @@ class DerivativeMill(QMainWindow):
             QMessageBox.critical(self, "Error", f"Delete failed: {e}")
 
     def apply_current_mapping(self):
+        # Check if shipment_targets is valid (not deleted after dialog close)
+        if not hasattr(self, 'shipment_targets') or not self.shipment_targets:
+            return
+
+        # Check if the widgets in shipment_targets are still valid
+        try:
+            # Try to access a widget to see if it's been deleted
+            for target in self.shipment_targets.values():
+                if not target or not hasattr(target, 'setText'):
+                    return
+                break  # Just check the first one
+        except (RuntimeError, AttributeError):
+            # Widgets have been deleted
+            return
+
         # Batch UI updates to prevent GUI freezing
         for key, target in self.shipment_targets.items():
             col = self.shipment_mapping.get(key)
@@ -4373,7 +5038,7 @@ class DerivativeMill(QMainWindow):
         query_controls.addWidget(QLabel("SELECT * FROM parts_master WHERE"))
         
         self.query_field = QComboBox()
-        self.query_field.addItems(["part_number", "description", "hts_code", "country_origin", "mid", "client_code", "steel_ratio", "aluminum_ratio", "copper_ratio", "wood_ratio", "non_steel_ratio", "cbp_qty1"])
+        self.query_field.addItems(["part_number", "description", "hts_code", "country_origin", "mid", "client_code", "steel_ratio", "aluminum_ratio", "copper_ratio", "wood_ratio", "non_steel_ratio", "cbp_qty1", "Sec301_Exclusion_Tariff"])
         query_controls.addWidget(self.query_field)
         
         self.query_operator = QComboBox()
@@ -4424,7 +5089,7 @@ class DerivativeMill(QMainWindow):
         search_box = QHBoxLayout()
         search_box.addWidget(QLabel("Quick Search:"))
         self.search_field_combo = QComboBox()
-        self.search_field_combo.addItems(["All Fields","part_number","description","hts_code","country_origin","mid","client_code","steel_ratio","aluminum_ratio","copper_ratio","wood_ratio","auto_ratio","non_steel_ratio","cbp_qty1"])
+        self.search_field_combo.addItems(["All Fields","part_number","description","hts_code","country_origin","mid","client_code","steel_ratio","aluminum_ratio","copper_ratio","wood_ratio","auto_ratio","non_steel_ratio","cbp_qty1","Sec301_Exclusion_Tariff"])
         # Refocus search input after combo selection
         self.search_field_combo.currentIndexChanged.connect(lambda: self.search_input.setFocus())
         search_box.addWidget(self.search_field_combo)
@@ -4440,9 +5105,9 @@ class DerivativeMill(QMainWindow):
         table_box = QGroupBox("Parts Master Table")
         tl = QVBoxLayout()
         self.parts_table = QTableWidget()
-        self.parts_table.setColumnCount(14)
+        self.parts_table.setColumnCount(15)
         self.parts_table.setHorizontalHeaderLabels([
-            "part_number", "description", "hts_code", "country_origin", "mid", "client_code", "steel_ratio", "aluminum_ratio", "copper_ratio", "wood_ratio", "auto_ratio", "non_steel_ratio", "cbp_qty1", "updated_date"
+            "part_number", "description", "hts_code", "country_origin", "mid", "client_code", "steel_ratio", "aluminum_ratio", "copper_ratio", "wood_ratio", "auto_ratio", "non_steel_ratio", "cbp_qty1", "Sec301_Exclusion_Tariff", "updated_date"
         ])
         self.parts_table.setEditTriggers(QTableWidget.AllEditTriggers)
         self.parts_table.setSelectionBehavior(QTableWidget.SelectRows)
@@ -4460,9 +5125,9 @@ class DerivativeMill(QMainWindow):
             conn = sqlite3.connect(str(DB_PATH))
             # Use explicit column ordering to match header labels
             df = pd.read_sql("""
-                SELECT part_number, description, hts_code, country_origin, mid, client_code, 
-                       steel_ratio, aluminum_ratio, copper_ratio, wood_ratio, auto_ratio, non_steel_ratio, 
-                       cbp_qty1, last_updated as updated_date 
+                SELECT part_number, description, hts_code, country_origin, mid, client_code,
+                       steel_ratio, aluminum_ratio, copper_ratio, wood_ratio, auto_ratio, non_steel_ratio,
+                       cbp_qty1, Sec301_Exclusion_Tariff, last_updated as updated_date
                 FROM parts_master ORDER BY part_number
             """, conn)
             conn.close()
@@ -4576,7 +5241,7 @@ class DerivativeMill(QMainWindow):
             now = datetime.now().isoformat()
             saved = 0
             for row in range(self.parts_table.rowCount()):
-                items = [self.parts_table.item(row, col) for col in range(14)]
+                items = [self.parts_table.item(row, col) for col in range(15)]
                 if not items[0] or not items[0].text().strip(): continue
                 part = items[0].text().strip()
                 desc = items[1].text() if items[1] else ""
@@ -4612,9 +5277,11 @@ class DerivativeMill(QMainWindow):
                 # Non-232 ratio is remainder after all Section 232 materials
                 non_steel = max(0.0, 1.0 - steel - aluminum - copper - wood - auto)
                 cbp_qty1 = items[12].text() if items[12] else ""
+                sec301_exclusion = items[13].text() if items[13] else ""
                 c.execute("""INSERT INTO parts_master (part_number, description, hts_code, country_origin, mid, client_code,
-                          steel_ratio, non_steel_ratio, last_updated, cbp_qty1, aluminum_ratio, copper_ratio, wood_ratio, auto_ratio)
-                          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                          steel_ratio, non_steel_ratio, last_updated, cbp_qty1, aluminum_ratio, copper_ratio, wood_ratio, auto_ratio,
+                          Sec301_Exclusion_Tariff)
+                          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                           ON CONFLICT(part_number) DO UPDATE SET
                           description=excluded.description, hts_code=excluded.hts_code,
                           country_origin=excluded.country_origin, mid=excluded.mid,
@@ -4622,8 +5289,8 @@ class DerivativeMill(QMainWindow):
                           non_steel_ratio=excluded.non_steel_ratio, last_updated=excluded.last_updated,
                           cbp_qty1=excluded.cbp_qty1, aluminum_ratio=excluded.aluminum_ratio,
                           copper_ratio=excluded.copper_ratio, wood_ratio=excluded.wood_ratio,
-                          auto_ratio=excluded.auto_ratio""",
-                          (part, desc, hts, origin, mid, client_code, steel, non_steel, now, cbp_qty1, aluminum, copper, wood, auto))
+                          auto_ratio=excluded.auto_ratio, Sec301_Exclusion_Tariff=excluded.Sec301_Exclusion_Tariff""",
+                          (part, desc, hts, origin, mid, client_code, steel, non_steel, now, cbp_qty1, aluminum, copper, wood, auto, sec301_exclusion))
                 if c.rowcount: saved += 1
             conn.commit(); conn.close()
             QMessageBox.information(self, "Success", f"Saved {saved} parts!")
@@ -4747,8 +5414,10 @@ class DerivativeMill(QMainWindow):
             self.parts_table.setItem(i, 11, QTableWidgetItem(str(row.get('non_steel_ratio', 0.0)) if pd.notna(row.get('non_steel_ratio')) else "0.0"))
             # Column 12: cbp_qty1
             self.parts_table.setItem(i, 12, QTableWidgetItem(str(row.get('cbp_qty1', '')) if pd.notna(row.get('cbp_qty1')) else ""))
-            # Column 13: updated_date
-            self.parts_table.setItem(i, 13, QTableWidgetItem(str(row.get('updated_date', '')) if pd.notna(row.get('updated_date')) else ""))
+            # Column 13: Sec301_Exclusion_Tariff
+            self.parts_table.setItem(i, 13, QTableWidgetItem(str(row.get('Sec301_Exclusion_Tariff', '')) if pd.notna(row.get('Sec301_Exclusion_Tariff')) else ""))
+            # Column 14: updated_date
+            self.parts_table.setItem(i, 14, QTableWidgetItem(str(row.get('updated_date', '')) if pd.notna(row.get('updated_date')) else ""))
         self.parts_table.blockSignals(False)
 
     # ...existing code...
@@ -5482,12 +6151,14 @@ class DerivativeMill(QMainWindow):
             QTableWidgetItem(""),  # Al%
             QTableWidgetItem(""),  # Cu%
             QTableWidgetItem(""),  # Wood%
+            QTableWidgetItem(""),  # Auto%
+            QTableWidgetItem(""),  # Non-232%
             QTableWidgetItem("")  # 232 Status
         ]
-        
+
         # Make all items editable except ratios and 232 status
         for i, item in enumerate(items):
-            if i not in [10, 11, 12, 13, 14]:  # Not Steel%, Al%, Cu%, Wood%, 232 Status
+            if i not in [10, 11, 12, 13, 14, 15, 16]:  # Not Steel%, Al%, Cu%, Wood%, Auto%, Non-232%, 232 Status
                 item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsEditable)
             self.table.setItem(row, i, item)
         
@@ -5723,7 +6394,7 @@ class DerivativeMill(QMainWindow):
             value = value_cell.data(Qt.UserRole) if value_cell else 0.0
             
             # Get ratio percentages as floats (handle empty values)
-            # Column indices: 10=Steel%, 11=Al%, 12=Cu%, 13=Wood%, 14=Auto%, 15=232 Status
+            # Column indices: 10=Steel%, 11=Al%, 12=Cu%, 13=Wood%, 14=Auto%, 15=Non-232%, 16=232 Status
             steel_text = self.table.item(i, 10).text() if self.table.item(i, 10) else ""
             aluminum_text = self.table.item(i, 11).text() if self.table.item(i, 11) else ""
             copper_text = self.table.item(i, 12).text() if self.table.item(i, 12) else ""
@@ -5745,6 +6416,13 @@ class DerivativeMill(QMainWindow):
             wood_ratio = parse_pct(wood_text)
             auto_ratio = parse_pct(auto_text)
 
+            # Get Sec301 exclusion data from last_processed_df if available
+            sec301_exclusion = ""
+            if self.last_processed_df is not None and i < len(self.last_processed_df):
+                sec301_exclusion = str(self.last_processed_df.iloc[i].get('Sec301_Exclusion_Tariff', '')).strip()
+                if sec301_exclusion in ['', 'nan', 'None']:
+                    sec301_exclusion = ""
+
             row_data = {
                 'Product No': self.table.item(i, 0).text() if self.table.item(i, 0) else "",
                 'ValueUSD': value,
@@ -5761,14 +6439,19 @@ class DerivativeMill(QMainWindow):
                 'CopperRatio': copper_ratio,
                 'WoodRatio': wood_ratio,
                 'AutoRatio': auto_ratio,
-                '_232_flag': self.table.item(i, 15).text() if self.table.item(i, 15) else ""
+                '_232_flag': self.table.item(i, 15).text() if self.table.item(i, 15) else "",
+                '_sec301_exclusion': sec301_exclusion
             }
             export_data.append(row_data)
-        
+
         df_out = pd.DataFrame(export_data)
-        
+
         # Build mask for Non_232 rows BEFORE converting to percentage strings (for red font styling)
         non232_mask = df_out['_232_flag'].fillna('').str.contains('Non_232', case=False, na=False)
+
+        # Build mask for Sec301 exclusion rows (for light orange background)
+        sec301_mask = df_out['_sec301_exclusion'].fillna('').astype(str).str.strip().ne('') & \
+                      ~df_out['_sec301_exclusion'].fillna('').astype(str).str.contains('nan|None', case=False, na=False)
         
         # Convert ratios to percentage strings for export
         df_out['SteelRatio'] = (df_out['SteelRatio'] * 100).round(1).astype(str) + "%"
@@ -5780,6 +6463,22 @@ class DerivativeMill(QMainWindow):
         cols = ['Product No','ValueUSD','HTSCode','MID','CalcWtNet','DecTypeCd',
             'CountryofMelt','CountryOfCast','PrimCountryOfSmelt','PrimSmeltFlag',
             'SteelRatio','AluminumRatio','CopperRatio','WoodRatio','AutoRatio','232_Status']
+
+        # Apply custom column mapping if set
+        if hasattr(self, 'output_column_mapping') and self.output_column_mapping:
+            # Create rename dictionary for columns that have custom names
+            rename_dict = {}
+            for col in cols:
+                if col in self.output_column_mapping and self.output_column_mapping[col] != col:
+                    rename_dict[col] = self.output_column_mapping[col]
+
+            # Rename columns if custom names are defined
+            if rename_dict:
+                df_out = df_out.rename(columns=rename_dict)
+                # Update cols list with new names
+                cols = [self.output_column_mapping.get(col, col) for col in cols]
+                logger.info(f"Applied custom column mapping: {rename_dict}")
+
         try:
             t_start = time.time()
             
@@ -5817,21 +6516,29 @@ class DerivativeMill(QMainWindow):
                     ws = next(iter(writer.sheets.values()))
 
                     # Set Arial font for all cells (including header)
+                    from openpyxl.styles import PatternFill
                     arial_font = ExcelFont(name='Arial', size=11, color="00000000")  # Explicit black
                     red_arial_font = ExcelFont(name='Arial', size=11, color="00FF0000")
-                    
+                    orange_fill = PatternFill(start_color="FFCC99", end_color="FFCC99", fill_type="solid")  # Light orange
+
                     # Apply font to header row
                     for col_idx in range(1, len(cols) + 1):
                         ws.cell(row=1, column=col_idx).font = ExcelFont(name='Arial', size=11, bold=True)
-                    
-                    # Apply font to data rows
+
+                    # Apply font and background to data rows
                     non232_indices = [i for i, val in enumerate(non232_mask.tolist()) if val]
+                    sec301_indices = [i for i, val in enumerate(sec301_mask.tolist()) if val]
                     for row_idx in range(len(df_out)):
                         row_num = row_idx + 2
                         is_non232 = row_idx in non232_indices
+                        is_sec301 = row_idx in sec301_indices
                         cell_font = red_arial_font if is_non232 else arial_font
                         for col_idx in range(1, len(cols) + 1):
-                            ws.cell(row=row_num, column=col_idx).font = cell_font
+                            cell = ws.cell(row=row_num, column=col_idx)
+                            cell.font = cell_font
+                            # Apply light orange background for Sec301 exclusions
+                            if is_sec301:
+                                cell.fill = orange_fill
                     
                     t_format = time.time() - t_format_start
                 
@@ -5869,21 +6576,29 @@ class DerivativeMill(QMainWindow):
                     t_format_start = time.time()
                     ws = next(iter(writer.sheets.values()))
 
-                    # Create font and alignment styles
+                    # Create font, fill, and alignment styles
+                    from openpyxl.styles import PatternFill
                     red_font = ExcelFont(name="Arial", color="00FF0000")
                     normal_font = ExcelFont(name="Arial", color="00000000")  # Explicit black color
                     center_alignment = Alignment(horizontal="center", vertical="center")
+                    orange_fill = PatternFill(start_color="FFCC99", end_color="FFCC99", fill_type="solid")  # Light orange
 
                     # Apply red font to rows where 232_Status is Non_232, normal font to others
+                    # Apply light orange background to rows with Sec301 exclusions
                     non232_indices = [i for i, val in enumerate(non232_mask.tolist()) if val]
+                    sec301_indices = [i for i, val in enumerate(sec301_mask.tolist()) if val]
                     for row_num in range(2, len(df_out) + 2):  # Start at 2 (after header)
                         is_non232 = (row_num - 2) in non232_indices
+                        is_sec301 = (row_num - 2) in sec301_indices
                         font_to_use = red_font if is_non232 else normal_font
 
                         for col_idx in range(1, len(cols) + 1):
                             cell = ws.cell(row=row_num, column=col_idx)
                             cell.font = font_to_use
                             cell.alignment = center_alignment
+                            # Apply light orange background for Sec301 exclusions
+                            if is_sec301:
+                                cell.fill = orange_fill
 
                     # Apply Arial font and center alignment to header row
                     for col_idx in range(1, len(cols) + 1):
@@ -6153,8 +6868,9 @@ class DerivativeMill(QMainWindow):
 
                     self.csv_total_value = round(total, 2)
                     logger.info(f"[CSV TOTAL DEBUG] Calculated total: ${self.csv_total_value:,.2f}")
-                    # Don't auto-populate CI input - just update the check
-                    self.update_invoice_check()  # This will control button state
+
+                    # Update the invoice check - this will display the total and control button state
+                    self.update_invoice_check()
                 else:
                     logger.warning("[CSV TOTAL DEBUG] No value column found, CSV total will be 0.00")
 
