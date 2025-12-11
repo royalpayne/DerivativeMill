@@ -794,6 +794,19 @@ class DerivativeMill(QMainWindow):
         self.last_output_filename = None
         self.shipment_targets = {}  # Prevent attribute error before tab setup
 
+        # Load output font color from settings
+        self.output_font_color = '#000000'  # Default black
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("SELECT value FROM app_config WHERE key = ?", ('output_font_color',))
+            row = c.fetchone()
+            conn.close()
+            if row:
+                self.output_font_color = row[0]
+        except:
+            pass
+
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
@@ -4461,6 +4474,145 @@ class DerivativeMill(QMainWindow):
         instructions.setWordWrap(True)
         layout.addWidget(instructions)
 
+        # Font color selector
+        color_widget = QWidget()
+        color_layout = QHBoxLayout(color_widget)
+        color_layout.setContentsMargins(10, 10, 10, 10)
+        color_label = QLabel("Export Font Color:")
+        color_layout.addWidget(color_label)
+
+        # Create color picker button
+        self.output_font_color_btn = QPushButton()
+        self.output_font_color_btn.setFixedSize(100, 30)
+
+        # Load saved font color or use default black
+        self.output_font_color = '#000000'
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("SELECT value FROM app_config WHERE key = ?", ('output_font_color',))
+            row = c.fetchone()
+            conn.close()
+            if row:
+                self.output_font_color = row[0]
+        except:
+            pass
+
+        self.output_font_color_btn.setStyleSheet(f"background-color: {self.output_font_color}; border: 1px solid #999;")
+        self.output_font_color_btn.clicked.connect(self.pick_output_font_color)
+        color_layout.addWidget(self.output_font_color_btn)
+        color_layout.addStretch()
+        layout.addWidget(color_widget)
+
+        # Section 232 Material Type Colors for Export
+        sec232_colors_group = QGroupBox("Section 232 Material Type Colors (Export)")
+        sec232_colors_layout = QFormLayout(sec232_colors_group)
+        sec232_colors_layout.setLabelAlignment(Qt.AlignRight)
+        sec232_colors_layout.setSpacing(10)
+
+        # Helper function to create export color picker button
+        def create_export_color_button(config_key, default_color, label_text):
+            """Create a color picker button for export with saved color"""
+            button = QPushButton()
+            button.setFixedSize(100, 30)
+
+            # Load saved color or use default
+            saved_color = default_color
+            try:
+                conn = sqlite3.connect(str(DB_PATH))
+                c = conn.cursor()
+                c.execute("SELECT value FROM app_config WHERE key = ?", (config_key,))
+                row = c.fetchone()
+                conn.close()
+                if row:
+                    saved_color = row[0]
+            except:
+                pass
+
+            # Set button style with current color
+            button.setStyleSheet(f"background-color: {saved_color}; border: 1px solid #999;")
+
+            def pick_color():
+                color = QColorDialog.getColor(QColor(saved_color), self, f"Choose {label_text} Color")
+                if color.isValid():
+                    color_hex = color.name()
+                    button.setStyleSheet(f"background-color: {color_hex}; border: 1px solid #999;")
+                    # Save to database
+                    try:
+                        conn = sqlite3.connect(str(DB_PATH))
+                        c = conn.cursor()
+                        c.execute("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)",
+                                  (config_key, color_hex))
+                        conn.commit()
+                        conn.close()
+                        logger.info(f"Saved export color preference {config_key}: {color_hex}")
+                        self.bottom_status.setText(f"{label_text} export color set to {color_hex}")
+                    except Exception as e:
+                        logger.error(f"Failed to save export color preference {config_key}: {e}")
+                        QMessageBox.critical(self, "Error", f"Failed to save color:\n{e}")
+
+            button.clicked.connect(pick_color)
+            return button
+
+        # Section 232 material type color pickers for export
+        export_steel_btn = create_export_color_button('export_steel_color', '#4a4a4a', 'Steel')
+        sec232_colors_layout.addRow("Steel:", export_steel_btn)
+
+        export_aluminum_btn = create_export_color_button('export_aluminum_color', '#6495ED', 'Aluminum')
+        sec232_colors_layout.addRow("Aluminum:", export_aluminum_btn)
+
+        export_copper_btn = create_export_color_button('export_copper_color', '#B87333', 'Copper')
+        sec232_colors_layout.addRow("Copper:", export_copper_btn)
+
+        export_wood_btn = create_export_color_button('export_wood_color', '#8B4513', 'Wood')
+        sec232_colors_layout.addRow("Wood:", export_wood_btn)
+
+        export_automotive_btn = create_export_color_button('export_automotive_color', '#2F4F4F', 'Automotive')
+        sec232_colors_layout.addRow("Automotive:", export_automotive_btn)
+
+        export_non232_btn = create_export_color_button('export_non232_color', '#FF0000', 'Non-232')
+        sec232_colors_layout.addRow("Non-232:", export_non232_btn)
+
+        layout.addWidget(sec232_colors_group)
+
+        # Column Visibility Selection
+        visibility_group = QGroupBox("Export Column Visibility")
+        visibility_layout = QVBoxLayout(visibility_group)
+
+        visibility_label = QLabel("Select which Section 232 ratio columns to include in export:")
+        visibility_layout.addWidget(visibility_label)
+
+        # Create checkboxes for ratio columns
+        ratio_checkboxes_layout = QHBoxLayout()
+
+        # Load saved visibility settings or default to all visible
+        self.output_column_visibility = {}
+        ratio_columns = ['SteelRatio', 'AluminumRatio', 'CopperRatio', 'WoodRatio', 'AutoRatio', 'NonSteelRatio']
+
+        for col in ratio_columns:
+            # Load saved setting or default to True (visible)
+            is_visible = True
+            try:
+                conn = sqlite3.connect(str(DB_PATH))
+                c = conn.cursor()
+                c.execute("SELECT value FROM app_config WHERE key = ?", (f'export_col_visible_{col}',))
+                row = c.fetchone()
+                conn.close()
+                if row:
+                    is_visible = row[0] == 'True'
+            except:
+                pass
+
+            checkbox = QCheckBox(col.replace('Ratio', '%'))
+            checkbox.setChecked(is_visible)
+            checkbox.stateChanged.connect(lambda state, col=col: self.update_column_visibility(col, state))
+            self.output_column_visibility[col] = checkbox
+            ratio_checkboxes_layout.addWidget(checkbox)
+
+        ratio_checkboxes_layout.addStretch()
+        visibility_layout.addLayout(ratio_checkboxes_layout)
+        layout.addWidget(visibility_group)
+
         # Scrollable area for column mappings
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -4489,6 +4641,7 @@ class DerivativeMill(QMainWindow):
             'CopperRatio': 'CopperRatio',
             'WoodRatio': 'WoodRatio',
             'AutoRatio': 'AutoRatio',
+            'NonSteelRatio': 'NonSteelRatio',
             '232_Status': '232_Status'
         }
 
@@ -4513,6 +4666,42 @@ class DerivativeMill(QMainWindow):
     def update_output_column_name(self, internal_name, new_name):
         """Update the output column mapping when user changes a name"""
         self.output_column_mapping[internal_name] = new_name
+
+    def update_column_visibility(self, col_name, state):
+        """Save column visibility setting to database"""
+        is_visible = state == 2  # Qt.Checked = 2
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)",
+                      (f'export_col_visible_{col_name}', str(is_visible)))
+            conn.commit()
+            conn.close()
+            logger.info(f"Column visibility updated: {col_name} = {is_visible}")
+            self.bottom_status.setText(f"{col_name} export visibility: {'visible' if is_visible else 'hidden'}")
+        except Exception as e:
+            logger.error(f"Failed to save column visibility: {e}")
+
+    def pick_output_font_color(self):
+        """Open color picker for output font color"""
+        color = QColorDialog.getColor(QColor(self.output_font_color), self, "Choose Export Font Color")
+        if color.isValid():
+            color_hex = color.name()
+            self.output_font_color = color_hex
+            self.output_font_color_btn.setStyleSheet(f"background-color: {color_hex}; border: 1px solid #999;")
+            # Save to database
+            try:
+                conn = sqlite3.connect(str(DB_PATH))
+                c = conn.cursor()
+                c.execute("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)",
+                          ('output_font_color', color_hex))
+                conn.commit()
+                conn.close()
+                logger.info(f"Saved output font color: {color_hex}")
+                self.status.setText(f"Output font color set to {color_hex}")
+            except Exception as e:
+                logger.error(f"Failed to save output font color: {e}")
+                QMessageBox.critical(self, "Error", f"Failed to save color:\n{e}")
 
     def reset_output_mapping(self):
         """Reset output column mapping to default values"""
@@ -4975,31 +5164,49 @@ class DerivativeMill(QMainWindow):
 
         # Check if the widgets in shipment_targets are still valid
         try:
-            # Try to access a widget to see if it's been deleted
+            # Try to actually access the widget's properties to see if it's been deleted
             for target in self.shipment_targets.values():
-                if not target or not hasattr(target, 'setText'):
+                if not target:
                     return
+                # Try to access the widget - this will raise RuntimeError if deleted
+                _ = target.isVisible()
                 break  # Just check the first one
         except (RuntimeError, AttributeError):
             # Widgets have been deleted
+            logger.debug("apply_current_mapping: shipment_targets widgets have been deleted, skipping")
             return
 
         # Batch UI updates to prevent GUI freezing
-        for key, target in self.shipment_targets.items():
-            col = self.shipment_mapping.get(key)
-            if col:
-                target.column_name = col
-                target.setText(f"{key}\n<- {col}")
-                target.setProperty("occupied", True)
-            else:
-                target.column_name = None
-                target.setText(f"Drop {key.replace('_', ' ')} here")
-                target.setProperty("occupied", False)
-        
-        # Apply all style updates at once after setting properties
-        for target in self.shipment_targets.values():
-            target.style().unpolish(target)
-            target.style().polish(target)
+        try:
+            for key, target in self.shipment_targets.items():
+                # Additional safety check per widget
+                try:
+                    _ = target.isVisible()
+                except (RuntimeError, AttributeError):
+                    logger.debug(f"apply_current_mapping: target widget for {key} has been deleted, skipping")
+                    continue
+
+                col = self.shipment_mapping.get(key)
+                if col:
+                    target.column_name = col
+                    target.setText(f"{key}\n<- {col}")
+                    target.setProperty("occupied", True)
+                else:
+                    target.column_name = None
+                    target.setText(f"Drop {key.replace('_', ' ')} here")
+                    target.setProperty("occupied", False)
+
+            # Apply all style updates at once after setting properties
+            for target in self.shipment_targets.values():
+                try:
+                    _ = target.isVisible()
+                    target.style().unpolish(target)
+                    target.style().polish(target)
+                except (RuntimeError, AttributeError):
+                    continue
+        except (RuntimeError, AttributeError) as e:
+            logger.debug(f"apply_current_mapping: Error during mapping update: {e}")
+            return
 
     def setup_master_tab(self):
         layout = QVBoxLayout(self.tab_master)
@@ -6416,6 +6623,10 @@ class DerivativeMill(QMainWindow):
             wood_ratio = parse_pct(wood_text)
             auto_ratio = parse_pct(auto_text)
 
+            # Get Non-232% ratio from column 15
+            non_steel_text = self.table.item(i, 15).text() if self.table.item(i, 15) else ""
+            non_steel_ratio = parse_pct(non_steel_text)
+
             # Get Sec301 exclusion data from last_processed_df if available
             sec301_exclusion = ""
             if self.last_processed_df is not None and i < len(self.last_processed_df):
@@ -6439,14 +6650,20 @@ class DerivativeMill(QMainWindow):
                 'CopperRatio': copper_ratio,
                 'WoodRatio': wood_ratio,
                 'AutoRatio': auto_ratio,
-                '_232_flag': self.table.item(i, 15).text() if self.table.item(i, 15) else "",
+                'NonSteelRatio': non_steel_ratio,
+                '_232_flag': self.table.item(i, 16).text() if self.table.item(i, 16) else "",  # Column 16 is 232_Status
                 '_sec301_exclusion': sec301_exclusion
             }
             export_data.append(row_data)
 
         df_out = pd.DataFrame(export_data)
 
-        # Build mask for Non_232 rows BEFORE converting to percentage strings (for red font styling)
+        # Build masks for each Section 232 material type BEFORE converting to percentage strings
+        steel_mask = df_out['_232_flag'].fillna('').str.contains('232_Steel', case=False, na=False)
+        aluminum_mask = df_out['_232_flag'].fillna('').str.contains('232_Aluminum', case=False, na=False)
+        copper_mask = df_out['_232_flag'].fillna('').str.contains('232_Copper', case=False, na=False)
+        wood_mask = df_out['_232_flag'].fillna('').str.contains('232_Wood', case=False, na=False)
+        auto_mask = df_out['_232_flag'].fillna('').str.contains('232_Auto', case=False, na=False)
         non232_mask = df_out['_232_flag'].fillna('').str.contains('Non_232', case=False, na=False)
 
         # Build mask for Sec301 exclusion rows (for light orange background)
@@ -6459,10 +6676,34 @@ class DerivativeMill(QMainWindow):
         df_out['CopperRatio'] = (df_out['CopperRatio'] * 100).round(1).astype(str) + "%"
         df_out['WoodRatio'] = (df_out['WoodRatio'] * 100).round(1).astype(str) + "%"
         df_out['AutoRatio'] = (df_out['AutoRatio'] * 100).round(1).astype(str) + "%"
+        df_out['NonSteelRatio'] = (df_out['NonSteelRatio'] * 100).round(1).astype(str) + "%"
         df_out['232_Status'] = df_out['_232_flag'].fillna('')
+
+        # Build initial columns list
         cols = ['Product No','ValueUSD','HTSCode','MID','CalcWtNet','DecTypeCd',
-            'CountryofMelt','CountryOfCast','PrimCountryOfSmelt','PrimSmeltFlag',
-            'SteelRatio','AluminumRatio','CopperRatio','WoodRatio','AutoRatio','232_Status']
+            'CountryofMelt','CountryOfCast','PrimCountryOfSmelt','PrimSmeltFlag']
+
+        # Add ratio columns based on visibility settings
+        ratio_columns = ['SteelRatio', 'AluminumRatio', 'CopperRatio', 'WoodRatio', 'AutoRatio', 'NonSteelRatio']
+        for col in ratio_columns:
+            # Check if column is visible (default to True if not set)
+            is_visible = True
+            try:
+                conn = sqlite3.connect(str(DB_PATH))
+                c = conn.cursor()
+                c.execute("SELECT value FROM app_config WHERE key = ?", (f'export_col_visible_{col}',))
+                row = c.fetchone()
+                conn.close()
+                if row:
+                    is_visible = row[0] == 'True'
+            except:
+                pass
+
+            if is_visible:
+                cols.append(col)
+
+        # Always add 232_Status at the end
+        cols.append('232_Status')
 
         # Apply custom column mapping if set
         if hasattr(self, 'output_column_mapping') and self.output_column_mapping:
@@ -6517,22 +6758,78 @@ class DerivativeMill(QMainWindow):
 
                     # Set Arial font for all cells (including header)
                     from openpyxl.styles import PatternFill
-                    arial_font = ExcelFont(name='Arial', size=11, color="00000000")  # Explicit black
-                    red_arial_font = ExcelFont(name='Arial', size=11, color="00FF0000")
+
+                    # Helper function to get export color from config
+                    def get_export_color(config_key, default_color):
+                        try:
+                            conn = sqlite3.connect(str(DB_PATH))
+                            c = conn.cursor()
+                            c.execute("SELECT value FROM app_config WHERE key = ?", (config_key,))
+                            row = c.fetchone()
+                            conn.close()
+                            if row:
+                                return row[0]
+                        except:
+                            pass
+                        return default_color
+
+                    # Get user-selected font color from settings, default to black
+                    font_color_hex = self.output_font_color if hasattr(self, 'output_font_color') else '#000000'
+                    font_color_rgb = '00' + font_color_hex.lstrip('#').upper()
+
+                    # Get Section 232 material type colors
+                    steel_color = get_export_color('export_steel_color', '#4a4a4a')
+                    aluminum_color = get_export_color('export_aluminum_color', '#6495ED')
+                    copper_color = get_export_color('export_copper_color', '#B87333')
+                    wood_color = get_export_color('export_wood_color', '#8B4513')
+                    auto_color = get_export_color('export_automotive_color', '#2F4F4F')
+                    non232_color = get_export_color('export_non232_color', '#FF0000')
+
+                    # Create fonts for each material type
+                    steel_font = ExcelFont(name='Arial', size=11, color='00' + steel_color.lstrip('#').upper())
+                    aluminum_font = ExcelFont(name='Arial', size=11, color='00' + aluminum_color.lstrip('#').upper())
+                    copper_font = ExcelFont(name='Arial', size=11, color='00' + copper_color.lstrip('#').upper())
+                    wood_font = ExcelFont(name='Arial', size=11, color='00' + wood_color.lstrip('#').upper())
+                    auto_font = ExcelFont(name='Arial', size=11, color='00' + auto_color.lstrip('#').upper())
+                    non232_font = ExcelFont(name='Arial', size=11, color='00' + non232_color.lstrip('#').upper())
+                    default_font = ExcelFont(name='Arial', size=11, color=font_color_rgb)
+
                     orange_fill = PatternFill(start_color="FFCC99", end_color="FFCC99", fill_type="solid")  # Light orange
 
                     # Apply font to header row
                     for col_idx in range(1, len(cols) + 1):
                         ws.cell(row=1, column=col_idx).font = ExcelFont(name='Arial', size=11, bold=True)
 
-                    # Apply font and background to data rows
+                    # Build index lists for each material type
+                    steel_indices = [i for i, val in enumerate(steel_mask.tolist()) if val]
+                    aluminum_indices = [i for i, val in enumerate(aluminum_mask.tolist()) if val]
+                    copper_indices = [i for i, val in enumerate(copper_mask.tolist()) if val]
+                    wood_indices = [i for i, val in enumerate(wood_mask.tolist()) if val]
+                    auto_indices = [i for i, val in enumerate(auto_mask.tolist()) if val]
                     non232_indices = [i for i, val in enumerate(non232_mask.tolist()) if val]
                     sec301_indices = [i for i, val in enumerate(sec301_mask.tolist()) if val]
+
+                    # Apply font and background to data rows
                     for row_idx in range(len(df_out)):
                         row_num = row_idx + 2
-                        is_non232 = row_idx in non232_indices
                         is_sec301 = row_idx in sec301_indices
-                        cell_font = red_arial_font if is_non232 else arial_font
+
+                        # Determine font based on material type
+                        if row_idx in steel_indices:
+                            cell_font = steel_font
+                        elif row_idx in aluminum_indices:
+                            cell_font = aluminum_font
+                        elif row_idx in copper_indices:
+                            cell_font = copper_font
+                        elif row_idx in wood_indices:
+                            cell_font = wood_font
+                        elif row_idx in auto_indices:
+                            cell_font = auto_font
+                        elif row_idx in non232_indices:
+                            cell_font = non232_font
+                        else:
+                            cell_font = default_font
+
                         for col_idx in range(1, len(cols) + 1):
                             cell = ws.cell(row=row_num, column=col_idx)
                             cell.font = cell_font
@@ -6578,19 +6875,74 @@ class DerivativeMill(QMainWindow):
 
                     # Create font, fill, and alignment styles
                     from openpyxl.styles import PatternFill
-                    red_font = ExcelFont(name="Arial", color="00FF0000")
-                    normal_font = ExcelFont(name="Arial", color="00000000")  # Explicit black color
+
+                    # Helper function to get export color from config
+                    def get_export_color(config_key, default_color):
+                        try:
+                            conn = sqlite3.connect(str(DB_PATH))
+                            c = conn.cursor()
+                            c.execute("SELECT value FROM app_config WHERE key = ?", (config_key,))
+                            row = c.fetchone()
+                            conn.close()
+                            if row:
+                                return row[0]
+                        except:
+                            pass
+                        return default_color
+
+                    # Get user-selected font color from settings, default to black
+                    font_color_hex = self.output_font_color if hasattr(self, 'output_font_color') else '#000000'
+                    font_color_rgb = '00' + font_color_hex.lstrip('#').upper()
+
+                    # Get Section 232 material type colors
+                    steel_color = get_export_color('export_steel_color', '#4a4a4a')
+                    aluminum_color = get_export_color('export_aluminum_color', '#6495ED')
+                    copper_color = get_export_color('export_copper_color', '#B87333')
+                    wood_color = get_export_color('export_wood_color', '#8B4513')
+                    auto_color = get_export_color('export_automotive_color', '#2F4F4F')
+                    non232_color = get_export_color('export_non232_color', '#FF0000')
+
+                    # Create fonts for each material type
+                    steel_font = ExcelFont(name='Arial', color='00' + steel_color.lstrip('#').upper())
+                    aluminum_font = ExcelFont(name='Arial', color='00' + aluminum_color.lstrip('#').upper())
+                    copper_font = ExcelFont(name='Arial', color='00' + copper_color.lstrip('#').upper())
+                    wood_font = ExcelFont(name='Arial', color='00' + wood_color.lstrip('#').upper())
+                    auto_font = ExcelFont(name='Arial', color='00' + auto_color.lstrip('#').upper())
+                    non232_font = ExcelFont(name='Arial', color='00' + non232_color.lstrip('#').upper())
+                    normal_font = ExcelFont(name="Arial", color=font_color_rgb)
+
                     center_alignment = Alignment(horizontal="center", vertical="center")
                     orange_fill = PatternFill(start_color="FFCC99", end_color="FFCC99", fill_type="solid")  # Light orange
 
-                    # Apply red font to rows where 232_Status is Non_232, normal font to others
-                    # Apply light orange background to rows with Sec301 exclusions
+                    # Build index lists for each material type
+                    steel_indices = [i for i, val in enumerate(steel_mask.tolist()) if val]
+                    aluminum_indices = [i for i, val in enumerate(aluminum_mask.tolist()) if val]
+                    copper_indices = [i for i, val in enumerate(copper_mask.tolist()) if val]
+                    wood_indices = [i for i, val in enumerate(wood_mask.tolist()) if val]
+                    auto_indices = [i for i, val in enumerate(auto_mask.tolist()) if val]
                     non232_indices = [i for i, val in enumerate(non232_mask.tolist()) if val]
                     sec301_indices = [i for i, val in enumerate(sec301_mask.tolist()) if val]
+
+                    # Apply font and background to data rows
                     for row_num in range(2, len(df_out) + 2):  # Start at 2 (after header)
-                        is_non232 = (row_num - 2) in non232_indices
-                        is_sec301 = (row_num - 2) in sec301_indices
-                        font_to_use = red_font if is_non232 else normal_font
+                        row_idx = row_num - 2
+                        is_sec301 = row_idx in sec301_indices
+
+                        # Determine font based on material type
+                        if row_idx in steel_indices:
+                            font_to_use = steel_font
+                        elif row_idx in aluminum_indices:
+                            font_to_use = aluminum_font
+                        elif row_idx in copper_indices:
+                            font_to_use = copper_font
+                        elif row_idx in wood_indices:
+                            font_to_use = wood_font
+                        elif row_idx in auto_indices:
+                            font_to_use = auto_font
+                        elif row_idx in non232_indices:
+                            font_to_use = non232_font
+                        else:
+                            font_to_use = normal_font
 
                         for col_idx in range(1, len(cols) + 1):
                             cell = ws.cell(row=row_num, column=col_idx)

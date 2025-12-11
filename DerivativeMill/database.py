@@ -100,7 +100,13 @@ class SQLiteBackend(DatabaseBackend):
             key TEXT PRIMARY KEY,
             value TEXT
         )""")
-        
+
+        c.execute("""CREATE TABLE IF NOT EXISTS output_column_mappings (
+            profile_name TEXT PRIMARY KEY,
+            mapping_json TEXT,
+            created_date TEXT
+        )""")
+
         # Migration: Add client_code column if it doesn't exist
         try:
             c.execute("PRAGMA table_info(parts_master)")
@@ -184,7 +190,13 @@ class PostgreSQLBackend(DatabaseBackend):
             key TEXT PRIMARY KEY,
             value TEXT
         )""")
-        
+
+        c.execute("""CREATE TABLE IF NOT EXISTS output_column_mappings (
+            profile_name TEXT PRIMARY KEY,
+            mapping_json TEXT,
+            created_date TEXT
+        )""")
+
         conn.commit()
         conn.close()
 
