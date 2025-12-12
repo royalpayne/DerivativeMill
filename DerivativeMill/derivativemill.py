@@ -3434,11 +3434,15 @@ class DerivativeMill(QMainWindow):
         df['Product No'] = df['part_number']
         df['ValueUSD'] = df['value_usd']
 
-        preview_cols = [
+        # Include invoice_number if mapped (for split by invoice export feature)
+        base_preview_cols = [
             'Product No','ValueUSD','HTSCode','MID','cbp_qty','DecTypeCd',
             'CountryofMelt','CountryOfCast','PrimCountryOfSmelt','PrimSmeltFlag',
             'SteelRatio','AluminumRatio','CopperRatio','WoodRatio','AutoRatio','NonSteelRatio','_232_flag','_not_in_db','Sec301_Exclusion_Tariff'
         ]
+        preview_cols = base_preview_cols.copy()
+        if 'invoice_number' in df.columns:
+            preview_cols.append('invoice_number')
         preview_df = df[preview_cols].copy()
         self.on_done(preview_df, vr, None)
     
@@ -4413,6 +4417,7 @@ class DerivativeMill(QMainWindow):
         optional_layout = QFormLayout()
         optional_layout.setLabelAlignment(Qt.AlignRight)
         optional_fields = {
+            "invoice_number": "Invoice Number",
             "quantity": "Quantity",
             "hts_code": "HTS Code",
             "cbp_qty1": "CBP Qty1"
@@ -4615,6 +4620,34 @@ class DerivativeMill(QMainWindow):
         visibility_layout.addLayout(ratio_checkboxes_layout)
         layout.addWidget(visibility_group)
 
+        # Export File Splitting Options
+        split_group = QGroupBox("Export File Options")
+        split_layout = QVBoxLayout(split_group)
+
+        # Load saved split by invoice setting
+        self.split_by_invoice = False
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("SELECT value FROM app_config WHERE key = ?", ('export_split_by_invoice',))
+            row = c.fetchone()
+            conn.close()
+            if row:
+                self.split_by_invoice = row[0] == 'True'
+        except:
+            pass
+
+        self.split_by_invoice_checkbox = QCheckBox("Split export by Invoice Number (creates separate files for each invoice)")
+        self.split_by_invoice_checkbox.setChecked(self.split_by_invoice)
+        self.split_by_invoice_checkbox.stateChanged.connect(self.update_split_by_invoice_setting)
+        split_layout.addWidget(self.split_by_invoice_checkbox)
+
+        split_note = QLabel("Note: Requires 'Invoice Number' field to be mapped in Invoice Mapping tab")
+        split_note.setStyleSheet("color: gray; font-style: italic;")
+        split_layout.addWidget(split_note)
+
+        layout.addWidget(split_group)
+
         # Scrollable area for column mappings
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -4683,6 +4716,21 @@ class DerivativeMill(QMainWindow):
             self.bottom_status.setText(f"{col_name} export visibility: {'visible' if is_visible else 'hidden'}")
         except Exception as e:
             logger.error(f"Failed to save column visibility: {e}")
+
+    def update_split_by_invoice_setting(self, state):
+        """Save split by invoice setting to database"""
+        self.split_by_invoice = state == 2  # Qt.Checked = 2
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)",
+                      ('export_split_by_invoice', str(self.split_by_invoice)))
+            conn.commit()
+            conn.close()
+            logger.info(f"Split by invoice setting updated: {self.split_by_invoice}")
+            self.bottom_status.setText(f"Split by invoice: {'enabled' if self.split_by_invoice else 'disabled'}")
+        except Exception as e:
+            logger.error(f"Failed to save split by invoice setting: {e}")
 
     def pick_output_font_color(self):
         """Open color picker for output font color"""
@@ -6567,6 +6615,156 @@ class DerivativeMill(QMainWindow):
         else:
             self.final_export()
 
+    def _export_single_file(self, df_out, cols, filename, is_network, steel_mask, aluminum_mask, copper_mask, wood_mask, auto_mask, non232_mask, sec301_mask):
+        """Export a single Excel file with formatting. Used by both regular export and split-by-invoice export."""
+        from openpyxl.styles import PatternFill
+
+        # Helper function to get export color from config
+        def get_export_color(config_key, default_color):
+            try:
+                conn = sqlite3.connect(str(DB_PATH))
+                c = conn.cursor()
+                c.execute("SELECT value FROM app_config WHERE key = ?", (config_key,))
+                row = c.fetchone()
+                conn.close()
+                if row:
+                    return row[0]
+            except:
+                pass
+            return default_color
+
+        # Get user-selected font color from settings
+        font_color_hex = self.output_font_color if hasattr(self, 'output_font_color') else '#000000'
+        font_color_rgb = '00' + font_color_hex.lstrip('#').upper()
+
+        # Get Section 232 material type colors
+        steel_color = get_export_color('export_steel_color', '#4a4a4a')
+        aluminum_color = get_export_color('export_aluminum_color', '#6495ED')
+        copper_color = get_export_color('export_copper_color', '#B87333')
+        wood_color = get_export_color('export_wood_color', '#8B4513')
+        auto_color = get_export_color('export_automotive_color', '#2F4F4F')
+        non232_color = get_export_color('export_non232_color', '#FF0000')
+
+        # Create fonts for each material type
+        steel_font = ExcelFont(name='Arial', size=11, color='00' + steel_color.lstrip('#').upper())
+        aluminum_font = ExcelFont(name='Arial', size=11, color='00' + aluminum_color.lstrip('#').upper())
+        copper_font = ExcelFont(name='Arial', size=11, color='00' + copper_color.lstrip('#').upper())
+        wood_font = ExcelFont(name='Arial', size=11, color='00' + wood_color.lstrip('#').upper())
+        auto_font = ExcelFont(name='Arial', size=11, color='00' + auto_color.lstrip('#').upper())
+        non232_font = ExcelFont(name='Arial', size=11, color='00' + non232_color.lstrip('#').upper())
+        default_font = ExcelFont(name='Arial', size=11, color=font_color_rgb)
+
+        orange_fill = PatternFill(start_color="FFCC99", end_color="FFCC99", fill_type="solid")
+
+        # Build index lists for each material type
+        steel_indices = [i for i, val in enumerate(steel_mask.tolist()) if val]
+        aluminum_indices = [i for i, val in enumerate(aluminum_mask.tolist()) if val]
+        copper_indices = [i for i, val in enumerate(copper_mask.tolist()) if val]
+        wood_indices = [i for i, val in enumerate(wood_mask.tolist()) if val]
+        auto_indices = [i for i, val in enumerate(auto_mask.tolist()) if val]
+        non232_indices = [i for i, val in enumerate(non232_mask.tolist()) if val]
+        sec301_indices = [i for i, val in enumerate(sec301_mask.tolist()) if val]
+
+        if is_network:
+            # Write to temp file then copy
+            with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as tmp:
+                temp_path = Path(tmp.name)
+
+            with pd.ExcelWriter(temp_path, engine='openpyxl') as writer:
+                df_out[cols].to_excel(writer, index=False)
+                ws = next(iter(writer.sheets.values()))
+
+                # Apply font to header row
+                for col_idx in range(1, len(cols) + 1):
+                    ws.cell(row=1, column=col_idx).font = ExcelFont(name='Arial', size=11, bold=True)
+
+                # Apply font and background to data rows
+                for row_idx in range(len(df_out)):
+                    row_num = row_idx + 2
+                    is_sec301 = row_idx in sec301_indices
+
+                    if row_idx in steel_indices:
+                        cell_font = steel_font
+                    elif row_idx in aluminum_indices:
+                        cell_font = aluminum_font
+                    elif row_idx in copper_indices:
+                        cell_font = copper_font
+                    elif row_idx in wood_indices:
+                        cell_font = wood_font
+                    elif row_idx in auto_indices:
+                        cell_font = auto_font
+                    elif row_idx in non232_indices:
+                        cell_font = non232_font
+                    else:
+                        cell_font = default_font
+
+                    for col_idx in range(1, len(cols) + 1):
+                        cell = ws.cell(row=row_num, column=col_idx)
+                        cell.font = cell_font
+                        if is_sec301:
+                            cell.fill = orange_fill
+
+            # Copy to network location
+            out = OUTPUT_DIR / filename
+            shutil.copy2(temp_path, out)
+            temp_path.unlink()
+        else:
+            # Direct write for local path
+            out = OUTPUT_DIR / filename
+            with pd.ExcelWriter(out, engine='openpyxl') as writer:
+                df_out[cols].to_excel(writer, index=False)
+                ws = next(iter(writer.sheets.values()))
+
+                center_alignment = Alignment(horizontal="center", vertical="center")
+
+                # Apply font to header row
+                for col_idx in range(1, len(cols) + 1):
+                    cell = ws.cell(row=1, column=col_idx)
+                    cell.font = default_font
+                    cell.alignment = center_alignment
+
+                # Apply font and background to data rows
+                for row_num in range(2, len(df_out) + 2):
+                    row_idx = row_num - 2
+                    is_sec301 = row_idx in sec301_indices
+
+                    if row_idx in steel_indices:
+                        font_to_use = steel_font
+                    elif row_idx in aluminum_indices:
+                        font_to_use = aluminum_font
+                    elif row_idx in copper_indices:
+                        font_to_use = copper_font
+                    elif row_idx in wood_indices:
+                        font_to_use = wood_font
+                    elif row_idx in auto_indices:
+                        font_to_use = auto_font
+                    elif row_idx in non232_indices:
+                        font_to_use = non232_font
+                    else:
+                        font_to_use = default_font
+
+                    for col_idx in range(1, len(cols) + 1):
+                        cell = ws.cell(row=row_num, column=col_idx)
+                        cell.font = font_to_use
+                        cell.alignment = center_alignment
+                        if is_sec301:
+                            cell.fill = orange_fill
+
+                # Auto-size columns
+                for col_idx, column in enumerate(ws.columns, 1):
+                    max_length = 0
+                    column_letter = ws.cell(row=1, column=col_idx).column_letter
+                    for cell in column:
+                        try:
+                            if cell.value:
+                                max_length = max(max_length, len(str(cell.value)))
+                        except:
+                            pass
+                    adjusted_width = max_length + 2
+                    ws.column_dimensions[column_letter].width = adjusted_width
+
+        logger.info(f"Exported: {out.name}")
+        return out
 
     def final_export(self):
         if self.last_processed_df is None:
@@ -6631,10 +6829,15 @@ class DerivativeMill(QMainWindow):
 
             # Get Sec301 exclusion data from last_processed_df if available
             sec301_exclusion = ""
+            invoice_number = ""
             if self.last_processed_df is not None and i < len(self.last_processed_df):
                 sec301_exclusion = str(self.last_processed_df.iloc[i].get('Sec301_Exclusion_Tariff', '')).strip()
                 if sec301_exclusion in ['', 'nan', 'None']:
                     sec301_exclusion = ""
+                # Get invoice number for split by invoice feature
+                invoice_number = str(self.last_processed_df.iloc[i].get('invoice_number', '')).strip()
+                if invoice_number in ['', 'nan', 'None']:
+                    invoice_number = ""
 
             row_data = {
                 'Product No': self.table.item(i, 0).text() if self.table.item(i, 0) else "",
@@ -6654,7 +6857,8 @@ class DerivativeMill(QMainWindow):
                 'AutoRatio': auto_ratio,
                 'NonSteelRatio': non_steel_ratio,
                 '_232_flag': self.table.item(i, 16).text() if self.table.item(i, 16) else "",  # Column 16 is 232_Status
-                '_sec301_exclusion': sec301_exclusion
+                '_sec301_exclusion': sec301_exclusion,
+                '_invoice_number': invoice_number
             }
             export_data.append(row_data)
 
@@ -6722,9 +6926,33 @@ class DerivativeMill(QMainWindow):
                 cols = [self.output_column_mapping.get(col, col) for col in cols]
                 logger.info(f"Applied custom column mapping: {rename_dict}")
 
+        # Check if we should split by invoice number
+        split_by_invoice = False
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("SELECT value FROM app_config WHERE key = ?", ('export_split_by_invoice',))
+            row = c.fetchone()
+            conn.close()
+            if row:
+                split_by_invoice = row[0] == 'True'
+        except:
+            pass
+
+        # Get unique invoice numbers if splitting is enabled
+        unique_invoices = []
+        if split_by_invoice and '_invoice_number' in df_out.columns:
+            unique_invoices = df_out['_invoice_number'].dropna().unique()
+            unique_invoices = [inv for inv in unique_invoices if inv and str(inv).strip() not in ['', 'nan', 'None']]
+            if len(unique_invoices) > 1:
+                logger.info(f"Split by invoice enabled: Found {len(unique_invoices)} unique invoices")
+            else:
+                # Only one or no invoices, don't split
+                unique_invoices = []
+
         try:
             t_start = time.time()
-            
+
             # Show export progress indicator
             self.export_progress_widget.show()
             self.export_status_label.setText("Exporting:")
@@ -6734,7 +6962,73 @@ class DerivativeMill(QMainWindow):
             # Check if output directory is on network (slower) or local
             output_str = str(OUTPUT_DIR)
             is_network = output_str.startswith('\\\\') or (len(output_str) > 1 and output_str[1] == ':' and not output_str.startswith('C:'))
-            
+
+            # Handle split by invoice if enabled
+            if unique_invoices and len(unique_invoices) > 1:
+                # Export multiple files, one per invoice
+                exported_files = []
+                total_invoices = len(unique_invoices)
+
+                for idx, invoice_num in enumerate(unique_invoices):
+                    # Filter dataframe for this invoice
+                    invoice_df = df_out[df_out['_invoice_number'] == invoice_num].copy()
+
+                    # Recalculate masks for this subset
+                    inv_steel_mask = invoice_df['_232_flag'].fillna('').str.contains('232_Steel', case=False, na=False) if '_232_flag' in invoice_df.columns else pd.Series([False] * len(invoice_df))
+                    inv_aluminum_mask = invoice_df['_232_flag'].fillna('').str.contains('232_Aluminum', case=False, na=False) if '_232_flag' in invoice_df.columns else pd.Series([False] * len(invoice_df))
+                    inv_copper_mask = invoice_df['_232_flag'].fillna('').str.contains('232_Copper', case=False, na=False) if '_232_flag' in invoice_df.columns else pd.Series([False] * len(invoice_df))
+                    inv_wood_mask = invoice_df['_232_flag'].fillna('').str.contains('232_Wood', case=False, na=False) if '_232_flag' in invoice_df.columns else pd.Series([False] * len(invoice_df))
+                    inv_auto_mask = invoice_df['_232_flag'].fillna('').str.contains('232_Auto', case=False, na=False) if '_232_flag' in invoice_df.columns else pd.Series([False] * len(invoice_df))
+                    inv_non232_mask = invoice_df['_232_flag'].fillna('').str.contains('Non_232', case=False, na=False) if '_232_flag' in invoice_df.columns else pd.Series([False] * len(invoice_df))
+                    inv_sec301_mask = invoice_df['_sec301_exclusion'].fillna('').astype(str).str.strip().ne('') & \
+                                      ~invoice_df['_sec301_exclusion'].fillna('').astype(str).str.contains('nan|None', case=False, na=False) if '_sec301_exclusion' in invoice_df.columns else pd.Series([False] * len(invoice_df))
+
+                    # Generate filename with invoice number
+                    base_name = self.last_output_filename or f"Upload_Sheet_{datetime.now():%Y%m%d_%H%M}.xlsx"
+                    invoice_filename = base_name.replace('.xlsx', f'_INV{invoice_num}.xlsx')
+
+                    # Update progress
+                    progress_pct = int(10 + (idx / total_invoices) * 80)
+                    self.export_progress_bar.setValue(progress_pct)
+                    self.bottom_status.setText(f"Exporting invoice {idx + 1} of {total_invoices}: {invoice_num}")
+                    QApplication.processEvents()
+
+                    # Export this invoice's data
+                    out_path = self._export_single_file(
+                        invoice_df, cols, invoice_filename, is_network,
+                        inv_steel_mask, inv_aluminum_mask, inv_copper_mask, inv_wood_mask,
+                        inv_auto_mask, inv_non232_mask, inv_sec301_mask
+                    )
+                    exported_files.append(out_path.name)
+
+                self.export_progress_bar.setValue(100)
+                QApplication.processEvents()
+
+                # Move processed CSV to Processed folder
+                if self.current_csv and Path(self.current_csv).exists():
+                    try:
+                        source_file = Path(self.current_csv)
+                        dest_file = PROCESSED_DIR / source_file.name
+                        if dest_file.exists():
+                            dest_file.unlink()
+                        source_file.rename(dest_file)
+                        logger.info(f"Moved processed file: {source_file.name} -> Processed/")
+                        self.current_csv = None
+                    except Exception as e:
+                        logger.warning(f"Could not move CSV to Processed folder: {e}")
+
+                self.refresh_exported_files()
+                self.refresh_input_files()
+
+                QTimer.singleShot(500, self.export_progress_widget.hide)
+
+                QMessageBox.information(self, "Success",
+                    f"Export complete!\nCreated {len(exported_files)} files:\n" + "\n".join(exported_files[:10]) +
+                    (f"\n... and {len(exported_files) - 10} more" if len(exported_files) > 10 else ""))
+                logger.success(f"Split export complete: {len(exported_files)} files created")
+                self.clear_all()
+                return
+
             # If network path, use local temp then copy (40x faster!)
             if is_network:
                 self.bottom_status.setText("Generating export file...")
