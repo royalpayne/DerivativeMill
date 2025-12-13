@@ -4860,11 +4860,12 @@ class DerivativeMill(QMainWindow):
                     column_visibility = {}
                     split_by_invoice = False
 
-                # Update column name inputs
-                for internal_name, line_edit in self.output_column_inputs.items():
-                    line_edit.blockSignals(True)
-                    line_edit.setText(self.output_column_mapping.get(internal_name, internal_name))
-                    line_edit.blockSignals(False)
+                # Update column name inputs (if Configuration dialog has been opened)
+                if hasattr(self, 'output_column_inputs'):
+                    for internal_name, line_edit in self.output_column_inputs.items():
+                        line_edit.blockSignals(True)
+                        line_edit.setText(self.output_column_mapping.get(internal_name, internal_name))
+                        line_edit.blockSignals(False)
 
                 # Update column visibility checkboxes
                 if hasattr(self, 'output_column_visibility'):
