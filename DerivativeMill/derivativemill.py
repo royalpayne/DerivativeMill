@@ -1731,13 +1731,15 @@ class DerivativeMill(QMainWindow):
 
         # Preview Table Colors Group
         colors_group = QGroupBox("Preview Table Row Colors")
-        colors_layout = QFormLayout()
+        colors_layout = QGridLayout()
+        colors_layout.setSpacing(8)
+        colors_layout.setContentsMargins(10, 10, 10, 10)
 
         # Helper function to create color picker button
         def create_color_button(config_key, default_color):
             """Create a color picker button with saved color"""
             button = QPushButton()
-            button.setFixedSize(100, 30)
+            button.setFixedSize(60, 20)
 
             # Load saved color or use default
             saved_color = default_color
@@ -1778,35 +1780,26 @@ class DerivativeMill(QMainWindow):
             button.clicked.connect(pick_color)
             return button
 
-        # 232 Steel rows color picker
-        # Section 232 material type color pickers
-        steel_color_btn = create_color_button('preview_steel_color', '#4a4a4a')
-        colors_layout.addRow("Steel Rows:", steel_color_btn)
+        # Section 232 material type color pickers in grid layout
+        # Row 0: Steel, Aluminum, Copper
+        colors_layout.addWidget(QLabel("Steel:"), 0, 0, Qt.AlignRight)
+        colors_layout.addWidget(create_color_button('preview_steel_color', '#4a4a4a'), 0, 1)
+        colors_layout.addWidget(QLabel("Aluminum:"), 0, 2, Qt.AlignRight)
+        colors_layout.addWidget(create_color_button('preview_aluminum_color', '#3498db'), 0, 3)
+        colors_layout.addWidget(QLabel("Copper:"), 0, 4, Qt.AlignRight)
+        colors_layout.addWidget(create_color_button('preview_copper_color', '#e67e22'), 0, 5)
 
-        aluminum_color_btn = create_color_button('preview_aluminum_color', '#3498db')
-        colors_layout.addRow("Aluminum Rows:", aluminum_color_btn)
+        # Row 1: Wood, Auto, Non-232
+        colors_layout.addWidget(QLabel("Wood:"), 1, 0, Qt.AlignRight)
+        colors_layout.addWidget(create_color_button('preview_wood_color', '#27ae60'), 1, 1)
+        colors_layout.addWidget(QLabel("Auto:"), 1, 2, Qt.AlignRight)
+        colors_layout.addWidget(create_color_button('preview_auto_color', '#9b59b6'), 1, 3)
+        colors_layout.addWidget(QLabel("Non-232:"), 1, 4, Qt.AlignRight)
+        colors_layout.addWidget(create_color_button('preview_non232_color', '#ff0000'), 1, 5)
 
-        copper_color_btn = create_color_button('preview_copper_color', '#e67e22')
-        colors_layout.addRow("Copper Rows:", copper_color_btn)
-
-        wood_color_btn = create_color_button('preview_wood_color', '#27ae60')
-        colors_layout.addRow("Wood Rows:", wood_color_btn)
-
-        auto_color_btn = create_color_button('preview_auto_color', '#9b59b6')
-        colors_layout.addRow("Auto Rows:", auto_color_btn)
-
-        # Non-232 rows color picker
-        non232_color_btn = create_color_button('preview_non232_color', '#ff0000')
-        colors_layout.addRow("Non-232 Rows:", non232_color_btn)
-
-        # Section 301 exclusion background color picker
-        sec301_color_btn = create_color_button('preview_sec301_bg_color', '#ffc8c8')
-        colors_layout.addRow("Sec301 Exclusion Background:", sec301_color_btn)
-
-        colors_info = QLabel("<small>Choose font colors for each Section 232 material type and background color for Section 301 exclusions in the preview table.</small>")
-        colors_info.setWordWrap(True)
-        colors_info.setStyleSheet("color:#666; padding:5px;")
-        colors_layout.addRow("", colors_info)
+        # Row 2: Sec301 Background (spans multiple columns)
+        colors_layout.addWidget(QLabel("Sec301 Background:"), 2, 0, 1, 2, Qt.AlignRight)
+        colors_layout.addWidget(create_color_button('preview_sec301_bg_color', '#ffc8c8'), 2, 2)
 
         colors_group.setLayout(colors_layout)
         appearance_layout.addWidget(colors_group)
@@ -3699,8 +3692,13 @@ class DerivativeMill(QMainWindow):
             if has_sec301_exclusion:
                 hts_item.setToolTip(f"Sec301 Exclusion Tariff: {sec301_exclusion}")
 
+            # Add indicator symbol for Sec301 parts
+            product_no = str(r['Product No'])
+            if has_sec301_exclusion:
+                product_no = f"§ {product_no}"  # § symbol indicates Sec301
+
             items = [
-                QTableWidgetItem(str(r['Product No'])),
+                QTableWidgetItem(product_no),
                 value_item,
                 hts_item,
                 QTableWidgetItem(str(r.get('MID',''))),
@@ -7915,6 +7913,8 @@ if __name__ == "__main__":
             win.load_available_mids()
             win.status.setText("Loading profiles...")
             win.load_mapping_profiles()
+            win.status.setText("Loading export profiles...")
+            win.load_output_mapping_profiles()
             win.status.setText("Scanning input files...")
             win.refresh_input_files()
             win.status.setText("Starting auto-refresh...")
