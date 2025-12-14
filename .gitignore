@@ -50,9 +50,9 @@ htmlcov/
 Input/
 Output/
 ProcessedPDFs/
-Resources/derivativemill.db
 *.csv
-*.xlsx
+# Allow reference xlsx files but ignore user data xlsx
+# *.xlsx is handled below more specifically
 
 # Temporary files
 *.tmp
@@ -108,12 +108,13 @@ nul
 # Archive and old documentation
 _Archive/
 DerivativeMill_Win11_Install/
-Resources/
+/Resources/
 *.sqbpro
 
-# Database files
-*.db
+# Database files - exclude user data but allow distribution database
 database_backups/
+DerivativeMill/derivativemill.db
+# Allow DerivativeMill/Resources/derivativemill.db for distribution
 
 # Old root-level files (keep only in DerivativeMill/)
 /derivativemill.py
@@ -147,3 +148,8 @@ DerivativeMill/Section_232*.csv
 DerivativeMill/Section_232*.xlsx
 DerivativeMill/*.csv
 DerivativeMill/ProcessedPDFs/
+
+# User xlsx files (but allow Resources/References/*.xlsx)
+/*.xlsx
+DerivativeMill/*.xlsx
+!DerivativeMill/Resources/References/*.xlsx
