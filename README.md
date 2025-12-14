@@ -55,6 +55,16 @@ Download the latest `DerivativeMill.exe` from the [Releases](https://github.com/
 
 No installation required - just run the executable.
 
+#### Windows SmartScreen Warning
+
+On first run, Windows may show a "Windows protected your PC" warning because the application is not yet widely distributed. This is normal for new software.
+
+**To run the application:**
+1. Click **"More info"** on the warning dialog
+2. Click **"Run anyway"**
+
+The application is safe to use. This warning will decrease as more users download and run the software.
+
 ### From Source
 
 1. **Clone the repository:**
