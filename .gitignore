@@ -104,3 +104,46 @@ installer/
 # Temporary/test files
 hts_response.html
 nul
+
+# Archive and old documentation
+_Archive/
+DerivativeMill_Win11_Install/
+Resources/
+*.sqbpro
+
+# Database files
+*.db
+database_backups/
+
+# Old root-level files (keep only in DerivativeMill/)
+/derivativemill.py
+/DerivativeMill.spec
+/setup.py
+/run.sh
+/INDEX.md
+/QUICKSTART.md
+/QUICK_START.md
+/SETUP.md
+/TESTING_CHECKLIST.md
+/WINDOWS_BUILD_INSTRUCTIONS.md
+
+# Utility/dev scripts (not needed for distribution)
+DerivativeMill/add_*.py
+DerivativeMill/create_*.py
+DerivativeMill/debug_*.py
+DerivativeMill/extract_*.py
+DerivativeMill/migrate_*.py
+DerivativeMill/parse_*.py
+DerivativeMill/process_*.py
+DerivativeMill/test_*.py
+DerivativeMill/update_*.py
+DerivativeMill/anthropic.py
+DerivativeMill/database.py
+DerivativeMill/platform_utils.py
+DerivativeMill/docs/
+
+# Data files (should not be in repo)
+DerivativeMill/Section_232*.csv
+DerivativeMill/Section_232*.xlsx
+DerivativeMill/*.csv
+DerivativeMill/ProcessedPDFs/
