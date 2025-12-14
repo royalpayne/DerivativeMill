@@ -804,6 +804,22 @@ def init_database():
             mapping_json TEXT,
             created_date TEXT
         )""")
+        c.execute("""CREATE TABLE IF NOT EXISTS mid_table (
+            mid TEXT PRIMARY KEY,
+            manufacturer_name TEXT,
+            customer_id TEXT,
+            related_parties TEXT DEFAULT 'N'
+        )""")
+
+        # Migration: Add customer_id column to mid_table if it doesn't exist
+        try:
+            c.execute("PRAGMA table_info(mid_table)")
+            columns = [col[1] for col in c.fetchall()]
+            if 'customer_id' not in columns:
+                c.execute("ALTER TABLE mid_table ADD COLUMN customer_id TEXT")
+                logger.info("Added customer_id column to mid_table")
+        except Exception as e:
+            logger.warning(f"Failed to check/add customer_id column to mid_table: {e}")
 
         # Migration: Add client_code column to parts_master if it doesn't exist
         try:
@@ -1447,6 +1463,12 @@ class DerivativeMill(QMainWindow):
         config_action.triggered.connect(self.show_configuration_dialog)
         config_menu.addAction(config_action)
 
+        # MID Management action
+        mid_icon = self.style().standardIcon(QStyle.SP_FileDialogContentsView)
+        mid_action = QAction(mid_icon, "MID Management...", self)
+        mid_action.triggered.connect(self.show_mid_management_dialog)
+        config_menu.addAction(mid_action)
+
         # Add Help menu
         help_menu = menubar.addMenu("Help")
 
@@ -2079,6 +2101,404 @@ class DerivativeMill(QMainWindow):
         layout.addLayout(btn_layout)
 
         dialog.exec_()
+
+    def show_mid_management_dialog(self):
+        """Show the MID Management dialog for importing and managing manufacturer IDs"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("MID Management")
+        dialog.resize(900, 600)
+        layout = QVBoxLayout(dialog)
+
+        # Title
+        title = QLabel("<h2>Manufacturer ID (MID) Management</h2>")
+        layout.addWidget(title)
+
+        # Import section
+        import_group = QGroupBox("Import MID List")
+        import_layout = QHBoxLayout(import_group)
+
+        self.mid_import_path_label = QLabel("No file selected")
+        self.mid_import_path_label.setStyleSheet("color: gray;")
+        import_layout.addWidget(self.mid_import_path_label, 1)
+
+        btn_browse = QPushButton("Browse...")
+        btn_browse.clicked.connect(lambda: self.browse_mid_import_file(dialog))
+        btn_browse.setAutoDefault(False)
+        btn_browse.setDefault(False)
+        import_layout.addWidget(btn_browse)
+
+        btn_import = QPushButton("Import")
+        btn_import.setStyleSheet(self.get_button_style("primary"))
+        btn_import.clicked.connect(lambda: self.import_mid_file(dialog))
+        btn_import.setAutoDefault(False)
+        btn_import.setDefault(False)
+        import_layout.addWidget(btn_import)
+
+        layout.addWidget(import_group)
+
+        # Info label
+        info_label = QLabel("Expected Excel columns: <b>Manufacturer Name</b>, <b>MID</b>, <b>Customer ID</b>, <b>Related Parties</b> (Y/N)")
+        info_label.setStyleSheet("color: #666; margin: 5px;")
+        layout.addWidget(info_label)
+
+        # MID Table
+        table_group = QGroupBox("Current MID List")
+        table_layout = QVBoxLayout(table_group)
+
+        # Filter/Search row
+        filter_layout = QHBoxLayout()
+
+        filter_layout.addWidget(QLabel("Customer ID:"))
+        self.mid_customer_filter = QLineEdit()
+        self.mid_customer_filter.setPlaceholderText("Filter...")
+        self.mid_customer_filter.setMaximumWidth(150)
+        self.mid_customer_filter.returnPressed.connect(self.filter_mid_table)
+        filter_layout.addWidget(self.mid_customer_filter)
+
+        filter_layout.addWidget(QLabel("MID:"))
+        self.mid_search_filter = QLineEdit()
+        self.mid_search_filter.setPlaceholderText("Search...")
+        self.mid_search_filter.setMaximumWidth(180)
+        self.mid_search_filter.returnPressed.connect(self.filter_mid_table)
+        filter_layout.addWidget(self.mid_search_filter)
+
+        filter_layout.addWidget(QLabel("Manufacturer:"))
+        self.mid_manufacturer_filter = QLineEdit()
+        self.mid_manufacturer_filter.setPlaceholderText("Search...")
+        self.mid_manufacturer_filter.returnPressed.connect(self.filter_mid_table)
+        filter_layout.addWidget(self.mid_manufacturer_filter)
+
+        btn_search = QPushButton("Search")
+        btn_search.setStyleSheet(self.get_button_style("primary"))
+        btn_search.clicked.connect(self.filter_mid_table)
+        btn_search.setAutoDefault(False)
+        btn_search.setDefault(False)
+        filter_layout.addWidget(btn_search)
+
+        btn_clear_filter = QPushButton("Clear Filters")
+        btn_clear_filter.clicked.connect(self.clear_mid_filters)
+        btn_clear_filter.setAutoDefault(False)
+        btn_clear_filter.setDefault(False)
+        filter_layout.addWidget(btn_clear_filter)
+
+        table_layout.addLayout(filter_layout)
+
+        self.mid_table_widget = QTableWidget()
+        self.mid_table_widget.setColumnCount(4)
+        self.mid_table_widget.setHorizontalHeaderLabels(["Manufacturer Name", "MID", "Customer ID", "Related Parties"])
+        self.mid_table_widget.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.mid_table_widget.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.mid_table_widget.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.mid_table_widget.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.mid_table_widget.setSelectionBehavior(QTableWidget.SelectRows)
+        self.mid_table_widget.setAlternatingRowColors(True)
+        table_layout.addWidget(self.mid_table_widget)
+
+        # Table buttons
+        table_btn_layout = QHBoxLayout()
+
+        btn_add = QPushButton("Add MID")
+        btn_add.clicked.connect(lambda: self.add_mid_row(dialog))
+        table_btn_layout.addWidget(btn_add)
+
+        btn_delete = QPushButton("Delete Selected")
+        btn_delete.clicked.connect(lambda: self.delete_selected_mid(dialog))
+        table_btn_layout.addWidget(btn_delete)
+
+        btn_clear = QPushButton("Clear All")
+        btn_clear.clicked.connect(lambda: self.clear_all_mids(dialog))
+        table_btn_layout.addWidget(btn_clear)
+
+        table_btn_layout.addStretch()
+
+        btn_save = QPushButton("Save Changes")
+        btn_save.setStyleSheet(self.get_button_style("primary"))
+        btn_save.clicked.connect(lambda: self.save_mid_table(dialog))
+        table_btn_layout.addWidget(btn_save)
+
+        table_layout.addLayout(table_btn_layout)
+        layout.addWidget(table_group)
+
+        # Load current MID data
+        self.load_mid_table_data()
+
+        # Close button
+        btn_layout = QHBoxLayout()
+        btn_close = QPushButton("Close")
+        btn_close.clicked.connect(dialog.accept)
+        btn_close.setStyleSheet(self.get_button_style("default"))
+        btn_layout.addStretch()
+        btn_layout.addWidget(btn_close)
+        layout.addLayout(btn_layout)
+
+        dialog.exec_()
+
+        # Refresh MID combo after dialog closes
+        self.load_available_mids()
+
+    def browse_mid_import_file(self, dialog):
+        """Browse for MID import file"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            dialog, "Select MID List File", "",
+            "Excel Files (*.xlsx *.xls);;CSV Files (*.csv);;All Files (*)"
+        )
+        if file_path:
+            self.mid_import_file_path = file_path
+            self.mid_import_path_label.setText(Path(file_path).name)
+            self.mid_import_path_label.setStyleSheet("color: black;")
+
+    def import_mid_file(self, dialog):
+        """Import MID list from Excel/CSV file"""
+        if not hasattr(self, 'mid_import_file_path') or not self.mid_import_file_path:
+            QMessageBox.warning(dialog, "No File", "Please select a file to import first.")
+            return
+
+        try:
+            file_path = self.mid_import_file_path
+            if file_path.lower().endswith('.csv'):
+                df = pd.read_csv(file_path, dtype=str, keep_default_na=False)
+            else:
+                df = pd.read_excel(file_path, dtype=str, keep_default_na=False)
+
+            df = df.fillna("").rename(columns=str.strip)
+
+            # Map column names (case-insensitive)
+            col_map = {}
+            for col in df.columns:
+                col_lower = col.lower().replace('_', ' ').replace('-', ' ')
+                if 'manufacturer' in col_lower and 'name' in col_lower:
+                    col_map[col] = 'manufacturer_name'
+                elif col_lower == 'mid' or col_lower == 'manufacturer id':
+                    col_map[col] = 'mid'
+                elif 'customer' in col_lower and 'id' in col_lower:
+                    col_map[col] = 'customer_id'
+                elif 'related' in col_lower or 'parties' in col_lower:
+                    col_map[col] = 'related_parties'
+
+            df = df.rename(columns=col_map)
+
+            # Check for required MID column
+            if 'mid' not in df.columns:
+                QMessageBox.critical(dialog, "Error", "File must contain a 'MID' column.")
+                return
+
+            # Ask user if they want to append or replace
+            existing_count = self.mid_table_widget.rowCount()
+            if existing_count > 0:
+                reply = QMessageBox.question(
+                    dialog, "Import Mode",
+                    f"There are {existing_count} existing MID records.\n\n"
+                    "Do you want to ADD to the existing list?\n\n"
+                    "Click 'Yes' to append new records\n"
+                    "Click 'No' to replace all records",
+                    QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel
+                )
+                if reply == QMessageBox.Cancel:
+                    return
+                if reply == QMessageBox.No:
+                    self.mid_table_widget.setRowCount(0)
+
+            # Get existing MIDs to avoid duplicates
+            existing_mids = set()
+            for row in range(self.mid_table_widget.rowCount()):
+                mid_item = self.mid_table_widget.item(row, 1)
+                if mid_item:
+                    existing_mids.add(mid_item.text().strip().upper())
+
+            # Populate table (append mode)
+            imported = 0
+            skipped = 0
+            for _, row in df.iterrows():
+                mid = str(row.get('mid', '')).strip()
+                if not mid:
+                    continue
+
+                # Skip duplicates
+                if mid.upper() in existing_mids:
+                    skipped += 1
+                    continue
+
+                manufacturer_name = str(row.get('manufacturer_name', '')).strip()
+                customer_id = str(row.get('customer_id', '')).strip()
+                related_parties = str(row.get('related_parties', 'N')).strip().upper()
+                if related_parties not in ('Y', 'N'):
+                    related_parties = 'N'
+
+                row_idx = self.mid_table_widget.rowCount()
+                self.mid_table_widget.insertRow(row_idx)
+                self.mid_table_widget.setItem(row_idx, 0, QTableWidgetItem(manufacturer_name))
+                self.mid_table_widget.setItem(row_idx, 1, QTableWidgetItem(mid))
+                self.mid_table_widget.setItem(row_idx, 2, QTableWidgetItem(customer_id))
+
+                # Related parties as combo box
+                combo = QComboBox()
+                combo.addItems(['N', 'Y'])
+                combo.setCurrentText(related_parties)
+                self.mid_table_widget.setCellWidget(row_idx, 3, combo)
+                imported += 1
+                existing_mids.add(mid.upper())  # Track for subsequent duplicates in same file
+
+            msg = f"Imported {imported} MID records."
+            if skipped > 0:
+                msg += f"\nSkipped {skipped} duplicate MIDs."
+            msg += "\n\nClick 'Save Changes' to save to database."
+            QMessageBox.information(dialog, "Import Complete", msg)
+
+        except Exception as e:
+            QMessageBox.critical(dialog, "Import Error", f"Failed to import file:\n{str(e)}")
+            logger.error(f"MID import error: {e}")
+
+    def add_mid_row(self, dialog):
+        """Add a new empty row to the MID table"""
+        row_idx = self.mid_table_widget.rowCount()
+        self.mid_table_widget.insertRow(row_idx)
+        self.mid_table_widget.setItem(row_idx, 0, QTableWidgetItem(""))
+        self.mid_table_widget.setItem(row_idx, 1, QTableWidgetItem(""))
+        self.mid_table_widget.setItem(row_idx, 2, QTableWidgetItem(""))
+
+        combo = QComboBox()
+        combo.addItems(['N', 'Y'])
+        self.mid_table_widget.setCellWidget(row_idx, 3, combo)
+
+        # Focus on the new row
+        self.mid_table_widget.setCurrentCell(row_idx, 0)
+        self.mid_table_widget.editItem(self.mid_table_widget.item(row_idx, 0))
+
+    def delete_selected_mid(self, dialog):
+        """Delete selected MID rows"""
+        selected_rows = set(item.row() for item in self.mid_table_widget.selectedItems())
+        if not selected_rows:
+            QMessageBox.warning(dialog, "No Selection", "Please select rows to delete.")
+            return
+
+        reply = QMessageBox.question(
+            dialog, "Confirm Delete",
+            f"Delete {len(selected_rows)} selected MID(s)?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            for row in sorted(selected_rows, reverse=True):
+                self.mid_table_widget.removeRow(row)
+
+    def clear_all_mids(self, dialog):
+        """Clear all MIDs from the table"""
+        if self.mid_table_widget.rowCount() == 0:
+            return
+
+        reply = QMessageBox.question(
+            dialog, "Confirm Clear",
+            "Clear all MIDs from the table?\n\nThis will not delete from database until you click 'Save Changes'.",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            self.mid_table_widget.setRowCount(0)
+
+    def save_mid_table(self, dialog):
+        """Save MID table data to database"""
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+
+            # Clear existing data
+            c.execute("DELETE FROM mid_table")
+
+            # Insert new data
+            saved = 0
+            for row in range(self.mid_table_widget.rowCount()):
+                manufacturer_name = self.mid_table_widget.item(row, 0)
+                manufacturer_name = manufacturer_name.text().strip() if manufacturer_name else ""
+
+                mid = self.mid_table_widget.item(row, 1)
+                mid = mid.text().strip() if mid else ""
+
+                if not mid:
+                    continue
+
+                customer_id = self.mid_table_widget.item(row, 2)
+                customer_id = customer_id.text().strip() if customer_id else ""
+
+                combo = self.mid_table_widget.cellWidget(row, 3)
+                related_parties = combo.currentText() if combo else 'N'
+
+                c.execute(
+                    "INSERT OR REPLACE INTO mid_table (mid, manufacturer_name, customer_id, related_parties) VALUES (?, ?, ?, ?)",
+                    (mid, manufacturer_name, customer_id, related_parties)
+                )
+                saved += 1
+
+            conn.commit()
+            conn.close()
+
+            QMessageBox.information(dialog, "Saved", f"Saved {saved} MID records to database.")
+            self.load_available_mids()
+
+        except Exception as e:
+            QMessageBox.critical(dialog, "Save Error", f"Failed to save:\n{str(e)}")
+            logger.error(f"MID save error: {e}")
+
+    def load_mid_table_data(self):
+        """Load MID data from database into table widget"""
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("SELECT manufacturer_name, mid, customer_id, related_parties FROM mid_table ORDER BY manufacturer_name, mid")
+            rows = c.fetchall()
+            conn.close()
+
+            self.mid_table_widget.setRowCount(0)
+            for manufacturer_name, mid, customer_id, related_parties in rows:
+                row_idx = self.mid_table_widget.rowCount()
+                self.mid_table_widget.insertRow(row_idx)
+                self.mid_table_widget.setItem(row_idx, 0, QTableWidgetItem(manufacturer_name or ""))
+                self.mid_table_widget.setItem(row_idx, 1, QTableWidgetItem(mid or ""))
+                self.mid_table_widget.setItem(row_idx, 2, QTableWidgetItem(customer_id or ""))
+
+                combo = QComboBox()
+                combo.addItems(['N', 'Y'])
+                combo.setCurrentText(related_parties if related_parties in ('Y', 'N') else 'N')
+                self.mid_table_widget.setCellWidget(row_idx, 3, combo)
+
+        except Exception as e:
+            logger.error(f"Failed to load MID table: {e}")
+
+    def filter_mid_table(self):
+        """Filter the MID table based on Customer ID, MID, and Manufacturer search fields"""
+        customer_filter = self.mid_customer_filter.text().strip().upper() if hasattr(self, 'mid_customer_filter') else ''
+        mid_filter = self.mid_search_filter.text().strip().upper() if hasattr(self, 'mid_search_filter') else ''
+        manufacturer_filter = self.mid_manufacturer_filter.text().strip().upper() if hasattr(self, 'mid_manufacturer_filter') else ''
+
+        for row in range(self.mid_table_widget.rowCount()):
+            # Get values from each column
+            manufacturer_item = self.mid_table_widget.item(row, 0)
+            mid_item = self.mid_table_widget.item(row, 1)
+            customer_id_item = self.mid_table_widget.item(row, 2)
+
+            manufacturer = manufacturer_item.text().upper() if manufacturer_item else ''
+            mid = mid_item.text().upper() if mid_item else ''
+            customer_id = customer_id_item.text().upper() if customer_id_item else ''
+
+            # Determine if row should be visible (all filters must match)
+            show_row = True
+            if customer_filter and customer_filter not in customer_id:
+                show_row = False
+            if mid_filter and mid_filter not in mid:
+                show_row = False
+            if manufacturer_filter and manufacturer_filter not in manufacturer:
+                show_row = False
+
+            self.mid_table_widget.setRowHidden(row, not show_row)
+
+    def clear_mid_filters(self):
+        """Clear all MID table filters"""
+        if hasattr(self, 'mid_customer_filter'):
+            self.mid_customer_filter.clear()
+        if hasattr(self, 'mid_search_filter'):
+            self.mid_search_filter.clear()
+        if hasattr(self, 'mid_manufacturer_filter'):
+            self.mid_manufacturer_filter.clear()
+        # Show all rows
+        for row in range(self.mid_table_widget.rowCount()):
+            self.mid_table_widget.setRowHidden(row, False)
 
     def show_configuration_dialog(self):
         """Show the Configuration dialog with Invoice Mapping, Output Mapping, and Parts Import tabs"""
@@ -4917,7 +5337,8 @@ class DerivativeMill(QMainWindow):
             QMessageBox.warning(self, "No File", "Load a CSV or Excel file first")
             return
         mapping = {k: t.column_name for k, t in self.import_targets.items() if t.column_name}
-        required_fields = ['part_number','hts_code','mid','steel_ratio']
+        # Only Part Number and HTS Code are required
+        required_fields = ['part_number','hts_code']
         missing = [f for f in required_fields if f not in mapping]
         if missing:
             fields = {
@@ -4944,7 +5365,8 @@ class DerivativeMill(QMainWindow):
             df = df.fillna("").rename(columns=str.strip)
             col_map = {v: k for k, v in mapping.items()}
             df = df.rename(columns=col_map)
-            required = ['part_number','hts_code','mid','steel_ratio']
+            # Only Part Number and HTS Code are required
+            required = ['part_number','hts_code']
             missing = [f for f in required if f not in df.columns]
             if missing:
                 QMessageBox.critical(self, "Error", f"Missing required fields: {', '.join(missing)}")
@@ -6509,8 +6931,14 @@ class DerivativeMill(QMainWindow):
         ])
         self.parts_table.setEditTriggers(QTableWidget.AllEditTriggers)
         self.parts_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.parts_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        # Allow user to resize columns by dragging, with last column stretching to fill
+        self.parts_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.parts_table.horizontalHeader().setStretchLastSection(True)
         self.parts_table.setSortingEnabled(False)  # Disabled for better performance
+        # Set reasonable default column widths
+        default_widths = [120, 200, 100, 50, 120, 80, 60, 60, 60, 60, 60, 60, 60, 120, 150]
+        for i, width in enumerate(default_widths):
+            self.parts_table.setColumnWidth(i, width)
         tl.addWidget(self.parts_table)
         table_box.setLayout(tl)
         layout.addWidget(table_box, 1)
@@ -8864,20 +9292,51 @@ class DerivativeMill(QMainWindow):
             current_selection = self.selected_mid
 
             conn = sqlite3.connect(str(DB_PATH))
-            df = pd.read_sql("SELECT DISTINCT mid FROM parts_master WHERE mid IS NOT NULL AND mid != '' ORDER BY mid", conn)
+            # Load from mid_table - includes manufacturer name, customer_id, related_parties
+            df = pd.read_sql("""
+                SELECT mid, manufacturer_name, customer_id, related_parties
+                FROM mid_table
+                WHERE mid IS NOT NULL AND mid != ''
+                ORDER BY mid
+            """, conn)
             conn.close()
-            self.available_mids = df['mid'].tolist()
+
+            # Store MID data for lookup (mid -> {manufacturer_name, customer_id, related_parties})
+            self.mid_data = {}
+            self.available_mids = []
+
+            for _, row in df.iterrows():
+                mid = row['mid']
+                manufacturer_name = row['manufacturer_name'] or ""
+                customer_id = row['customer_id'] or ""
+                related_parties = row['related_parties'] or "N"
+
+                self.mid_data[mid] = {
+                    'manufacturer_name': manufacturer_name,
+                    'customer_id': customer_id,
+                    'related_parties': related_parties
+                }
+                self.available_mids.append(mid)
+
+            self.mid_combo.blockSignals(True)  # Prevent signal during reload
+            self.mid_combo.clear()
+            self.mid_combo.addItem("-- Select MID --")  # Placeholder item
+
             if self.available_mids:
-                self.mid_combo.blockSignals(True)  # Prevent signal during reload
-                self.mid_combo.clear()
-                self.mid_combo.addItem("-- Select MID --")  # Placeholder item
+                # Show only MID in dropdown (not manufacturer name)
                 self.mid_combo.addItems(self.available_mids)
 
-                # Restore previous selection if it exists in the new list
-                if current_selection and current_selection in self.available_mids:
-                    index = self.mid_combo.findText(current_selection)
-                    if index >= 0:
-                        self.mid_combo.setCurrentIndex(index)
+                # Restore previous selection if it exists
+                if current_selection:
+                    # Try to find by MID value
+                    found_index = -1
+                    for i, mid in enumerate(self.available_mids):
+                        if mid == current_selection:
+                            found_index = i + 1  # +1 for placeholder
+                            break
+
+                    if found_index >= 0:
+                        self.mid_combo.setCurrentIndex(found_index)
                         self.selected_mid = current_selection
                     else:
                         self.mid_combo.setCurrentIndex(0)
@@ -8886,7 +9345,7 @@ class DerivativeMill(QMainWindow):
                     self.mid_combo.setCurrentIndex(0)  # Start with placeholder
                     self.selected_mid = ""  # No default selection
 
-                self.mid_combo.blockSignals(False)
+            self.mid_combo.blockSignals(False)
         except Exception as e:
             logger.error(f"MID load failed: {e}")
 
