@@ -811,15 +811,21 @@ def init_database():
             related_parties TEXT DEFAULT 'N'
         )""")
 
-        # Migration: Add customer_id column to mid_table if it doesn't exist
+        # Migration: Add manufacturer_name and customer_id columns to mid_table if they don't exist
         try:
             c.execute("PRAGMA table_info(mid_table)")
             columns = [col[1] for col in c.fetchall()]
+            if 'manufacturer_name' not in columns:
+                c.execute("ALTER TABLE mid_table ADD COLUMN manufacturer_name TEXT")
+                logger.info("Added manufacturer_name column to mid_table")
             if 'customer_id' not in columns:
                 c.execute("ALTER TABLE mid_table ADD COLUMN customer_id TEXT")
                 logger.info("Added customer_id column to mid_table")
+            if 'related_parties' not in columns:
+                c.execute("ALTER TABLE mid_table ADD COLUMN related_parties TEXT DEFAULT 'N'")
+                logger.info("Added related_parties column to mid_table")
         except Exception as e:
-            logger.warning(f"Failed to check/add customer_id column to mid_table: {e}")
+            logger.warning(f"Failed to check/add columns to mid_table: {e}")
 
         # Migration: Add client_code column to parts_master if it doesn't exist
         try:
@@ -1323,6 +1329,9 @@ class DerivativeMill(QMainWindow):
             tab_setup_methods[index]()
     def __init__(self):
         super().__init__()
+        # CRITICAL: Hide window immediately to prevent flashing during construction
+        self.setAttribute(Qt.WA_DontShowOnScreen, True)
+        self.hide()
         self.setWindowTitle(APP_NAME)
         # Compact default size - fully scalable with no minimum constraint
         self.setGeometry(50, 50, 1200, 700)
@@ -9815,31 +9824,68 @@ if __name__ == "__main__":
         splash_progress.setValue(10)
         app.processEvents()
         
+        # Create main window but keep it hidden during initialization
+        splash_message.setText("Creating main window...")
+        splash_progress.setValue(20)
+        app.processEvents()
+
         win = DerivativeMill()
         win.setWindowTitle(APP_NAME)
-        spinner.stop()
-        splash_widget.close()
-        win.show()
+        # Don't show yet - keep hidden until fully initialized
 
         def finish_initialization():
-            win.status.setText("Initializing application...")
+            splash_message.setText("Loading configuration...")
+            splash_progress.setValue(30)
+            app.processEvents()
             win.load_config_paths()
-            win.status.setText("Applying theme...")
+
+            splash_message.setText("Applying theme...")
+            splash_progress.setValue(40)
+            app.processEvents()
             win.apply_saved_theme()
-            win.status.setText("Loading MIDs...")
+
+            splash_message.setText("Loading MIDs...")
+            splash_progress.setValue(50)
+            app.processEvents()
             win.load_available_mids()
-            win.status.setText("Loading profiles...")
+
+            splash_message.setText("Loading profiles...")
+            splash_progress.setValue(60)
+            app.processEvents()
             win.load_mapping_profiles()
-            win.status.setText("Loading export profiles...")
+
+            splash_message.setText("Loading export profiles...")
+            splash_progress.setValue(70)
+            app.processEvents()
             win.load_output_mapping_profiles()
-            win.status.setText("Scanning input files...")
+
+            splash_message.setText("Scanning input files...")
+            splash_progress.setValue(80)
+            app.processEvents()
             win.refresh_input_files()
-            win.status.setText("Starting auto-refresh...")
+
+            splash_message.setText("Starting services...")
+            splash_progress.setValue(90)
+            app.processEvents()
             win.setup_auto_refresh()
+
             # TODO: Re-enable license check when ready to sell
-            # win.status.setText("Checking license...")
             # win.check_license_status()
+
+            splash_message.setText("Ready!")
+            splash_progress.setValue(100)
+            app.processEvents()
+
+            # Now close splash and show main window
+            spinner.stop()
+            splash_widget.close()
+            # Remove the "don't show on screen" attribute before showing
+            win.setAttribute(Qt.WA_DontShowOnScreen, False)
+            win.show()
+            win.raise_()
+            win.activateWindow()
             win.status.setText("Ready")
+
             # Final aggressive enable after all initialization
             QTimer.singleShot(0, win._enable_input_fields)
             QTimer.singleShot(100, win._enable_input_fields)
@@ -9848,8 +9894,8 @@ if __name__ == "__main__":
             # Check for updates after a short delay (non-blocking)
             QTimer.singleShot(2000, win.check_for_updates_startup)
 
-        # Start initialization after window is shown
-        QTimer.singleShot(100, finish_initialization)
+        # Start initialization after a brief delay to let splash render
+        QTimer.singleShot(50, finish_initialization)
         sys.exit(app.exec_())
     except Exception as e:
         error_msg = f"Unhandled Exception:\n{str(e)}\n\n{traceback.format_exc()}"
