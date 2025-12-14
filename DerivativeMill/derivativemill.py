@@ -213,6 +213,280 @@ class UpdateChecker:
 
 
 # ==============================================================================
+# License Management
+# ==============================================================================
+# Handles license validation with Gumroad integration, trial period management,
+# and hybrid online/offline validation.
+
+# License Configuration - Update GUMROAD_PRODUCT_ID after creating Gumroad product
+GUMROAD_PRODUCT_ID = "lRReBpPi8qMTg0cfHl2_3A=="
+GUMROAD_PRODUCT_URL = "https://payne181.gumroad.com/l/ellnff"
+GUMROAD_VERIFY_URL = "https://api.gumroad.com/v2/licenses/verify"
+TRIAL_DAYS = 30
+OFFLINE_GRACE_DAYS = 7  # Days to allow offline use before requiring re-validation
+
+class LicenseManager:
+    """Manages license validation with Gumroad integration and trial period"""
+
+    def __init__(self, db_path):
+        self.db_path = db_path
+        self.license_key = None
+        self.license_email = None
+        self.license_status = 'unknown'  # 'trial', 'active', 'expired', 'invalid'
+        self.trial_start_date = None
+        self.last_verified = None
+        self.error = None
+
+    def _get_config(self, key):
+        """Get a value from app_config table"""
+        try:
+            conn = sqlite3.connect(str(self.db_path))
+            c = conn.cursor()
+            c.execute("SELECT value FROM app_config WHERE key = ?", (key,))
+            row = c.fetchone()
+            conn.close()
+            return row[0] if row else None
+        except Exception as e:
+            logger.warning(f"Failed to get config {key}: {e}")
+            return None
+
+    def _set_config(self, key, value):
+        """Set a value in app_config table"""
+        try:
+            conn = sqlite3.connect(str(self.db_path))
+            c = conn.cursor()
+            c.execute("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)", (key, str(value)))
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to set config {key}: {e}")
+            return False
+
+    def get_machine_id(self):
+        """Generate a unique machine identifier for tracking (not for locking)"""
+        import hashlib
+        import platform
+
+        # Combine various system identifiers
+        identifiers = [
+            platform.node(),  # Computer network name
+            platform.machine(),  # Machine type
+            platform.processor(),  # Processor info
+        ]
+
+        # Try to get Windows-specific identifiers
+        try:
+            import subprocess
+            result = subprocess.run(
+                ['wmic', 'csproduct', 'get', 'uuid'],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                uuid_line = [l.strip() for l in result.stdout.split('\n') if l.strip() and l.strip() != 'UUID']
+                if uuid_line:
+                    identifiers.append(uuid_line[0])
+        except:
+            pass
+
+        # Create hash of combined identifiers
+        combined = '|'.join(identifiers)
+        return hashlib.sha256(combined.encode()).hexdigest()[:32]
+
+    def get_trial_start_date(self):
+        """Get the trial start date, initializing it if this is first launch"""
+        stored = self._get_config('trial_start_date')
+        if stored:
+            try:
+                return datetime.fromisoformat(stored)
+            except:
+                pass
+
+        # First launch - initialize trial
+        now = datetime.now()
+        self._set_config('trial_start_date', now.isoformat())
+        logger.info(f"Trial period started: {now.isoformat()}")
+        return now
+
+    def get_trial_days_remaining(self):
+        """Calculate remaining days in trial period"""
+        start_date = self.get_trial_start_date()
+        elapsed = datetime.now() - start_date
+        remaining = TRIAL_DAYS - elapsed.days
+        return max(0, remaining)
+
+    def is_trial_expired(self):
+        """Check if trial period has ended"""
+        return self.get_trial_days_remaining() <= 0
+
+    def get_stored_license(self):
+        """Retrieve stored license information"""
+        self.license_key = self._get_config('license_key')
+        self.license_email = self._get_config('license_email')
+        last_verified = self._get_config('license_last_verified')
+        if last_verified:
+            try:
+                self.last_verified = datetime.fromisoformat(last_verified)
+            except:
+                self.last_verified = None
+        return self.license_key
+
+    def store_license(self, license_key, email=None, purchase_data=None):
+        """Save license information to database"""
+        self._set_config('license_key', license_key)
+        if email:
+            self._set_config('license_email', email)
+        self._set_config('license_activated_date', datetime.now().isoformat())
+        self._set_config('license_last_verified', datetime.now().isoformat())
+        if purchase_data:
+            self._set_config('license_purchase_data', json.dumps(purchase_data))
+        self.license_key = license_key
+        self.license_email = email
+        self.last_verified = datetime.now()
+        logger.info(f"License stored successfully")
+
+    def validate_online(self, license_key):
+        """Verify license with Gumroad API"""
+        if not GUMROAD_PRODUCT_ID:
+            # Product ID not configured - skip online validation
+            logger.warning("Gumroad product ID not configured, skipping online validation")
+            return None, "Product not configured for online validation"
+
+        try:
+            data = urllib.parse.urlencode({
+                'product_id': GUMROAD_PRODUCT_ID,
+                'license_key': license_key,
+                'increment_uses_count': 'false'
+            }).encode('utf-8')
+
+            request = urllib.request.Request(
+                GUMROAD_VERIFY_URL,
+                data=data,
+                method='POST',
+                headers={'User-Agent': f'DerivativeMill/{VERSION}'}
+            )
+
+            with urllib.request.urlopen(request, timeout=10) as response:
+                result = json.loads(response.read().decode('utf-8'))
+
+            if result.get('success'):
+                purchase = result.get('purchase', {})
+
+                # Check if refunded or disputed
+                if purchase.get('refunded') or purchase.get('disputed'):
+                    return False, "License has been refunded or disputed"
+
+                # Check subscription status for memberships
+                if purchase.get('subscription_cancelled_at') or purchase.get('subscription_failed_at'):
+                    return False, "Subscription is no longer active"
+
+                # Valid license
+                email = purchase.get('email', '')
+                return True, {'email': email, 'purchase': purchase}
+            else:
+                return False, result.get('message', 'Invalid license key')
+
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return False, "Invalid license key"
+            return None, f"Server error: {e.code}"
+        except urllib.error.URLError as e:
+            return None, f"Network error: {str(e)}"
+        except Exception as e:
+            return None, f"Validation error: {str(e)}"
+
+    def validate_offline(self):
+        """Check if stored license is still valid for offline use"""
+        if not self.license_key:
+            self.get_stored_license()
+
+        if not self.license_key:
+            return False, "No license key stored"
+
+        if not self.last_verified:
+            return False, "License has never been verified online"
+
+        # Check if within offline grace period
+        days_since_verified = (datetime.now() - self.last_verified).days
+        if days_since_verified <= OFFLINE_GRACE_DAYS:
+            return True, f"Offline mode ({OFFLINE_GRACE_DAYS - days_since_verified} days remaining)"
+
+        return False, "Offline grace period expired, please connect to internet to re-verify"
+
+    def validate_license(self, license_key=None):
+        """
+        Hybrid validation: try online first, fall back to offline.
+        Returns: (is_valid, message)
+        """
+        key_to_check = license_key or self.license_key or self.get_stored_license()
+
+        if not key_to_check:
+            return False, "No license key provided"
+
+        # Try online validation first
+        online_result, online_data = self.validate_online(key_to_check)
+
+        if online_result is True:
+            # Valid online - update stored data
+            email = online_data.get('email', '') if isinstance(online_data, dict) else None
+            self.store_license(key_to_check, email, online_data)
+            self.license_status = 'active'
+            return True, "License validated successfully"
+
+        elif online_result is False:
+            # Explicitly invalid
+            self.license_status = 'invalid'
+            return False, online_data  # online_data contains error message
+
+        else:
+            # Online check failed (network issue) - try offline
+            logger.info(f"Online validation unavailable: {online_data}, trying offline")
+            offline_result, offline_msg = self.validate_offline()
+            if offline_result:
+                self.license_status = 'active'
+                return True, offline_msg
+            else:
+                self.license_status = 'invalid'
+                return False, f"Online: {online_data}. Offline: {offline_msg}"
+
+    def activate_license(self, license_key):
+        """Activate a new license key"""
+        license_key = license_key.strip()
+        if not license_key:
+            return False, "Please enter a license key"
+
+        # Validate the license
+        is_valid, message = self.validate_license(license_key)
+
+        if is_valid:
+            logger.info(f"License activated successfully")
+            return True, "License activated successfully!"
+        else:
+            logger.warning(f"License activation failed: {message}")
+            return False, message
+
+    def get_license_status(self):
+        """
+        Determine current license status.
+        Returns: ('trial', days_remaining) or ('active', None) or ('expired', None)
+        """
+        # Check for valid license first
+        stored_key = self.get_stored_license()
+        if stored_key:
+            is_valid, _ = self.validate_license(stored_key)
+            if is_valid:
+                return 'active', None
+
+        # No valid license - check trial
+        if not self.is_trial_expired():
+            days = self.get_trial_days_remaining()
+            return 'trial', days
+
+        # Trial expired and no valid license
+        return 'expired', None
+
+
+# ==============================================================================
 # Application Paths
 # ==============================================================================
 # Handles path resolution for both PyInstaller-bundled executables and
@@ -1162,13 +1436,21 @@ class DerivativeMill(QMainWindow):
 
         # Add Help menu
         help_menu = menubar.addMenu("Help")
-        
+
+        # License & Activation action
+        license_icon = self.style().standardIcon(QStyle.SP_DialogApplyButton)
+        license_action = QAction(license_icon, "License && Activation...", self)
+        license_action.triggered.connect(self.show_license_dialog)
+        help_menu.addAction(license_action)
+
+        help_menu.addSeparator()
+
         # Check for Updates action
         update_icon = self.style().standardIcon(QStyle.SP_BrowserReload)
         update_action = QAction(update_icon, "Check for Updates...", self)
         update_action.triggered.connect(self.check_for_updates_manual)
         help_menu.addAction(update_action)
-        
+
         help_menu.addSeparator()
         
         # About action
@@ -2567,6 +2849,275 @@ class DerivativeMill(QMainWindow):
         # Run in background thread to not block startup
         thread = Thread(target=check_thread, daemon=True)
         thread.start()
+
+    def show_license_dialog(self):
+        """Show the license activation dialog"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("License & Activation")
+        dialog.resize(500, 400)
+        dialog.setMinimumWidth(450)
+        layout = QVBoxLayout(dialog)
+        layout.setSpacing(15)
+        layout.setContentsMargins(20, 20, 20, 20)
+
+        # Get current license status
+        license_mgr = LicenseManager(DB_PATH)
+        status, days = license_mgr.get_license_status()
+
+        # Status display
+        status_group = QGroupBox("License Status")
+        status_layout = QVBoxLayout()
+        status_layout.setSpacing(10)
+
+        if status == 'active':
+            status_icon = "✅"
+            status_text = "Licensed"
+            status_color = "#27ae60"
+            status_detail = f"Email: {license_mgr.license_email or 'N/A'}"
+        elif status == 'trial':
+            status_icon = "⏳"
+            status_text = f"Trial Period - {days} days remaining"
+            status_color = "#f39c12"
+            status_detail = "Full functionality available during trial"
+        else:  # expired
+            status_icon = "❌"
+            status_text = "Trial Expired"
+            status_color = "#e74c3c"
+            status_detail = "Please activate a license to continue using the software"
+
+        status_label = QLabel(f"<h2 style='color: {status_color};'>{status_icon} {status_text}</h2>")
+        status_label.setAlignment(Qt.AlignCenter)
+        status_layout.addWidget(status_label)
+
+        detail_label = QLabel(status_detail)
+        detail_label.setAlignment(Qt.AlignCenter)
+        detail_label.setStyleSheet("color: #666;")
+        status_layout.addWidget(detail_label)
+
+        status_group.setLayout(status_layout)
+        layout.addWidget(status_group)
+
+        # License key input
+        activate_group = QGroupBox("Activate License")
+        activate_layout = QVBoxLayout()
+        activate_layout.setSpacing(10)
+
+        key_label = QLabel("Enter your license key:")
+        activate_layout.addWidget(key_label)
+
+        key_input = QLineEdit()
+        key_input.setPlaceholderText("XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX")
+        key_input.setMinimumHeight(35)
+        key_input.setStyleSheet("font-size: 14px; padding: 5px;")
+        activate_layout.addWidget(key_input)
+
+        # Message label for feedback
+        message_label = QLabel("")
+        message_label.setWordWrap(True)
+        message_label.setAlignment(Qt.AlignCenter)
+        activate_layout.addWidget(message_label)
+
+        # Activate button
+        activate_btn = QPushButton("Activate License")
+        activate_btn.setMinimumHeight(35)
+        activate_btn.setStyleSheet(self.get_button_style("success"))
+
+        def activate_license():
+            key = key_input.text().strip()
+            if not key:
+                message_label.setText("<span style='color: #e74c3c;'>Please enter a license key</span>")
+                return
+
+            activate_btn.setEnabled(False)
+            activate_btn.setText("Validating...")
+            QApplication.processEvents()
+
+            success, message = license_mgr.activate_license(key)
+
+            if success:
+                message_label.setText(f"<span style='color: #27ae60;'>{message}</span>")
+                # Update status display
+                status_label.setText("<h2 style='color: #27ae60;'>✅ Licensed</h2>")
+                detail_label.setText(f"Email: {license_mgr.license_email or 'N/A'}")
+                # Update window title
+                self.update_license_status_title()
+                QMessageBox.information(dialog, "License Activated",
+                    "Your license has been activated successfully!\n\n"
+                    "Thank you for purchasing DerivativeMill.")
+            else:
+                message_label.setText(f"<span style='color: #e74c3c;'>{message}</span>")
+
+            activate_btn.setEnabled(True)
+            activate_btn.setText("Activate License")
+
+        activate_btn.clicked.connect(activate_license)
+        activate_layout.addWidget(activate_btn)
+
+        activate_group.setLayout(activate_layout)
+        layout.addWidget(activate_group)
+
+        # Purchase section
+        purchase_group = QGroupBox("Don't have a license?")
+        purchase_layout = QVBoxLayout()
+
+        purchase_info = QLabel(
+            "Purchase a license to support development and unlock permanent access."
+        )
+        purchase_info.setWordWrap(True)
+        purchase_info.setAlignment(Qt.AlignCenter)
+        purchase_layout.addWidget(purchase_info)
+
+        buy_btn = QPushButton("Buy License")
+        buy_btn.setMinimumHeight(35)
+        buy_btn.setStyleSheet(self.get_button_style("default"))
+        buy_btn.clicked.connect(lambda: webbrowser.open(GUMROAD_PRODUCT_URL))
+        purchase_layout.addWidget(buy_btn)
+
+        purchase_group.setLayout(purchase_layout)
+        layout.addWidget(purchase_group)
+
+        # Close button
+        close_btn = QPushButton("Close")
+        close_btn.setMinimumHeight(35)
+        close_btn.clicked.connect(dialog.accept)
+        layout.addWidget(close_btn)
+
+        dialog.exec_()
+
+    def show_trial_expired_dialog(self):
+        """Show modal dialog when trial has expired - blocks app until licensed"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Trial Expired")
+        dialog.resize(450, 350)
+        dialog.setModal(True)
+        # Prevent closing without activating license
+        dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowCloseButtonHint)
+        layout = QVBoxLayout(dialog)
+        layout.setSpacing(15)
+        layout.setContentsMargins(25, 25, 25, 25)
+
+        # Warning header
+        header = QLabel("<h2 style='color: #e74c3c;'>⚠️ Trial Period Expired</h2>")
+        header.setAlignment(Qt.AlignCenter)
+        layout.addWidget(header)
+
+        # Message
+        message = QLabel(
+            "<p style='font-size: 13px;'>Your 30-day trial of DerivativeMill has ended.</p>"
+            "<p style='font-size: 13px;'>Please purchase and activate a license to continue "
+            "using the software.</p>"
+        )
+        message.setWordWrap(True)
+        message.setAlignment(Qt.AlignCenter)
+        layout.addWidget(message)
+
+        layout.addSpacing(10)
+
+        # License key input
+        key_label = QLabel("Enter your license key:")
+        layout.addWidget(key_label)
+
+        key_input = QLineEdit()
+        key_input.setPlaceholderText("XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX")
+        key_input.setMinimumHeight(35)
+        key_input.setStyleSheet("font-size: 14px; padding: 5px;")
+        layout.addWidget(key_input)
+
+        # Message label for feedback
+        feedback_label = QLabel("")
+        feedback_label.setWordWrap(True)
+        feedback_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(feedback_label)
+
+        # Buttons
+        btn_layout = QHBoxLayout()
+
+        activate_btn = QPushButton("Activate License")
+        activate_btn.setMinimumHeight(35)
+        activate_btn.setStyleSheet(self.get_button_style("success"))
+
+        def try_activate():
+            key = key_input.text().strip()
+            if not key:
+                feedback_label.setText("<span style='color: #e74c3c;'>Please enter a license key</span>")
+                return
+
+            activate_btn.setEnabled(False)
+            activate_btn.setText("Validating...")
+            QApplication.processEvents()
+
+            license_mgr = LicenseManager(DB_PATH)
+            success, msg = license_mgr.activate_license(key)
+
+            if success:
+                feedback_label.setText(f"<span style='color: #27ae60;'>{msg}</span>")
+                QMessageBox.information(dialog, "License Activated",
+                    "Your license has been activated successfully!\n\n"
+                    "Thank you for purchasing DerivativeMill.")
+                self.update_license_status_title()
+                dialog.accept()
+            else:
+                feedback_label.setText(f"<span style='color: #e74c3c;'>{msg}</span>")
+                activate_btn.setEnabled(True)
+                activate_btn.setText("Activate License")
+
+        activate_btn.clicked.connect(try_activate)
+        btn_layout.addWidget(activate_btn)
+
+        buy_btn = QPushButton("Buy License")
+        buy_btn.setMinimumHeight(35)
+        buy_btn.clicked.connect(lambda: webbrowser.open(GUMROAD_PRODUCT_URL))
+        btn_layout.addWidget(buy_btn)
+
+        layout.addLayout(btn_layout)
+
+        # Exit button (closes the application)
+        exit_btn = QPushButton("Exit Application")
+        exit_btn.setMinimumHeight(30)
+        exit_btn.setStyleSheet(self.get_button_style("danger"))
+        exit_btn.clicked.connect(lambda: (dialog.reject(), QApplication.quit()))
+        layout.addWidget(exit_btn)
+
+        # Show dialog - if rejected (exit clicked), close app
+        result = dialog.exec_()
+        if result == QDialog.Rejected:
+            QApplication.quit()
+            sys.exit(0)
+
+    def check_license_status(self):
+        """Check license status at startup and show appropriate dialog if needed"""
+        license_mgr = LicenseManager(DB_PATH)
+        status, days = license_mgr.get_license_status()
+
+        logger.info(f"License status: {status}, days remaining: {days}")
+
+        # Update window title with license status
+        self.update_license_status_title()
+
+        if status == 'expired':
+            # Show trial expired dialog (blocks until licensed or exit)
+            self.show_trial_expired_dialog()
+        elif status == 'trial':
+            # Show trial reminder if less than 7 days remaining
+            if days <= 7:
+                QMessageBox.information(self, "Trial Reminder",
+                    f"Your trial period will expire in {days} day{'s' if days != 1 else ''}.\n\n"
+                    "Please consider purchasing a license to continue using DerivativeMill.\n\n"
+                    "Go to Help → License & Activation to enter your license key.")
+
+    def update_license_status_title(self):
+        """Update the window title to reflect license status"""
+        license_mgr = LicenseManager(DB_PATH)
+        status, days = license_mgr.get_license_status()
+
+        if status == 'active':
+            title_suffix = "(Licensed)"
+        elif status == 'trial':
+            title_suffix = f"(Trial: {days} days left)"
+        else:
+            title_suffix = "(Unlicensed)"
+
+        self.setWindowTitle(f"{APP_NAME} {VERSION} {title_suffix}")
 
     def show_about_dialog(self):
         """Show the About dialog"""
@@ -8689,9 +9240,41 @@ if __name__ == "__main__":
         if icon_path.exists():
             app.setWindowIcon(QIcon(str(icon_path)))
         
-        # Create and show splash screen
+        # Create and show splash screen with spinner
+        # Custom spinner widget
+        class SpinnerWidget(QWidget):
+            def __init__(self, parent=None):
+                super().__init__(parent)
+                self.angle = 0
+                self.setFixedSize(50, 50)
+                self.timer = QTimer(self)
+                self.timer.timeout.connect(self.rotate)
+                self.timer.start(50)  # Update every 50ms
+
+            def rotate(self):
+                self.angle = (self.angle + 30) % 360
+                self.update()
+
+            def paintEvent(self, event):
+                from PyQt5.QtGui import QPainter, QPen, QColor
+                painter = QPainter(self)
+                painter.setRenderHint(QPainter.Antialiasing)
+                painter.translate(self.width() / 2, self.height() / 2)
+                painter.rotate(self.angle)
+
+                # Draw spinning dots
+                for i in range(12):
+                    alpha = int(255 * (i + 1) / 12)
+                    painter.setBrush(QColor(0, 120, 212, alpha))
+                    painter.setPen(Qt.NoPen)
+                    painter.drawEllipse(-3, -20, 6, 6)
+                    painter.rotate(30)
+
+            def stop(self):
+                self.timer.stop()
+
         splash_widget = QWidget()
-        splash_widget.setFixedSize(500, 300)
+        splash_widget.setFixedSize(500, 320)
         splash_widget.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         splash_widget.setAttribute(Qt.WA_TranslucentBackground)
         splash_layout = QVBoxLayout(splash_widget)
@@ -8706,12 +9289,23 @@ if __name__ == "__main__":
         """)
         container_layout = QVBoxLayout(splash_container)
         container_layout.setContentsMargins(30, 30, 30, 30)
-        container_layout.setSpacing(20)
+        container_layout.setSpacing(15)
         title_label = QLabel(f"<h1 style='color: #0078D4;'>{APP_NAME}</h1>")
         title_label.setAlignment(Qt.AlignCenter)
         container_layout.addWidget(title_label)
-        splash_message = QLabel("Initializing application\nPlease wait...")
-        splash_message.setStyleSheet("color: #f3f3f3; font-size: 12pt; font-weight: bold;")
+
+        # Spinner
+        spinner = SpinnerWidget()
+        spinner_container = QWidget()
+        spinner_layout = QHBoxLayout(spinner_container)
+        spinner_layout.setContentsMargins(0, 0, 0, 0)
+        spinner_layout.addStretch()
+        spinner_layout.addWidget(spinner)
+        spinner_layout.addStretch()
+        container_layout.addWidget(spinner_container)
+
+        splash_message = QLabel("Initializing application...")
+        splash_message.setStyleSheet("color: #f3f3f3; font-size: 11pt;")
         splash_message.setAlignment(Qt.AlignCenter)
         container_layout.addWidget(splash_message)
         splash_progress = QProgressBar()
@@ -8751,6 +9345,7 @@ if __name__ == "__main__":
         
         win = DerivativeMill()
         win.setWindowTitle(APP_NAME)
+        spinner.stop()
         splash_widget.close()
         win.show()
 
@@ -8769,6 +9364,9 @@ if __name__ == "__main__":
             win.refresh_input_files()
             win.status.setText("Starting auto-refresh...")
             win.setup_auto_refresh()
+            # TODO: Re-enable license check when ready to sell
+            # win.status.setText("Checking license...")
+            # win.check_license_status()
             win.status.setText("Ready")
             # Final aggressive enable after all initialization
             QTimer.singleShot(0, win._enable_input_fields)

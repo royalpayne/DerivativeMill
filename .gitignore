@@ -91,3 +91,16 @@ __pycache__/
 # User-specific settings (if saved locally)
 column_mapping.json
 shipment_mapping.json
+
+# Local config files
+config.ini
+
+# Claude Code settings
+.claude/
+
+# Installer builds
+installer/
+
+# Temporary/test files
+hts_response.html
+nul

@@ -1,6 +1,0 @@
-{
-  "invoice_number": "invoice_number",
-  "part_number": "part_number",
-  "value_usd": "total_price",
-  "quantity": "quantity"
-}
