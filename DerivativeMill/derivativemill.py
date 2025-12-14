@@ -520,6 +520,19 @@ SHIPMENT_MAPPING_FILE = BASE_DIR / "shipment_mapping.json"
 for p in (RESOURCES_DIR, INPUT_DIR, OUTPUT_DIR, PROCESSED_DIR, OUTPUT_PROCESSED_DIR):
     p.mkdir(exist_ok=True)
 
+# Copy bundled database to user location on first run (for frozen exe)
+# This ensures the pre-populated tariff_232 and sec_232_actions tables are available
+if getattr(sys, 'frozen', False):
+    import shutil
+    bundled_db = TEMP_RESOURCES_DIR / DB_NAME
+    local_db = RESOURCES_DIR / DB_NAME
+    if bundled_db.exists() and not local_db.exists():
+        try:
+            shutil.copy2(bundled_db, local_db)
+            print(f"Copied bundled database to {local_db}")
+        except Exception as e:
+            print(f"Warning: Could not copy bundled database: {e}")
+
 # ==============================================================================
 # Shared Configuration File
 # ==============================================================================
