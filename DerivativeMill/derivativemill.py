@@ -120,14 +120,45 @@ class UpdateChecker:
         self.error = None
     
     def parse_version(self, version_str):
-        """Parse version string to tuple for comparison (e.g., 'v0.61.0' -> (0, 61, 0))"""
+        """Parse version string to tuple for comparison (e.g., 'v0.61.0' -> (0, 61, 0))
+
+        Also handles git describe format like 'v0.90.1-6-gaa8bef5' by extracting
+        the base version (v0.90.1) and commits ahead count (6).
+        """
         try:
             # Remove 'v' prefix if present
             clean = version_str.lstrip('v').lstrip('V')
+
+            # Handle git describe format: v0.90.1-6-gaa8bef5
+            # Split on '-' and check if it's a git describe format
+            if '-' in clean:
+                parts = clean.split('-')
+                # Check if second part is a number (commits ahead) and third starts with 'g' (git hash)
+                if len(parts) >= 2 and parts[1].isdigit():
+                    # Git describe format - extract base version and commits ahead
+                    base_version = parts[0]
+                    commits_ahead = int(parts[1])
+                    version_parts = base_version.split('.')
+                    # Return tuple with commits ahead as 4th element for proper comparison
+                    base_tuple = [int(p) for p in version_parts[:3]]
+                    # Pad to 3 elements if needed
+                    while len(base_tuple) < 3:
+                        base_tuple.append(0)
+                    # Add commits ahead - a dev version (commits > 0) is NEWER than the release
+                    base_tuple.append(commits_ahead)
+                    return tuple(base_tuple)
+
+            # Standard version format: 0.90.1
             parts = clean.split('.')
-            return tuple(int(p) for p in parts[:3])  # Take first 3 parts
+            version_tuple = [int(p) for p in parts[:3]]
+            # Pad to 3 elements if needed
+            while len(version_tuple) < 3:
+                version_tuple.append(0)
+            # Add 0 for commits ahead (this is a release version)
+            version_tuple.append(0)
+            return tuple(version_tuple)
         except (ValueError, AttributeError):
-            return (0, 0, 0)
+            return (0, 0, 0, 0)
     
     def check_for_updates(self):
         """
