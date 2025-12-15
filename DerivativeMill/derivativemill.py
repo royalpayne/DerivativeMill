@@ -32,6 +32,17 @@ except ImportError:
 
 import sys
 import os
+
+# Hide console window on Windows immediately at startup
+if sys.platform == 'win32':
+    import ctypes
+    # Get console window handle and hide it
+    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    user32 = ctypes.WinDLL('user32', use_last_error=True)
+    hwnd = kernel32.GetConsoleWindow()
+    if hwnd:
+        user32.ShowWindow(hwnd, 0)  # SW_HIDE = 0
+
 import json
 import time
 import re
@@ -268,26 +279,26 @@ class LicenseManager:
         import hashlib
         import platform
 
-        # Combine various system identifiers
+        # Combine various system identifiers (no subprocess calls to avoid console flash)
         identifiers = [
             platform.node(),  # Computer network name
             platform.machine(),  # Machine type
             platform.processor(),  # Processor info
+            platform.system(),  # OS name
+            platform.release(),  # OS release
         ]
 
-        # Try to get Windows-specific identifiers
-        try:
-            import subprocess
-            result = subprocess.run(
-                ['wmic', 'csproduct', 'get', 'uuid'],
-                capture_output=True, text=True, timeout=5
-            )
-            if result.returncode == 0:
-                uuid_line = [l.strip() for l in result.stdout.split('\n') if l.strip() and l.strip() != 'UUID']
-                if uuid_line:
-                    identifiers.append(uuid_line[0])
-        except:
-            pass
+        # Try to get Windows-specific identifiers without subprocess
+        if sys.platform == 'win32':
+            try:
+                import winreg
+                key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                    r"SOFTWARE\Microsoft\Cryptography")
+                machine_guid, _ = winreg.QueryValueEx(key, "MachineGuid")
+                winreg.CloseKey(key)
+                identifiers.append(machine_guid)
+            except:
+                pass
 
         # Create hash of combined identifiers
         combined = '|'.join(identifiers)
@@ -1100,6 +1111,184 @@ def init_database():
         except Exception as e:
             logger.warning(f"Failed to migrate output columns: {e}")
 
+        # Migration: Add Section 232 Automotive tariff codes if not present
+        try:
+            c.execute("SELECT value FROM app_config WHERE key = 'auto_tariffs_migration_v1'")
+            if not c.fetchone():
+                # Check if Auto material already exists in tariff_232
+                c.execute("SELECT COUNT(*) FROM tariff_232 WHERE material = 'Auto'")
+                auto_count = c.fetchone()[0]
+
+                if auto_count == 0:
+                    # Define automotive tariff codes from Attachment 2_Auto Parts HTS List
+                    # Reference: U.S. note 33, subchapter III of chapter 99, headings 9903.94.05 and 9903.94.06
+                    auto_tariffs = [
+                        # Rubber parts (Chapter 40)
+                        ('4009120020', 'Auto', 'Automotive Rubber Parts', '40', 'Chapter 40: Rubber and articles thereof', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('4009220020', 'Auto', 'Automotive Rubber Parts', '40', 'Chapter 40: Rubber and articles thereof', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('4009320020', 'Auto', 'Automotive Rubber Parts', '40', 'Chapter 40: Rubber and articles thereof', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('4009420020', 'Auto', 'Automotive Rubber Parts', '40', 'Chapter 40: Rubber and articles thereof', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('40111010', 'Auto', 'Automotive Rubber Parts', '40', 'Chapter 40: Rubber and articles thereof', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('40111050', 'Auto', 'Automotive Rubber Parts', '40', 'Chapter 40: Rubber and articles thereof', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('40112010', 'Auto', 'Automotive Rubber Parts', '40', 'Chapter 40: Rubber and articles thereof', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('40121940', 'Auto', 'Automotive Rubber Parts', '40', 'Chapter 40: Rubber and articles thereof', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('40121980', 'Auto', 'Automotive Rubber Parts', '40', 'Chapter 40: Rubber and articles thereof', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('40122060', 'Auto', 'Automotive Rubber Parts', '40', 'Chapter 40: Rubber and articles thereof', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('4013100010', 'Auto', 'Automotive Rubber Parts', '40', 'Chapter 40: Rubber and articles thereof', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('4013100020', 'Auto', 'Automotive Rubber Parts', '40', 'Chapter 40: Rubber and articles thereof', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('4016996010', 'Auto', 'Automotive Rubber Parts', '40', 'Chapter 40: Rubber and articles thereof', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        # Glass (Chapter 70)
+                        ('70072151', 'Auto', 'Automotive Glass', '70', 'Chapter 70: Glass and glassware', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('70091000', 'Auto', 'Automotive Glass', '70', 'Chapter 70: Glass and glassware', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        # Iron/Steel parts (Chapter 73)
+                        ('732010', 'Auto', 'Automotive Iron/Steel Parts', '73', 'Chapter 73: Articles of iron or steel', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        # Locks/Hardware (Chapter 83)
+                        ('83012000', 'Auto', 'Automotive Locks/Hardware', '83', 'Chapter 83: Miscellaneous articles of base metal', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('83021030', 'Auto', 'Automotive Locks/Hardware', '83', 'Chapter 83: Miscellaneous articles of base metal', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('830230', 'Auto', 'Automotive Locks/Hardware', '83', 'Chapter 83: Miscellaneous articles of base metal', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        # Engines (Chapter 84)
+                        ('84073100', 'Auto', 'Spark-Ignition Engines', '84', 'Chapter 84: Machinery and mechanical appliances', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('840732', 'Auto', 'Spark-Ignition Engines', '84', 'Chapter 84: Machinery and mechanical appliances', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('840733', 'Auto', 'Spark-Ignition Engines', '84', 'Chapter 84: Machinery and mechanical appliances', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('840734', 'Auto', 'Spark-Ignition Engines', '84', 'Chapter 84: Machinery and mechanical appliances', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('84082020', 'Auto', 'Compression-Ignition Engines', '84', 'Chapter 84: Machinery and mechanical appliances', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('8409911040', 'Auto', 'Engine Parts', '84', 'Chapter 84: Machinery and mechanical appliances', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('8409991040', 'Auto', 'Engine Parts', '84', 'Chapter 84: Machinery and mechanical appliances', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        # Pumps/Compressors/AC
+                        ('84133010', 'Auto', 'Automotive Pumps', '84', 'Chapter 84: Machinery and mechanical appliances', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('84133090', 'Auto', 'Automotive Pumps', '84', 'Chapter 84: Machinery and mechanical appliances', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('84139110', 'Auto', 'Automotive Pumps', '84', 'Chapter 84: Machinery and mechanical appliances', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('8413919010', 'Auto', 'Automotive Pumps', '84', 'Chapter 84: Machinery and mechanical appliances', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('8414308030', 'Auto', 'Automotive Compressors', '84', 'Chapter 84: Machinery and mechanical appliances', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('84145930', 'Auto', 'Automotive Compressors', '84', 'Chapter 84: Machinery and mechanical appliances', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('8414596540', 'Auto', 'Automotive Compressors', '84', 'Chapter 84: Machinery and mechanical appliances', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('84148005', 'Auto', 'Automotive Compressors', '84', 'Chapter 84: Machinery and mechanical appliances', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('84152000', 'Auto', 'Automotive AC', '84', 'Chapter 84: Machinery and mechanical appliances', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        # Filters/Lifting
+                        ('84212300', 'Auto', 'Automotive Filters', '84', 'Chapter 84: Machinery and mechanical appliances', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('84213200', 'Auto', 'Automotive Filters', '84', 'Chapter 84: Machinery and mechanical appliances', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('84254900', 'Auto', 'Automotive Lifting Equipment', '84', 'Chapter 84: Machinery and mechanical appliances', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('84269100', 'Auto', 'Automotive Lifting Equipment', '84', 'Chapter 84: Machinery and mechanical appliances', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('8431100090', 'Auto', 'Automotive Lifting Equipment', '84', 'Chapter 84: Machinery and mechanical appliances', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        # Computers
+                        ('8471', 'Auto', 'Automotive Computers', '84', 'Chapter 84: Machinery and mechanical appliances', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        # Bearings
+                        ('84821010', 'Auto', 'Automotive Bearings', '84', 'Chapter 84: Machinery and mechanical appliances', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('8482105044', 'Auto', 'Automotive Bearings', '84', 'Chapter 84: Machinery and mechanical appliances', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('8482105048', 'Auto', 'Automotive Bearings', '84', 'Chapter 84: Machinery and mechanical appliances', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('8482200020', 'Auto', 'Automotive Bearings', '84', 'Chapter 84: Machinery and mechanical appliances', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('8482200030', 'Auto', 'Automotive Bearings', '84', 'Chapter 84: Machinery and mechanical appliances', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('8482200040', 'Auto', 'Automotive Bearings', '84', 'Chapter 84: Machinery and mechanical appliances', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('8482200061', 'Auto', 'Automotive Bearings', '84', 'Chapter 84: Machinery and mechanical appliances', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('8482200070', 'Auto', 'Automotive Bearings', '84', 'Chapter 84: Machinery and mechanical appliances', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('8482200081', 'Auto', 'Automotive Bearings', '84', 'Chapter 84: Machinery and mechanical appliances', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('84824000', 'Auto', 'Automotive Bearings', '84', 'Chapter 84: Machinery and mechanical appliances', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('84825000', 'Auto', 'Automotive Bearings', '84', 'Chapter 84: Machinery and mechanical appliances', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        # Transmission shafts
+                        ('8483101030', 'Auto', 'Automotive Transmission Shafts', '84', 'Chapter 84: Machinery and mechanical appliances', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('84831030', 'Auto', 'Automotive Transmission Shafts', '84', 'Chapter 84: Machinery and mechanical appliances', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        # Motors/Batteries (Chapter 85)
+                        ('850132', 'Auto', 'Automotive Motors', '85', 'Chapter 85: Electrical machinery and equipment', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('850133', 'Auto', 'Automotive Motors', '85', 'Chapter 85: Electrical machinery and equipment', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('850134', 'Auto', 'Automotive Motors', '85', 'Chapter 85: Electrical machinery and equipment', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('850140', 'Auto', 'Automotive Motors', '85', 'Chapter 85: Electrical machinery and equipment', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('850151', 'Auto', 'Automotive Motors', '85', 'Chapter 85: Electrical machinery and equipment', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('850152', 'Auto', 'Automotive Motors', '85', 'Chapter 85: Electrical machinery and equipment', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('850710', 'Auto', 'Automotive Batteries', '85', 'Chapter 85: Electrical machinery and equipment', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('850760', 'Auto', 'Automotive Batteries', '85', 'Chapter 85: Electrical machinery and equipment', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('85079040', 'Auto', 'Automotive Batteries', '85', 'Chapter 85: Electrical machinery and equipment', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('85079080', 'Auto', 'Automotive Batteries', '85', 'Chapter 85: Electrical machinery and equipment', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        # Ignition equipment
+                        ('8511100000', 'Auto', 'Automotive Ignition', '85', 'Chapter 85: Electrical machinery and equipment', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('85112000', 'Auto', 'Automotive Ignition', '85', 'Chapter 85: Electrical machinery and equipment', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('8511300040', 'Auto', 'Automotive Ignition', '85', 'Chapter 85: Electrical machinery and equipment', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('8511300080', 'Auto', 'Automotive Ignition', '85', 'Chapter 85: Electrical machinery and equipment', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('85114000', 'Auto', 'Automotive Ignition', '85', 'Chapter 85: Electrical machinery and equipment', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('85115000', 'Auto', 'Automotive Ignition', '85', 'Chapter 85: Electrical machinery and equipment', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('85118020', 'Auto', 'Automotive Ignition', '85', 'Chapter 85: Electrical machinery and equipment', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('85118060', 'Auto', 'Automotive Ignition', '85', 'Chapter 85: Electrical machinery and equipment', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('8511906020', 'Auto', 'Automotive Ignition', '85', 'Chapter 85: Electrical machinery and equipment', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('8511906040', 'Auto', 'Automotive Ignition', '85', 'Chapter 85: Electrical machinery and equipment', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        # Lighting/Signaling
+                        ('85122020', 'Auto', 'Automotive Lighting', '85', 'Chapter 85: Electrical machinery and equipment', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('85122040', 'Auto', 'Automotive Lighting', '85', 'Chapter 85: Electrical machinery and equipment', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('85123000', 'Auto', 'Automotive Lighting', '85', 'Chapter 85: Electrical machinery and equipment', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('85124020', 'Auto', 'Automotive Lighting', '85', 'Chapter 85: Electrical machinery and equipment', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('85124040', 'Auto', 'Automotive Lighting', '85', 'Chapter 85: Electrical machinery and equipment', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('85129020', 'Auto', 'Automotive Lighting', '85', 'Chapter 85: Electrical machinery and equipment', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('85129060', 'Auto', 'Automotive Lighting', '85', 'Chapter 85: Electrical machinery and equipment', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('85129070', 'Auto', 'Automotive Lighting', '85', 'Chapter 85: Electrical machinery and equipment', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        # Audio/Radio
+                        ('85198120', 'Auto', 'Automotive Audio', '85', 'Chapter 85: Electrical machinery and equipment', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('8525601010', 'Auto', 'Automotive Video', '85', 'Chapter 85: Electrical machinery and equipment', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('852721', 'Auto', 'Automotive Radio', '85', 'Chapter 85: Electrical machinery and equipment', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('852729', 'Auto', 'Automotive Radio', '85', 'Chapter 85: Electrical machinery and equipment', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        # Electrical equipment
+                        ('8536410005', 'Auto', 'Automotive Electrical', '85', 'Chapter 85: Electrical machinery and equipment', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('853710', 'Auto', 'Automotive Electrical', '85', 'Chapter 85: Electrical machinery and equipment', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('853720', 'Auto', 'Automotive Electrical', '85', 'Chapter 85: Electrical machinery and equipment', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('8539100010', 'Auto', 'Automotive Electrical', '85', 'Chapter 85: Electrical machinery and equipment', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('8539100050', 'Auto', 'Automotive Electrical', '85', 'Chapter 85: Electrical machinery and equipment', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('85443000', 'Auto', 'Automotive Wiring', '85', 'Chapter 85: Electrical machinery and equipment', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        # Chassis (Chapter 87)
+                        ('87060003', 'Auto', 'Automotive Chassis', '87', 'Chapter 87: Vehicles and parts', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('87060005', 'Auto', 'Automotive Chassis', '87', 'Chapter 87: Vehicles and parts', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('87060015', 'Auto', 'Automotive Chassis', '87', 'Chapter 87: Vehicles and parts', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('87060025', 'Auto', 'Automotive Chassis', '87', 'Chapter 87: Vehicles and parts', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        # Bodies
+                        ('8707100020', 'Auto', 'Automotive Bodies', '87', 'Chapter 87: Vehicles and parts', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('8707100040', 'Auto', 'Automotive Bodies', '87', 'Chapter 87: Vehicles and parts', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('8707905020', 'Auto', 'Automotive Bodies', '87', 'Chapter 87: Vehicles and parts', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('8707905040', 'Auto', 'Automotive Bodies', '87', 'Chapter 87: Vehicles and parts', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('8707905060', 'Auto', 'Automotive Bodies', '87', 'Chapter 87: Vehicles and parts', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('8707905080', 'Auto', 'Automotive Bodies', '87', 'Chapter 87: Vehicles and parts', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        # Parts and accessories (8708)
+                        ('87082100', 'Auto', 'Automotive Parts', '87', 'Chapter 87: Vehicles and parts', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('870822', 'Auto', 'Automotive Parts', '87', 'Chapter 87: Vehicles and parts', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('870829', 'Auto', 'Automotive Parts', '87', 'Chapter 87: Vehicles and parts', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('870830', 'Auto', 'Automotive Parts', '87', 'Chapter 87: Vehicles and parts', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('87084011', 'Auto', 'Automotive Parts', '87', 'Chapter 87: Vehicles and parts', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('87084070', 'Auto', 'Automotive Parts', '87', 'Chapter 87: Vehicles and parts', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('87084075', 'Auto', 'Automotive Parts', '87', 'Chapter 87: Vehicles and parts', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('870850', 'Auto', 'Automotive Parts', '87', 'Chapter 87: Vehicles and parts', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('870870', 'Auto', 'Automotive Parts', '87', 'Chapter 87: Vehicles and parts', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('870880', 'Auto', 'Automotive Parts', '87', 'Chapter 87: Vehicles and parts', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('870891', 'Auto', 'Automotive Parts', '87', 'Chapter 87: Vehicles and parts', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('87089360', 'Auto', 'Automotive Parts', '87', 'Chapter 87: Vehicles and parts', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('87089375', 'Auto', 'Automotive Parts', '87', 'Chapter 87: Vehicles and parts', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('870894', 'Auto', 'Automotive Parts', '87', 'Chapter 87: Vehicles and parts', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('870895', 'Auto', 'Automotive Parts', '87', 'Chapter 87: Vehicles and parts', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('87089953', 'Auto', 'Automotive Parts', '87', 'Chapter 87: Vehicles and parts', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('87089955', 'Auto', 'Automotive Parts', '87', 'Chapter 87: Vehicles and parts', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('87089958', 'Auto', 'Automotive Parts', '87', 'Chapter 87: Vehicles and parts', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('87089968', 'Auto', 'Automotive Parts', '87', 'Chapter 87: Vehicles and parts', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        # Trailer parts
+                        ('87169050', 'Auto', 'Trailer Parts', '87', 'Chapter 87: Vehicles and parts', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        # Instruments (Chapter 90)
+                        ('901510', 'Auto', 'Automotive Instruments', '90', 'Chapter 90: Optical and measuring instruments', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('902910', 'Auto', 'Automotive Instruments', '90', 'Chapter 90: Optical and measuring instruments', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        ('9029204080', 'Auto', 'Automotive Instruments', '90', 'Chapter 90: Optical and measuring instruments', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                        # Seats (Chapter 94)
+                        ('94012000', 'Auto', 'Automotive Seats', '94', 'Chapter 94: Furniture', '12 - AUTO PARTS', 'Section 232 Automotive Tariff - 25% additional duty'),
+                    ]
+
+                    inserted = 0
+                    for tariff in auto_tariffs:
+                        try:
+                            c.execute("""INSERT OR IGNORE INTO tariff_232
+                                        (hts_code, material, classification, chapter, chapter_description, declaration_required, notes)
+                                        VALUES (?, ?, ?, ?, ?, ?, ?)""", tariff)
+                            if c.rowcount > 0:
+                                inserted += 1
+                        except:
+                            pass
+
+                    logger.info(f"Migration: Added {inserted} Section 232 Automotive tariff codes")
+
+                c.execute("INSERT INTO app_config (key, value) VALUES ('auto_tariffs_migration_v1', '1')")
+        except Exception as e:
+            logger.warning(f"Failed to migrate auto tariffs: {e}")
+
         conn.commit()
         conn.close()
         logger.success("Database initialized")
@@ -1329,9 +1518,6 @@ class DerivativeMill(QMainWindow):
             tab_setup_methods[index]()
     def __init__(self):
         super().__init__()
-        # CRITICAL: Hide window immediately to prevent flashing during construction
-        self.setAttribute(Qt.WA_DontShowOnScreen, True)
-        self.hide()
         self.setWindowTitle(APP_NAME)
         # Compact default size - fully scalable with no minimum constraint
         self.setGeometry(50, 50, 1200, 700)
@@ -7218,8 +7404,8 @@ class DerivativeMill(QMainWindow):
                 "Would you like to open the reference file now?",
                 QMessageBox.Yes | QMessageBox.No)
             if reply == QMessageBox.Yes:
-                import subprocess
-                subprocess.Popen(['start', '', str(ref_file)], shell=True)
+                import os
+                os.startfile(str(ref_file))
 
         except Exception as e:
             logger.error(f"Failed to export missing HTS codes: {e}")
@@ -7340,8 +7526,8 @@ class DerivativeMill(QMainWindow):
                         "Would you like to open the exported file?",
                         QMessageBox.Yes | QMessageBox.No)
                     if reply == QMessageBox.Yes:
-                        import subprocess
-                        subprocess.Popen(['start', '', save_path], shell=True)
+                        import os
+                        os.startfile(save_path)
 
                 except Exception as e:
                     QMessageBox.critical(dialog, "Export Error", f"Failed to save file:\n{e}")
@@ -7747,16 +7933,16 @@ class DerivativeMill(QMainWindow):
                     declaration = str(row['Declaration Required']).strip()
                     notes = str(row['Notes']).strip()
                     
-                    if hts_code and material in ['Steel', 'Aluminum', 'Wood', 'Copper']:
-                        c.execute("""INSERT OR REPLACE INTO tariff_232 
+                    if hts_code and material in ['Steel', 'Aluminum', 'Wood', 'Copper', 'Auto']:
+                        c.execute("""INSERT OR REPLACE INTO tariff_232
                                      VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                                 (hts_code, material, classification, chapter, 
+                                 (hts_code, material, classification, chapter,
                                   chapter_desc, declaration, notes))
                         imported += 1
-                
+
                 conn.commit()
                 conn.close()
-                QMessageBox.information(self, "Success", 
+                QMessageBox.information(self, "Success",
                     f"Imported {imported} Section 232 tariff codes\n\n"
                     f"Format: Comprehensive 7-column CSV")
                 logger.success(f"tariff_232 table updated with {imported} codes (comprehensive format)")
@@ -7766,13 +7952,13 @@ class DerivativeMill(QMainWindow):
                 conn = sqlite3.connect(str(DB_PATH))
                 c = conn.cursor()
                 c.execute("DELETE FROM tariff_232")
-                
+
                 imported = 0
                 for _, row in df.iterrows():
                     hts_code = str(row['HTS Code']).strip().replace(".", "")[:10]
                     material = str(row['Material']).strip()
-                    
-                    if hts_code and material in ['Steel', 'Aluminum', 'Wood', 'Copper']:
+
+                    if hts_code and material in ['Steel', 'Aluminum', 'Wood', 'Copper', 'Auto']:
                         c.execute("""INSERT OR REPLACE INTO tariff_232 
                                      VALUES (?, ?, ?, ?, ?, ?, ?)""",
                                  (hts_code, material, '', '', '', '', ''))
@@ -9844,6 +10030,10 @@ class DerivativeMill(QMainWindow):
             logger.error(f"Cleanup old exports failed: {e}")
 
 if __name__ == "__main__":
+    # Prevent PyInstaller multiprocessing from spawning console windows on Windows
+    import multiprocessing
+    multiprocessing.freeze_support()
+
     import traceback
     app = QApplication(sys.argv)
     try:
@@ -9957,14 +10147,14 @@ if __name__ == "__main__":
         splash_progress.setValue(10)
         app.processEvents()
         
-        # Create main window but keep it hidden during initialization
+        # Create main window but keep it completely hidden during initialization
         splash_message.setText("Creating main window...")
         splash_progress.setValue(20)
         app.processEvents()
 
         win = DerivativeMill()
+        win.hide()  # Explicitly hide immediately after creation
         win.setWindowTitle(APP_NAME)
-        # Don't show yet - keep hidden until fully initialized
 
         def finish_initialization():
             splash_message.setText("Loading configuration...")
@@ -10012,8 +10202,12 @@ if __name__ == "__main__":
             # Now close splash and show main window
             spinner.stop()
             splash_widget.close()
-            # Remove the "don't show on screen" attribute before showing
-            win.setAttribute(Qt.WA_DontShowOnScreen, False)
+            # Move window to center of screen before showing
+            screen_geo = app.primaryScreen().availableGeometry()
+            win.move(
+                (screen_geo.width() - win.width()) // 2,
+                (screen_geo.height() - win.height()) // 2
+            )
             win.show()
             win.raise_()
             win.activateWindow()
