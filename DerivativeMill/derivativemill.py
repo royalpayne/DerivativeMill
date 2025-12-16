@@ -27,7 +27,7 @@ except ImportError:
         VERSION = get_version()
     except ImportError:
         # Fallback if version.py is not available
-        VERSION = "v0.6"
+        VERSION = "v0.91.0"
 
 
 import sys
@@ -1328,12 +1328,13 @@ class DropTarget(QLabel):
         label_text = drop_label if drop_label else field_name
         super().__init__(f"Drop {label_text} here")
         self.field_key = field_key
-        # Unified style, proportional sizing
-        self.setStyleSheet("font-size: 12pt; padding: 8px; background: #f8f8f8; border: 2px solid #bbb; border-radius: 8px; color: #222;")
+        # Compact style for better fit in dialog
+        self.setStyleSheet("padding: 4px 8px; background: #f8f8f8; border: 1px solid #bbb; border-radius: 4px; color: #222;")
         self.setAlignment(Qt.AlignCenter)
         self.setAcceptDrops(True)
         self.column_name = None
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+        self.setFixedHeight(28)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
     def dragEnterEvent(self, e): 
         if e.mimeData().hasText(): e.accept()
     def dropEvent(self, e):
@@ -1430,7 +1431,6 @@ class FileDropZone(QLabel):
                     background: #e3f2fd;
                     border: 3px dashed #2196F3;
                     border-radius: 10px;
-                    font-size: 14pt;
                     font-weight: bold;
                     color: #1976D2;
                     padding: 20px;
@@ -1442,7 +1442,6 @@ class FileDropZone(QLabel):
                     background: #f5f5f5;
                     border: 3px dashed #999;
                     border-radius: 10px;
-                    font-size: 14pt;
                     font-weight: bold;
                     color: #666;
                     padding: 20px;
@@ -1565,6 +1564,15 @@ class DerivativeMill(QMainWindow):
             pass
 
         central = QWidget()
+        # Apply gradient background: logo blue on left to transparent on right
+        central.setStyleSheet("""
+            QWidget#centralWidget {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 rgba(52, 152, 219, 0.20),
+                    stop:1 transparent);
+            }
+        """)
+        central.setObjectName("centralWidget")
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
 
@@ -1741,7 +1749,7 @@ class DerivativeMill(QMainWindow):
         export_progress_layout.setSpacing(5)
         
         self.export_status_label = QLabel("")
-        self.export_status_label.setStyleSheet("font-size: 8pt; color: #666666;")
+        self.export_status_label.setStyleSheet("color: #666666;")
         export_progress_layout.addWidget(self.export_status_label)
         
         self.export_progress_bar = QProgressBar()
@@ -1856,8 +1864,10 @@ class DerivativeMill(QMainWindow):
 
     def apply_saved_font_size(self):
         """Load and apply the saved font size preference on startup (per-user setting)"""
-        font_size = get_user_setting_int('font_size', 10)
-        self.apply_font_size(font_size)
+        font_size = get_user_setting_int('font_size', 9)
+        logger.info(f"Loading saved font size: {font_size}pt")
+        self.apply_font_size_without_save(font_size)
+        logger.info(f"Applied font size: {font_size}pt")
 
     def load_config_paths(self):
         try:
@@ -1911,8 +1921,8 @@ class DerivativeMill(QMainWindow):
         self.input_files_list.itemActivated.connect(self.load_selected_input_file)
         # Allow focus for tab navigation
         self.input_files_list.setFocusPolicy(Qt.StrongFocus)
-        # Limit height to show ~6 files to save vertical space
-        self.input_files_list.setFixedHeight(100)
+        # Limit height to show ~4-5 files to save vertical space
+        self.input_files_list.setFixedHeight(75)
         self.refresh_input_btn = QPushButton("Refresh")
         self.refresh_input_btn.setFixedHeight(25)
         self.refresh_input_btn.clicked.connect(self.refresh_input_files)
@@ -2050,6 +2060,8 @@ class DerivativeMill(QMainWindow):
         self.exports_list.itemActivated.connect(self.open_exported_file)
         # Allow focus for tab navigation
         self.exports_list.setFocusPolicy(Qt.StrongFocus)
+        # Limit height to save vertical space
+        self.exports_list.setFixedHeight(75)
         exports_layout.addWidget(self.exports_list)
 
         self.refresh_exports_btn = QPushButton("Refresh")
@@ -2249,6 +2261,7 @@ class DerivativeMill(QMainWindow):
         refresh_timer.timeout.connect(lambda: log_text.setPlainText(logger.get_logs()))
         refresh_timer.start(1000)
 
+        self.center_dialog(dialog)
         dialog.exec_()
 
     def show_references_dialog(self):
@@ -2295,6 +2308,7 @@ class DerivativeMill(QMainWindow):
         btn_layout.addWidget(btn_close)
         layout.addLayout(btn_layout)
 
+        self.center_dialog(dialog)
         dialog.exec_()
 
     def show_mid_management_dialog(self):
@@ -2426,6 +2440,7 @@ class DerivativeMill(QMainWindow):
         btn_layout.addWidget(btn_close)
         layout.addLayout(btn_layout)
 
+        self.center_dialog(dialog)
         dialog.exec_()
 
         # Refresh MID combo after dialog closes
@@ -2745,6 +2760,7 @@ class DerivativeMill(QMainWindow):
         btn_layout.addWidget(btn_close)
         layout.addLayout(btn_layout)
 
+        self.center_dialog(dialog)
         dialog.exec_()
 
     def show_settings_dialog(self):
@@ -2790,15 +2806,15 @@ class DerivativeMill(QMainWindow):
         font_size_slider = QSlider(Qt.Horizontal)
         font_size_slider.setMinimum(8)
         font_size_slider.setMaximum(16)
-        font_size_slider.setValue(10)  # Default
+        font_size_slider.setValue(9)  # Default
         font_size_slider.setTickPosition(QSlider.TicksBelow)
         font_size_slider.setTickInterval(1)
 
-        font_size_value_label = QLabel("10pt")
+        font_size_value_label = QLabel("9pt")
         font_size_value_label.setMinimumWidth(40)
 
         # Load saved font size preference from per-user settings
-        saved_font_size = get_user_setting_int('font_size', 10)
+        saved_font_size = get_user_setting_int('font_size', 9)
         font_size_slider.setValue(saved_font_size)
         font_size_value_label.setText(f"{saved_font_size}pt")
 
@@ -2887,33 +2903,33 @@ class DerivativeMill(QMainWindow):
         colors_main_layout.setSpacing(12)
         colors_main_layout.setContentsMargins(15, 15, 15, 15)
 
-        # Helper function to create a professional color swatch button
+        # Helper function to create a compact color swatch with label
         def create_color_swatch(label_text, config_key, default_color):
-            """Create a styled color swatch button with label inside (theme-specific)"""
-            button = QPushButton(label_text)
-            button.setFixedSize(100, 32)
+            """Create a label with small color swatch button (theme-specific)"""
+            container = QWidget()
+            container.setMinimumHeight(28)
+            layout = QHBoxLayout(container)
+            layout.setContentsMargins(0, 2, 8, 2)
+            layout.setSpacing(6)
+
+            # Text label - let it size naturally based on content
+            label = QLabel(label_text + ":")
+            layout.addWidget(label)
+
+            # Small color swatch button
+            button = QPushButton()
+            button.setFixedSize(20, 20)
             button.setCursor(QCursor(Qt.PointingHandCursor))
 
             # Load saved color from per-user settings (theme-specific) or use default
             saved_color = get_theme_color(config_key, default_color)
 
-            def get_text_color(bg_color):
-                """Calculate contrasting text color (white or black) based on background"""
-                color = QColor(bg_color)
-                # Calculate luminance
-                luminance = (0.299 * color.red() + 0.587 * color.green() + 0.114 * color.blue()) / 255
-                return '#ffffff' if luminance < 0.5 else '#000000'
-
             def update_button_style(color_hex):
-                text_color = get_text_color(color_hex)
                 button.setStyleSheet(f"""
                     QPushButton {{
                         background-color: {color_hex};
-                        color: {text_color};
-                        border: 2px solid #555;
-                        border-radius: 4px;
-                        font-weight: bold;
-                        font-size: 11px;
+                        border: 1px solid #555;
+                        border-radius: 3px;
                     }}
                     QPushButton:hover {{
                         border: 2px solid #888;
@@ -2939,16 +2955,18 @@ class DerivativeMill(QMainWindow):
                         self.refresh_preview_colors()
 
             button.clicked.connect(pick_color)
-            return button
+            layout.addWidget(button)
+            return container
 
         # Section 232 Materials header
         sec232_label = QLabel("Section 232 Materials")
-        sec232_label.setStyleSheet("font-weight: bold; color: #666; margin-bottom: 4px;")
+        sec232_label.setStyleSheet("font-weight: bold; color: #666; margin-bottom: 4px; padding: 4px 0;")
+        sec232_label.setMinimumHeight(24)
         colors_main_layout.addWidget(sec232_label)
 
         # First row: Steel, Aluminum, Copper
         row1_layout = QHBoxLayout()
-        row1_layout.setSpacing(10)
+        row1_layout.setSpacing(20)
         row1_layout.addWidget(create_color_swatch("Steel", 'preview_steel_color', '#4a4a4a'))
         row1_layout.addWidget(create_color_swatch("Aluminum", 'preview_aluminum_color', '#3498db'))
         row1_layout.addWidget(create_color_swatch("Copper", 'preview_copper_color', '#e67e22'))
@@ -2957,7 +2975,7 @@ class DerivativeMill(QMainWindow):
 
         # Second row: Wood, Auto, Non-232
         row2_layout = QHBoxLayout()
-        row2_layout.setSpacing(10)
+        row2_layout.setSpacing(20)
         row2_layout.addWidget(create_color_swatch("Wood", 'preview_wood_color', '#27ae60'))
         row2_layout.addWidget(create_color_swatch("Auto", 'preview_auto_color', '#9b59b6'))
         row2_layout.addWidget(create_color_swatch("Non-232", 'preview_non232_color', '#ff0000'))
@@ -2973,13 +2991,14 @@ class DerivativeMill(QMainWindow):
 
         # Other Indicators header
         other_label = QLabel("Other Indicators")
-        other_label.setStyleSheet("font-weight: bold; color: #666; margin-bottom: 4px;")
+        other_label.setStyleSheet("font-weight: bold; color: #666; margin-bottom: 4px; padding: 4px 0;")
+        other_label.setMinimumHeight(24)
         colors_main_layout.addWidget(other_label)
 
         # Sec301 row
         row3_layout = QHBoxLayout()
         row3_layout.setSpacing(10)
-        row3_layout.addWidget(create_color_swatch("Sec 301", 'preview_sec301_bg_color', '#ffc8c8'))
+        row3_layout.addWidget(create_color_swatch("Sec 301 Exclusions (Background)", 'preview_sec301_bg_color', '#ffc8c8'))
         row3_layout.addStretch()
         colors_main_layout.addLayout(row3_layout)
 
@@ -3124,7 +3143,7 @@ class DerivativeMill(QMainWindow):
 
         db_path_label = QLabel(str(DB_PATH))
         db_path_label.setWordWrap(True)
-        db_path_label.setStyleSheet("font-family: monospace; font-size: 9pt;")
+        db_path_label.setStyleSheet("font-family: monospace;")
 
         # Check if using shared or local database
         config = load_shared_config()
@@ -3302,6 +3321,7 @@ class DerivativeMill(QMainWindow):
 
         # Add tabs to main dialog layout
         layout.addWidget(tabs)
+        self.center_dialog(dialog)
         dialog.exec_()
 
     def apply_theme(self, theme_name):
@@ -3353,12 +3373,16 @@ class DerivativeMill(QMainWindow):
         set_user_setting('theme', theme_name)
         logger.info(f"Theme changed to: {theme_name}")
 
+        # Re-apply saved font size (theme changes can reset font)
+        font_size = get_user_setting_int('font_size', 9)
+        self.apply_font_size_without_save(font_size)
+
         # Refresh preview colors for the new theme (colors are stored per-theme)
         if hasattr(self, 'table') and self.table.rowCount() > 0:
             self.refresh_preview_colors()
 
-    def apply_font_size(self, size):
-        """Apply the selected font size to the application"""
+    def apply_font_size_without_save(self, size):
+        """Apply font size to application without saving (used internally)"""
         app = QApplication.instance()
 
         # Get current font and update size
@@ -3366,6 +3390,20 @@ class DerivativeMill(QMainWindow):
         font.setPointSize(size)
         app.setFont(font)
 
+        # Apply font to all existing widgets (app.setFont only affects new widgets)
+        def apply_font_recursive(widget):
+            widget.setFont(font)
+            for child in widget.findChildren(QWidget):
+                # Skip widgets with explicit font-size in stylesheet
+                style = child.styleSheet()
+                if 'font-size' not in style:
+                    child.setFont(font)
+
+        apply_font_recursive(self)
+
+    def apply_font_size(self, size):
+        """Apply the selected font size to the application and save preference"""
+        self.apply_font_size_without_save(size)
         # Save font size preference (per-user setting)
         set_user_setting('font_size', size)
         logger.info(f"Font size changed to: {size}pt")
@@ -3381,6 +3419,22 @@ class DerivativeMill(QMainWindow):
         # Save row height preference (per-user setting)
         set_user_setting('preview_row_height', height)
         logger.info(f"Preview row height changed to: {height}px")
+
+    def center_dialog(self, dialog):
+        """Center a dialog on the main window"""
+        # Standard modal dialog
+        dialog.setWindowModality(Qt.WindowModal)
+
+        # Ensure dialog geometry is calculated
+        dialog.adjustSize()
+        parent_geo = self.frameGeometry()
+        dialog_geo = dialog.geometry()
+
+        # Calculate centered position within parent
+        x = parent_geo.x() + (parent_geo.width() - dialog_geo.width()) // 2
+        y = parent_geo.y() + (parent_geo.height() - dialog_geo.height()) // 2
+
+        dialog.move(x, y)
 
     def check_for_updates_manual(self):
         """Manually check for updates and show result dialog"""
@@ -3455,6 +3509,7 @@ class DerivativeMill(QMainWindow):
         btn_layout.addWidget(later_btn)
 
         layout.addLayout(btn_layout)
+        self.center_dialog(dialog)
         dialog.exec_()
 
     def check_for_updates_startup(self):
@@ -3536,7 +3591,7 @@ class DerivativeMill(QMainWindow):
         key_input = QLineEdit()
         key_input.setPlaceholderText("XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX")
         key_input.setMinimumHeight(35)
-        key_input.setStyleSheet("font-size: 14px; padding: 5px;")
+        key_input.setStyleSheet("padding: 5px;")
         activate_layout.addWidget(key_input)
 
         # Message label for feedback
@@ -3610,6 +3665,7 @@ class DerivativeMill(QMainWindow):
         close_btn.clicked.connect(dialog.accept)
         layout.addWidget(close_btn)
 
+        self.center_dialog(dialog)
         dialog.exec_()
 
     def show_trial_expired_dialog(self):
@@ -3648,7 +3704,7 @@ class DerivativeMill(QMainWindow):
         key_input = QLineEdit()
         key_input.setPlaceholderText("XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX")
         key_input.setMinimumHeight(35)
-        key_input.setStyleSheet("font-size: 14px; padding: 5px;")
+        key_input.setStyleSheet("padding: 5px;")
         layout.addWidget(key_input)
 
         # Message label for feedback
@@ -3707,6 +3763,7 @@ class DerivativeMill(QMainWindow):
         layout.addWidget(exit_btn)
 
         # Show dialog - if rejected (exit clicked), close app
+        self.center_dialog(dialog)
         result = dialog.exec_()
         if result == QDialog.Rejected:
             QApplication.quit()
@@ -3805,6 +3862,7 @@ class DerivativeMill(QMainWindow):
         close_btn.clicked.connect(dialog.accept)
         layout.addWidget(close_btn, alignment=Qt.AlignCenter)
 
+        self.center_dialog(dialog)
         dialog.exec_()
 
     def update_file_label_style(self):
@@ -5281,7 +5339,7 @@ class DerivativeMill(QMainWindow):
         btn_reset.clicked.connect(self.reset_import_mapping)
         btn_import = QPushButton("Import Now")
         btn_import.setFixedSize(100, 28)
-        btn_import.setStyleSheet(self.get_button_style("success") + "QPushButton { font-size:10pt; padding:4px; }")
+        btn_import.setStyleSheet(self.get_button_style("success") + "QPushButton { padding:4px; }")
         btn_import.clicked.connect(self.start_parts_import)
 
         btn_update_sec301 = QPushButton("Update Sec301 Exclusion")
@@ -5742,6 +5800,7 @@ class DerivativeMill(QMainWindow):
         layout.addLayout(button_box)
 
         # Show dialog
+        self.center_dialog(dialog)
         if dialog.exec_() == QDialog.Accepted:
             part_number = part_number_input.text().strip()
             sec301_tariff = sec301_input.text().strip()
@@ -5847,6 +5906,7 @@ class DerivativeMill(QMainWindow):
             layout.addLayout(button_box)
 
             # Show dialog
+            self.center_dialog(dialog)
             if dialog.exec_() == QDialog.Accepted:
                 part_col = part_combo.currentText()
                 sec301_col = sec301_combo.currentText()
@@ -6010,7 +6070,7 @@ class DerivativeMill(QMainWindow):
         layout.setSpacing(8)
         layout.setContentsMargins(10, 10, 10, 10)
 
-        title = QLabel("<h2>Output XLSX Column Mapping</h2>")
+        title = QLabel("<h2>Output Column Mapping</h2>")
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
 
@@ -6050,29 +6110,57 @@ class DerivativeMill(QMainWindow):
         top_bar.addStretch()
         layout.addWidget(top_bar_widget)
 
-        # Helper function to create export color picker button
-        def create_export_color_button(config_key, default_color, label_text):
-            """Create a color picker button for export with saved color (per-user setting)"""
+        # Helper function to create compact export color swatch with label
+        def create_export_color_swatch(label_text, config_key, default_color):
+            """Create a label with small color swatch button (per-user setting)"""
+            container = QWidget()
+            container.setMinimumHeight(28)
+            layout = QHBoxLayout(container)
+            layout.setContentsMargins(0, 2, 8, 2)
+            layout.setSpacing(6)
+
+            # Text label - let it size naturally based on content
+            label = QLabel(label_text + ":")
+            layout.addWidget(label)
+
+            # Small color swatch button
             button = QPushButton()
-            button.setFixedSize(80, 25)
+            button.setFixedSize(20, 20)
+            button.setCursor(QCursor(Qt.PointingHandCursor))
 
             # Load saved color from per-user settings or use default
             saved_color = get_user_setting(config_key, default_color)
 
-            button.setStyleSheet(f"background-color: {saved_color}; border: 1px solid #999;")
+            def update_button_style(color_hex):
+                button.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: {color_hex};
+                        border: 1px solid #555;
+                        border-radius: 3px;
+                    }}
+                    QPushButton:hover {{
+                        border: 2px solid #888;
+                    }}
+                    QPushButton:pressed {{
+                        border: 2px solid #aaa;
+                    }}
+                """)
+
+            update_button_style(saved_color)
 
             def pick_color():
                 current_color = get_user_setting(config_key, default_color)
                 color = QColorDialog.getColor(QColor(current_color), self, f"Choose {label_text} Color")
                 if color.isValid():
                     color_hex = color.name()
-                    button.setStyleSheet(f"background-color: {color_hex}; border: 1px solid #999;")
+                    update_button_style(color_hex)
                     set_user_setting(config_key, color_hex)
                     logger.info(f"Saved export color preference {config_key}: {color_hex}")
                     self.bottom_status.setText(f"{label_text} export color set to {color_hex}")
 
             button.clicked.connect(pick_color)
-            return button
+            layout.addWidget(button)
+            return container
 
         # === COLORS AND OPTIONS SECTION (horizontal layout) ===
         options_widget = QWidget()
@@ -6080,42 +6168,63 @@ class DerivativeMill(QMainWindow):
         options_layout.setContentsMargins(0, 5, 0, 5)
         options_layout.setSpacing(15)
 
-        # --- Left: Export Colors (Grid Layout) ---
-        colors_group = QGroupBox("Export Colors")
-        colors_grid = QGridLayout(colors_group)
-        colors_grid.setSpacing(5)
-        colors_grid.setContentsMargins(10, 10, 10, 10)
+        # --- Left: Export Text Colors ---
+        colors_group = QGroupBox("Export Text Colors")
+        colors_main_layout = QVBoxLayout(colors_group)
+        colors_main_layout.setSpacing(8)
+        colors_main_layout.setContentsMargins(10, 10, 10, 10)
 
         # Load saved font color (per-user setting)
         self.output_font_color = get_user_setting('output_font_color', '#000000')
 
-        # Font color
+        # Create font color swatch container
+        font_color_container = QWidget()
+        font_color_container.setMinimumHeight(28)
+        font_color_layout = QHBoxLayout(font_color_container)
+        font_color_layout.setContentsMargins(0, 2, 8, 2)
+        font_color_layout.setSpacing(6)
+        font_color_label = QLabel("Default:")
+        font_color_layout.addWidget(font_color_label)
         self.output_font_color_btn = QPushButton()
-        self.output_font_color_btn.setFixedSize(80, 25)
-        self.output_font_color_btn.setStyleSheet(f"background-color: {self.output_font_color}; border: 1px solid #999;")
+        self.output_font_color_btn.setFixedSize(20, 20)
+        self.output_font_color_btn.setCursor(QCursor(Qt.PointingHandCursor))
+        self.output_font_color_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {self.output_font_color};
+                border: 1px solid #555;
+                border-radius: 3px;
+            }}
+            QPushButton:hover {{
+                border: 2px solid #888;
+            }}
+        """)
         self.output_font_color_btn.clicked.connect(self.pick_output_font_color)
+        font_color_layout.addWidget(self.output_font_color_btn)
 
-        # Row 0: Default Font and Steel
-        colors_grid.addWidget(QLabel("Default:"), 0, 0, Qt.AlignRight)
-        colors_grid.addWidget(self.output_font_color_btn, 0, 1)
-        colors_grid.addWidget(QLabel("Steel:"), 0, 2, Qt.AlignRight)
-        colors_grid.addWidget(create_export_color_button('export_steel_color', '#4a4a4a', 'Steel'), 0, 3)
+        # Row 1: Default, Steel, Aluminum
+        row1_layout = QHBoxLayout()
+        row1_layout.setSpacing(20)
+        row1_layout.addWidget(font_color_container)
+        row1_layout.addWidget(create_export_color_swatch("Steel", 'export_steel_color', '#4a4a4a'))
+        row1_layout.addWidget(create_export_color_swatch("Aluminum", 'export_aluminum_color', '#6495ED'))
+        row1_layout.addStretch()
+        colors_main_layout.addLayout(row1_layout)
 
-        # Row 1: Aluminum and Copper
-        colors_grid.addWidget(QLabel("Aluminum:"), 1, 0, Qt.AlignRight)
-        colors_grid.addWidget(create_export_color_button('export_aluminum_color', '#6495ED', 'Aluminum'), 1, 1)
-        colors_grid.addWidget(QLabel("Copper:"), 1, 2, Qt.AlignRight)
-        colors_grid.addWidget(create_export_color_button('export_copper_color', '#B87333', 'Copper'), 1, 3)
-
-        # Row 2: Wood and Automotive
-        colors_grid.addWidget(QLabel("Wood:"), 2, 0, Qt.AlignRight)
-        colors_grid.addWidget(create_export_color_button('export_wood_color', '#8B4513', 'Wood'), 2, 1)
-        colors_grid.addWidget(QLabel("Auto:"), 2, 2, Qt.AlignRight)
-        colors_grid.addWidget(create_export_color_button('export_automotive_color', '#2F4F4F', 'Automotive'), 2, 3)
+        # Row 2: Copper, Wood, Auto
+        row2_layout = QHBoxLayout()
+        row2_layout.setSpacing(20)
+        row2_layout.addWidget(create_export_color_swatch("Copper", 'export_copper_color', '#B87333'))
+        row2_layout.addWidget(create_export_color_swatch("Wood", 'export_wood_color', '#8B4513'))
+        row2_layout.addWidget(create_export_color_swatch("Auto", 'export_automotive_color', '#2F4F4F'))
+        row2_layout.addStretch()
+        colors_main_layout.addLayout(row2_layout)
 
         # Row 3: Non-232
-        colors_grid.addWidget(QLabel("Non-232:"), 3, 0, Qt.AlignRight)
-        colors_grid.addWidget(create_export_color_button('export_non232_color', '#FF0000', 'Non-232'), 3, 1)
+        row3_layout = QHBoxLayout()
+        row3_layout.setSpacing(20)
+        row3_layout.addWidget(create_export_color_swatch("Non-232", 'export_non232_color', '#FF0000'))
+        row3_layout.addStretch()
+        colors_main_layout.addLayout(row3_layout)
 
         options_layout.addWidget(colors_group)
 
@@ -6173,7 +6282,7 @@ class DerivativeMill(QMainWindow):
         export_options_layout.addWidget(self.split_by_invoice_checkbox)
 
         split_note = QLabel("Creates separate files per invoice.\nRequires Invoice Number mapping.")
-        split_note.setStyleSheet("color: gray; font-size: 9pt;")
+        split_note.setStyleSheet("color: gray;")
         split_note.setWordWrap(True)
         export_options_layout.addWidget(split_note)
         export_options_layout.addStretch()
@@ -6343,7 +6452,16 @@ class DerivativeMill(QMainWindow):
             color_hex = color.name()
             self.output_font_color = color_hex
             if is_widget_valid(self.output_font_color_btn):
-                self.output_font_color_btn.setStyleSheet(f"background-color: {color_hex}; border: 1px solid #999;")
+                self.output_font_color_btn.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: {color_hex};
+                        border: 1px solid #555;
+                        border-radius: 3px;
+                    }}
+                    QPushButton:hover {{
+                        border: 2px solid #888;
+                    }}
+                """)
             # Save to per-user settings
             set_user_setting('output_font_color', color_hex)
             logger.info(f"Saved output font color: {color_hex}")
@@ -7533,6 +7651,7 @@ class DerivativeMill(QMainWindow):
                     QMessageBox.critical(dialog, "Export Error", f"Failed to save file:\n{e}")
 
             btn_export.clicked.connect(do_export)
+            self.center_dialog(dialog)
             dialog.exec_()
 
         except Exception as e:
