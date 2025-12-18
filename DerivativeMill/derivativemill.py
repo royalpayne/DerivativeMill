@@ -1014,6 +1014,12 @@ def init_database():
             qty_unit TEXT
         )""")
 
+        # Create profile_links table for linking input map profiles to export profiles
+        c.execute("""CREATE TABLE IF NOT EXISTS profile_links (
+            input_profile_name TEXT PRIMARY KEY,
+            export_profile_name TEXT
+        )""")
+
         # Migration: Add manufacturer_name and customer_id columns to mid_table if they don't exist
         try:
             c.execute("PRAGMA table_info(mid_table)")
@@ -2347,6 +2353,10 @@ class DerivativeMill(QMainWindow):
         # Apply green focus color stylesheet
         self.update_table_stylesheet()
 
+        # Add context menu for column auto-fit
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self.show_preview_context_menu)
+
         preview_layout.addWidget(self.table)
         preview_group.setLayout(preview_layout)
         right_side.addWidget(preview_group, 1)
@@ -2526,144 +2536,15 @@ class DerivativeMill(QMainWindow):
         dialog.exec_()
 
     def show_mid_management_dialog(self):
-        """Show the MID Management dialog for importing and managing manufacturer IDs"""
-        dialog = QDialog(self)
-        dialog.setWindowTitle("MID Management")
-        dialog.resize(900, 600)
-        layout = QVBoxLayout(dialog)
-
-        # Title
-        title = QLabel("<h2>Manufacturer ID (MID) Management</h2>")
-        layout.addWidget(title)
-
-        # Import section
-        import_group = QGroupBox("Import MID List")
-        import_layout = QHBoxLayout(import_group)
-
-        self.mid_import_path_label = QLabel("No file selected")
-        self.mid_import_path_label.setStyleSheet("color: gray;")
-        import_layout.addWidget(self.mid_import_path_label, 1)
-
-        btn_browse = QPushButton("Browse...")
-        btn_browse.clicked.connect(lambda: self.browse_mid_import_file(dialog))
-        btn_browse.setAutoDefault(False)
-        btn_browse.setDefault(False)
-        import_layout.addWidget(btn_browse)
-
-        btn_import = QPushButton("Import")
-        btn_import.setStyleSheet(self.get_button_style("primary"))
-        btn_import.clicked.connect(lambda: self.import_mid_file(dialog))
-        btn_import.setAutoDefault(False)
-        btn_import.setDefault(False)
-        import_layout.addWidget(btn_import)
-
-        layout.addWidget(import_group)
-
-        # Info label
-        info_label = QLabel("Expected Excel columns: <b>Manufacturer Name</b>, <b>MID</b>, <b>Customer ID</b>, <b>Related Parties</b> (Y/N)")
-        info_label.setStyleSheet("color: #666; margin: 5px;")
-        layout.addWidget(info_label)
-
-        # MID Table
-        table_group = QGroupBox("Current MID List")
-        table_layout = QVBoxLayout(table_group)
-
-        # Filter/Search row
-        filter_layout = QHBoxLayout()
-
-        filter_layout.addWidget(QLabel("Customer ID:"))
-        self.mid_customer_filter = QLineEdit()
-        self.mid_customer_filter.setPlaceholderText("Filter...")
-        self.mid_customer_filter.setMaximumWidth(150)
-        self.mid_customer_filter.returnPressed.connect(self.filter_mid_table)
-        filter_layout.addWidget(self.mid_customer_filter)
-
-        filter_layout.addWidget(QLabel("MID:"))
-        self.mid_search_filter = QLineEdit()
-        self.mid_search_filter.setPlaceholderText("Search...")
-        self.mid_search_filter.setMaximumWidth(180)
-        self.mid_search_filter.returnPressed.connect(self.filter_mid_table)
-        filter_layout.addWidget(self.mid_search_filter)
-
-        filter_layout.addWidget(QLabel("Manufacturer:"))
-        self.mid_manufacturer_filter = QLineEdit()
-        self.mid_manufacturer_filter.setPlaceholderText("Search...")
-        self.mid_manufacturer_filter.returnPressed.connect(self.filter_mid_table)
-        filter_layout.addWidget(self.mid_manufacturer_filter)
-
-        btn_search = QPushButton("Search")
-        btn_search.setStyleSheet(self.get_button_style("primary"))
-        btn_search.clicked.connect(self.filter_mid_table)
-        btn_search.setAutoDefault(False)
-        btn_search.setDefault(False)
-        filter_layout.addWidget(btn_search)
-
-        btn_clear_filter = QPushButton("Clear Filters")
-        btn_clear_filter.clicked.connect(self.clear_mid_filters)
-        btn_clear_filter.setAutoDefault(False)
-        btn_clear_filter.setDefault(False)
-        filter_layout.addWidget(btn_clear_filter)
-
-        table_layout.addLayout(filter_layout)
-
-        self.mid_table_widget = QTableWidget()
-        self.mid_table_widget.setColumnCount(4)
-        self.mid_table_widget.setHorizontalHeaderLabels(["Manufacturer Name", "MID", "Customer ID", "Related Parties"])
-        self.mid_table_widget.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.mid_table_widget.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.mid_table_widget.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.mid_table_widget.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.mid_table_widget.setSelectionBehavior(QTableWidget.SelectRows)
-        self.mid_table_widget.setAlternatingRowColors(True)
-        table_layout.addWidget(self.mid_table_widget)
-
-        # Table buttons
-        table_btn_layout = QHBoxLayout()
-
-        btn_add = QPushButton("Add MID")
-        btn_add.clicked.connect(lambda: self.add_mid_row(dialog))
-        table_btn_layout.addWidget(btn_add)
-
-        btn_delete = QPushButton("Delete Selected")
-        btn_delete.clicked.connect(lambda: self.delete_selected_mid(dialog))
-        table_btn_layout.addWidget(btn_delete)
-
-        btn_clear = QPushButton("Clear All")
-        btn_clear.clicked.connect(lambda: self.clear_all_mids(dialog))
-        table_btn_layout.addWidget(btn_clear)
-
-        table_btn_layout.addStretch()
-
-        btn_save = QPushButton("Save Changes")
-        btn_save.setStyleSheet(self.get_button_style("primary"))
-        btn_save.clicked.connect(lambda: self.save_mid_table(dialog))
-        table_btn_layout.addWidget(btn_save)
-
-        table_layout.addLayout(table_btn_layout)
-        layout.addWidget(table_group)
-
-        # Load current MID data
-        self.load_mid_table_data()
-
-        # Close button
-        btn_layout = QHBoxLayout()
-        btn_close = QPushButton("Close")
-        btn_close.clicked.connect(dialog.accept)
-        btn_close.setStyleSheet(self.get_button_style("default"))
-        btn_layout.addStretch()
-        btn_layout.addWidget(btn_close)
-        layout.addLayout(btn_layout)
-
-        self.center_dialog(dialog)
-        dialog.exec_()
-
+        """Show the MID Management dialog - redirects to Configuration dialog MID tab"""
+        self.show_configuration_dialog(initial_tab=3)
         # Refresh MID combo after dialog closes
         self.load_available_mids()
 
-    def browse_mid_import_file(self, dialog):
+    def browse_mid_import_file(self):
         """Browse for MID import file"""
         file_path, _ = QFileDialog.getOpenFileName(
-            dialog, "Select MID List File", "",
+            self, "Select MID List File", "",
             "Excel Files (*.xlsx *.xls);;CSV Files (*.csv);;All Files (*)"
         )
         if file_path:
@@ -2671,10 +2552,10 @@ class DerivativeMill(QMainWindow):
             self.mid_import_path_label.setText(Path(file_path).name)
             self.mid_import_path_label.setStyleSheet("color: black;")
 
-    def import_mid_file(self, dialog):
+    def import_mid_file(self):
         """Import MID list from Excel/CSV file"""
         if not hasattr(self, 'mid_import_file_path') or not self.mid_import_file_path:
-            QMessageBox.warning(dialog, "No File", "Please select a file to import first.")
+            QMessageBox.warning(self, "No File", "Please select a file to import first.")
             return
 
         try:
@@ -2703,14 +2584,14 @@ class DerivativeMill(QMainWindow):
 
             # Check for required MID column
             if 'mid' not in df.columns:
-                QMessageBox.critical(dialog, "Error", "File must contain a 'MID' column.")
+                QMessageBox.critical(self, "Error", "File must contain a 'MID' column.")
                 return
 
             # Ask user if they want to append or replace
             existing_count = self.mid_table_widget.rowCount()
             if existing_count > 0:
                 reply = QMessageBox.question(
-                    dialog, "Import Mode",
+                    self, "Import Mode",
                     f"There are {existing_count} existing MID records.\n\n"
                     "Do you want to ADD to the existing list?\n\n"
                     "Click 'Yes' to append new records\n"
@@ -2766,13 +2647,13 @@ class DerivativeMill(QMainWindow):
             if skipped > 0:
                 msg += f"\nSkipped {skipped} duplicate MIDs."
             msg += "\n\nClick 'Save Changes' to save to database."
-            QMessageBox.information(dialog, "Import Complete", msg)
+            QMessageBox.information(self, "Import Complete", msg)
 
         except Exception as e:
-            QMessageBox.critical(dialog, "Import Error", f"Failed to import file:\n{str(e)}")
+            QMessageBox.critical(self, "Import Error", f"Failed to import file:\n{str(e)}")
             logger.error(f"MID import error: {e}")
 
-    def add_mid_row(self, dialog):
+    def add_mid_row(self):
         """Add a new empty row to the MID table"""
         row_idx = self.mid_table_widget.rowCount()
         self.mid_table_widget.insertRow(row_idx)
@@ -2788,15 +2669,15 @@ class DerivativeMill(QMainWindow):
         self.mid_table_widget.setCurrentCell(row_idx, 0)
         self.mid_table_widget.editItem(self.mid_table_widget.item(row_idx, 0))
 
-    def delete_selected_mid(self, dialog):
+    def delete_selected_mid(self):
         """Delete selected MID rows"""
         selected_rows = set(item.row() for item in self.mid_table_widget.selectedItems())
         if not selected_rows:
-            QMessageBox.warning(dialog, "No Selection", "Please select rows to delete.")
+            QMessageBox.warning(self, "No Selection", "Please select rows to delete.")
             return
 
         reply = QMessageBox.question(
-            dialog, "Confirm Delete",
+            self, "Confirm Delete",
             f"Delete {len(selected_rows)} selected MID(s)?",
             QMessageBox.Yes | QMessageBox.No
         )
@@ -2804,20 +2685,20 @@ class DerivativeMill(QMainWindow):
             for row in sorted(selected_rows, reverse=True):
                 self.mid_table_widget.removeRow(row)
 
-    def clear_all_mids(self, dialog):
+    def clear_all_mids(self):
         """Clear all MIDs from the table"""
         if self.mid_table_widget.rowCount() == 0:
             return
 
         reply = QMessageBox.question(
-            dialog, "Confirm Clear",
+            self, "Confirm Clear",
             "Clear all MIDs from the table?\n\nThis will not delete from database until you click 'Save Changes'.",
             QMessageBox.Yes | QMessageBox.No
         )
         if reply == QMessageBox.Yes:
             self.mid_table_widget.setRowCount(0)
 
-    def save_mid_table(self, dialog):
+    def save_mid_table(self):
         """Save MID table data to database"""
         try:
             conn = sqlite3.connect(str(DB_PATH))
@@ -2853,11 +2734,11 @@ class DerivativeMill(QMainWindow):
             conn.commit()
             conn.close()
 
-            QMessageBox.information(dialog, "Saved", f"Saved {saved} MID records to database.")
+            QMessageBox.information(self, "Saved", f"Saved {saved} MID records to database.")
             self.load_available_mids()
 
         except Exception as e:
-            QMessageBox.critical(dialog, "Save Error", f"Failed to save:\n{str(e)}")
+            QMessageBox.critical(self, "Save Error", f"Failed to save:\n{str(e)}")
             logger.error(f"MID save error: {e}")
 
     def load_mid_table_data(self):
@@ -2924,8 +2805,8 @@ class DerivativeMill(QMainWindow):
         for row in range(self.mid_table_widget.rowCount()):
             self.mid_table_widget.setRowHidden(row, False)
 
-    def show_configuration_dialog(self):
-        """Show the Configuration dialog with Invoice Mapping, Output Mapping, and Parts Import tabs"""
+    def show_configuration_dialog(self, initial_tab=0):
+        """Show the Configuration dialog with Invoice Mapping, Output Mapping, Parts Import, MID Management, and Tariff Details tabs"""
         dialog = QDialog(self)
         dialog.setWindowTitle("Configuration")
         dialog.resize(1000, 700)
@@ -2938,6 +2819,8 @@ class DerivativeMill(QMainWindow):
         tab_shipment_map = QWidget()
         tab_output_map = QWidget()
         tab_import = QWidget()
+        tab_mid_management = QWidget()
+        tab_tariff_details = QWidget()
 
         # Temporarily swap the instance variables so setup methods populate the new widgets
         original_tab_shipment_map = self.tab_shipment_map
@@ -2952,6 +2835,8 @@ class DerivativeMill(QMainWindow):
         self.setup_shipment_mapping_tab()
         self.setup_output_mapping_tab()
         self.setup_import_tab()
+        self.setup_mid_management_tab(tab_mid_management)
+        self.setup_tariff_details_tab(tab_tariff_details)
 
         # Restore original references (though they may be deleted)
         self.tab_shipment_map = original_tab_shipment_map
@@ -2962,6 +2847,12 @@ class DerivativeMill(QMainWindow):
         tabs.addTab(tab_shipment_map, "Invoice Mapping Profiles")
         tabs.addTab(tab_output_map, "Output Mapping")
         tabs.addTab(tab_import, "Parts Import")
+        tabs.addTab(tab_mid_management, "MID Management")
+        tabs.addTab(tab_tariff_details, "Tariff Details")
+
+        # Set initial tab if specified
+        if initial_tab > 0 and initial_tab < tabs.count():
+            tabs.setCurrentIndex(initial_tab)
 
         layout.addWidget(tabs)
 
@@ -2976,6 +2867,530 @@ class DerivativeMill(QMainWindow):
 
         self.center_dialog(dialog)
         dialog.exec_()
+
+    def setup_mid_management_tab(self, tab_widget):
+        """Setup the MID Management tab for the Configuration dialog"""
+        layout = QVBoxLayout(tab_widget)
+
+        # Title
+        title = QLabel("<h2>Manufacturer ID (MID) Management</h2>")
+        layout.addWidget(title)
+
+        # Import section
+        import_group = QGroupBox("Import MID List")
+        import_layout = QHBoxLayout(import_group)
+
+        self.mid_import_path_label = QLabel("No file selected")
+        self.mid_import_path_label.setStyleSheet("color: gray;")
+        import_layout.addWidget(self.mid_import_path_label, 1)
+
+        btn_browse = QPushButton("Browse...")
+        btn_browse.clicked.connect(self.browse_mid_import_file)
+        import_layout.addWidget(btn_browse)
+
+        btn_import = QPushButton("Import")
+        btn_import.setStyleSheet(self.get_button_style("primary"))
+        btn_import.clicked.connect(self.import_mid_file)
+        import_layout.addWidget(btn_import)
+
+        layout.addWidget(import_group)
+
+        # Info label
+        info_label = QLabel("Expected Excel columns: <b>Manufacturer Name</b>, <b>MID</b>, <b>Customer ID</b>, <b>Related Parties</b> (Y/N)")
+        info_label.setStyleSheet("color: #666; margin: 5px;")
+        layout.addWidget(info_label)
+
+        # MID Table
+        table_group = QGroupBox("Current MID List")
+        table_layout = QVBoxLayout(table_group)
+
+        # Filter/Search row
+        filter_layout = QHBoxLayout()
+
+        filter_layout.addWidget(QLabel("Customer ID:"))
+        self.mid_customer_filter = QLineEdit()
+        self.mid_customer_filter.setPlaceholderText("Filter...")
+        self.mid_customer_filter.setMaximumWidth(150)
+        self.mid_customer_filter.returnPressed.connect(self.filter_mid_table)
+        filter_layout.addWidget(self.mid_customer_filter)
+
+        filter_layout.addWidget(QLabel("MID:"))
+        self.mid_search_filter = QLineEdit()
+        self.mid_search_filter.setPlaceholderText("Search...")
+        self.mid_search_filter.setMaximumWidth(180)
+        self.mid_search_filter.returnPressed.connect(self.filter_mid_table)
+        filter_layout.addWidget(self.mid_search_filter)
+
+        filter_layout.addWidget(QLabel("Manufacturer:"))
+        self.mid_manufacturer_filter = QLineEdit()
+        self.mid_manufacturer_filter.setPlaceholderText("Search...")
+        self.mid_manufacturer_filter.returnPressed.connect(self.filter_mid_table)
+        filter_layout.addWidget(self.mid_manufacturer_filter)
+
+        btn_search = QPushButton("Search")
+        btn_search.setStyleSheet(self.get_button_style("primary"))
+        btn_search.clicked.connect(self.filter_mid_table)
+        filter_layout.addWidget(btn_search)
+
+        btn_clear_filter = QPushButton("Clear Filters")
+        btn_clear_filter.clicked.connect(self.clear_mid_filters)
+        filter_layout.addWidget(btn_clear_filter)
+
+        table_layout.addLayout(filter_layout)
+
+        self.mid_table_widget = QTableWidget()
+        self.mid_table_widget.setColumnCount(4)
+        self.mid_table_widget.setHorizontalHeaderLabels(["Manufacturer Name", "MID", "Customer ID", "Related Parties"])
+        self.mid_table_widget.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.mid_table_widget.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.mid_table_widget.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.mid_table_widget.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.mid_table_widget.setSelectionBehavior(QTableWidget.SelectRows)
+        self.mid_table_widget.setAlternatingRowColors(True)
+        table_layout.addWidget(self.mid_table_widget)
+
+        # Table buttons
+        table_btn_layout = QHBoxLayout()
+
+        btn_add = QPushButton("Add MID")
+        btn_add.clicked.connect(self.add_mid_row)
+        table_btn_layout.addWidget(btn_add)
+
+        btn_delete = QPushButton("Delete Selected")
+        btn_delete.clicked.connect(self.delete_selected_mid)
+        table_btn_layout.addWidget(btn_delete)
+
+        btn_clear = QPushButton("Clear All")
+        btn_clear.clicked.connect(self.clear_all_mids)
+        table_btn_layout.addWidget(btn_clear)
+
+        table_btn_layout.addStretch()
+
+        btn_save = QPushButton("Save Changes")
+        btn_save.setStyleSheet(self.get_button_style("primary"))
+        btn_save.clicked.connect(self.save_mid_table)
+        table_btn_layout.addWidget(btn_save)
+
+        table_layout.addLayout(table_btn_layout)
+        layout.addWidget(table_group)
+
+        # Load current MID data
+        self.load_mid_table_data()
+
+    def setup_tariff_details_tab(self, tab_widget):
+        """Setup the Tariff Details tab for managing HTS quantity units"""
+        layout = QVBoxLayout(tab_widget)
+
+        # Title
+        title = QLabel("<h2>Tariff Details</h2><p>Manage HTS quantity units for CBP reporting</p>")
+        title.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title)
+
+        # HTS Lookup group
+        lookup_group = QGroupBox("HTS Unit Lookup")
+        lookup_layout = QVBoxLayout(lookup_group)
+
+        lookup_row1 = QHBoxLayout()
+        lookup_row1.addWidget(QLabel("HTS Code:"))
+        self.hts_lookup_input = QLineEdit()
+        self.hts_lookup_input.setPlaceholderText("Enter HTS code (e.g., 8535.90.8020)")
+        self.hts_lookup_input.setMaximumWidth(200)
+        lookup_row1.addWidget(self.hts_lookup_input)
+
+        btn_lookup = QPushButton("Lookup Unit")
+        btn_lookup.setStyleSheet(self.get_button_style("primary"))
+        btn_lookup.clicked.connect(self.lookup_hts_unit)
+        lookup_row1.addWidget(btn_lookup)
+
+        self.hts_lookup_result = QLabel("")
+        lookup_row1.addWidget(self.hts_lookup_result)
+
+        lookup_row1.addStretch()
+        lookup_layout.addLayout(lookup_row1)
+
+        lookup_row2 = QHBoxLayout()
+        btn_update_parts = QPushButton("Update Parts Master Qty Units")
+        btn_update_parts.setStyleSheet(self.get_button_style("primary"))
+        btn_update_parts.clicked.connect(self.update_parts_master_qty_units)
+        btn_update_parts.setToolTip("Update qty_unit in parts_master table based on HTS codes from hts.db")
+        lookup_row2.addWidget(btn_update_parts)
+
+        btn_identify_missing = QPushButton("Identify Missing HTS Units")
+        btn_identify_missing.setStyleSheet(self.get_button_style("secondary"))
+        btn_identify_missing.clicked.connect(self.identify_missing_hts_units)
+        btn_identify_missing.setToolTip("Show HTS codes in parts_master that don't have unit data in hts.db")
+        lookup_row2.addWidget(btn_identify_missing)
+
+        self.hts_update_status = QLabel("")
+        lookup_row2.addWidget(self.hts_update_status)
+
+        lookup_row2.addStretch()
+        lookup_layout.addLayout(lookup_row2)
+
+        layout.addWidget(lookup_group)
+
+        # HTS Units table
+        table_group = QGroupBox("HTS Units Table")
+        table_layout = QVBoxLayout(table_group)
+
+        # Filter row
+        filter_layout = QHBoxLayout()
+        filter_layout.addWidget(QLabel("Filter:"))
+        self.hts_units_filter = QLineEdit()
+        self.hts_units_filter.setPlaceholderText("Search HTS codes or units...")
+        self.hts_units_filter.textChanged.connect(self.filter_hts_units_table)
+        filter_layout.addWidget(self.hts_units_filter)
+        table_layout.addLayout(filter_layout)
+
+        self.hts_units_table = QTableWidget()
+        self.hts_units_table.setColumnCount(2)
+        self.hts_units_table.setHorizontalHeaderLabels(["HTS Code", "Qty Unit"])
+        self.hts_units_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.hts_units_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.hts_units_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.hts_units_table.setAlternatingRowColors(True)
+        table_layout.addWidget(self.hts_units_table)
+
+        layout.addWidget(table_group)
+
+        # Load HTS units data
+        self.load_hts_units_table_data()
+
+    def lookup_hts_unit(self):
+        """Lookup unit of quantity for an HTS code"""
+        hts_code = self.hts_lookup_input.text().strip()
+        if not hts_code:
+            self.hts_lookup_result.setText("Enter an HTS code")
+            self.hts_lookup_result.setStyleSheet("color: orange;")
+            return
+
+        # Load HTS cache if not loaded
+        if not hasattr(self, '_usitc_hts_cache') or not self._usitc_hts_cache:
+            self._load_usitc_hts_cache()
+
+        # Normalize HTS code
+        hts_clean = hts_code.replace('.', '').strip()
+
+        # Try exact match first, then progressively shorter matches
+        unit = None
+        for length in [len(hts_clean), 10, 8, 6, 4]:
+            if length <= len(hts_clean) and hasattr(self, '_usitc_hts_cache'):
+                unit = self._usitc_hts_cache.get(hts_clean[:length])
+                if unit:
+                    break
+
+        if unit:
+            self.hts_lookup_result.setText(f"Unit: {unit}")
+            self.hts_lookup_result.setStyleSheet("color: green; font-weight: bold;")
+        else:
+            self.hts_lookup_result.setText("Not found in hts.db")
+            self.hts_lookup_result.setStyleSheet("color: red;")
+
+    def _load_usitc_hts_cache(self):
+        """Load and cache HTS data from hts.db database"""
+        # Primary source: load from hts_codes table in hts.db
+        hts_db_path = BASE_DIR / "Resources" / "References" / "hts.db"
+
+        if hts_db_path.exists():
+            try:
+                if hasattr(self, 'hts_lookup_result'):
+                    self.hts_lookup_result.setText("Loading HTS database...")
+                    QApplication.processEvents()
+
+                conn = sqlite3.connect(str(hts_db_path))
+                c = conn.cursor()
+                c.execute("SELECT full_code, unit_of_quantity FROM hts_codes WHERE length(unit_of_quantity) > 0")
+                rows = c.fetchall()
+                conn.close()
+
+                self._usitc_hts_cache = {}
+                for full_code, unit in rows:
+                    # Normalize HTS code (remove dots)
+                    hts_clean = str(full_code).replace('.', '').strip()
+                    unit_clean = str(unit).strip().upper().replace('.', '')
+                    if hts_clean and unit_clean:
+                        self._usitc_hts_cache[hts_clean] = unit_clean
+
+                logger.info(f"Loaded {len(self._usitc_hts_cache)} HTS codes from hts.db")
+                return
+            except Exception as e:
+                logger.warning(f"Failed to load from hts.db: {e}")
+
+        self._usitc_hts_cache = {}
+        logger.warning("hts.db not found or empty")
+
+    def update_parts_master_qty_units(self):
+        """Update qty_unit in parts_master table based on HTS codes from hts.db"""
+        reply = QMessageBox.question(
+            self, "Update Parts Master",
+            "This will update the qty_unit field in the parts_master table\n"
+            "based on HTS codes found in the hts.db reference database.\n\n"
+            "Only parts with missing or empty qty_unit will be updated.\n\n"
+            "Continue?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        if hasattr(self, 'hts_update_status'):
+            self.hts_update_status.setText("Loading HTS data...")
+            self.hts_update_status.setStyleSheet("color: blue;")
+        QApplication.processEvents()
+
+        try:
+            # Load HTS data from hts.db
+            hts_db_path = BASE_DIR / "Resources" / "References" / "hts.db"
+            if not hts_db_path.exists():
+                QMessageBox.critical(self, "Error", "hts.db not found in Resources/References/")
+                return
+
+            # Build lookup dictionary from hts.db
+            conn_hts = sqlite3.connect(str(hts_db_path))
+            c_hts = conn_hts.cursor()
+            c_hts.execute("SELECT full_code, unit_of_quantity FROM hts_codes WHERE length(unit_of_quantity) > 0")
+            hts_rows = c_hts.fetchall()
+            conn_hts.close()
+
+            hts_lookup = {}
+            for full_code, unit in hts_rows:
+                hts_clean = str(full_code).replace('.', '').strip()
+                unit_clean = str(unit).strip().upper().replace('.', '')
+                if hts_clean and unit_clean:
+                    hts_lookup[hts_clean] = unit_clean
+
+            if hasattr(self, 'hts_update_status'):
+                self.hts_update_status.setText(f"Loaded {len(hts_lookup)} HTS codes, updating parts...")
+            QApplication.processEvents()
+
+            # Update parts_master
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+
+            # Get parts that need updating (missing or empty qty_unit)
+            c.execute("SELECT part_number, hts_code FROM parts_master WHERE (qty_unit IS NULL OR qty_unit = '') AND hts_code IS NOT NULL AND hts_code != ''")
+            parts_to_update = c.fetchall()
+
+            updated = 0
+            not_found = 0
+            for part_number, hts_code in parts_to_update:
+                # Normalize HTS code
+                hts_clean = str(hts_code).replace('.', '').strip()
+
+                # Try exact match first, then progressively shorter matches
+                unit = None
+                for length in [len(hts_clean), 10, 8, 6, 4]:
+                    if length <= len(hts_clean):
+                        unit = hts_lookup.get(hts_clean[:length])
+                        if unit:
+                            break
+
+                if unit:
+                    c.execute("UPDATE parts_master SET qty_unit = ? WHERE part_number = ?", (unit, part_number))
+                    updated += 1
+                else:
+                    not_found += 1
+
+                # Update progress
+                if (updated + not_found) % 100 == 0:
+                    if hasattr(self, 'hts_update_status'):
+                        self.hts_update_status.setText(f"Updated {updated} parts...")
+                    QApplication.processEvents()
+
+            conn.commit()
+            conn.close()
+
+            if hasattr(self, 'hts_update_status'):
+                self.hts_update_status.setText(f"Updated {updated} parts")
+                self.hts_update_status.setStyleSheet("color: green;")
+
+            QMessageBox.information(
+                self, "Update Complete",
+                f"Successfully updated {updated} parts with qty_unit.\n\n"
+                f"Parts with HTS codes not found in hts.db: {not_found}"
+            )
+
+            logger.info(f"Updated {updated} parts with qty_unit, {not_found} HTS codes not found")
+
+        except Exception as e:
+            logger.error(f"Update parts qty_unit error: {e}")
+            if hasattr(self, 'hts_update_status'):
+                self.hts_update_status.setText("Update failed")
+                self.hts_update_status.setStyleSheet("color: red;")
+            QMessageBox.critical(self, "Update Error", f"Failed to update parts:\n{str(e)}")
+
+    def identify_missing_hts_units(self):
+        """Show a dialog with HTS codes that are missing unit data in hts.db"""
+        try:
+            # Load HTS cache if not loaded
+            if not hasattr(self, '_usitc_hts_cache') or not self._usitc_hts_cache:
+                self._load_usitc_hts_cache()
+
+            # Get unique HTS codes from parts_master that don't have units
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("""
+                SELECT DISTINCT hts_code
+                FROM parts_master
+                WHERE hts_code IS NOT NULL AND hts_code != ''
+                  AND (qty_unit IS NULL OR qty_unit = '')
+                ORDER BY hts_code
+            """)
+            parts_hts_codes = c.fetchall()
+            conn.close()
+
+            missing_codes = []
+            for (hts_code,) in parts_hts_codes:
+                hts_clean = str(hts_code).replace('.', '').strip()
+                # Check if any length match exists
+                found = False
+                for length in [len(hts_clean), 10, 8, 6, 4]:
+                    if length <= len(hts_clean) and hasattr(self, '_usitc_hts_cache'):
+                        if self._usitc_hts_cache.get(hts_clean[:length]):
+                            found = True
+                            break
+                if not found:
+                    missing_codes.append(hts_code)
+
+            # Show dialog with results
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Missing HTS Units")
+            dialog.resize(500, 400)
+            layout = QVBoxLayout(dialog)
+
+            if missing_codes:
+                label = QLabel(f"<b>{len(missing_codes)} HTS codes</b> in parts_master have no unit data in hts.db:")
+                layout.addWidget(label)
+
+                text_edit = QPlainTextEdit()
+                text_edit.setReadOnly(True)
+                text_edit.setPlainText("\n".join(missing_codes))
+                layout.addWidget(text_edit)
+
+                # Copy button
+                btn_copy = QPushButton("Copy to Clipboard")
+                btn_copy.clicked.connect(lambda: QApplication.clipboard().setText("\n".join(missing_codes)))
+                layout.addWidget(btn_copy)
+            else:
+                label = QLabel("All HTS codes in parts_master have matching unit data in hts.db!")
+                label.setStyleSheet("color: green; font-weight: bold;")
+                layout.addWidget(label)
+
+            btn_close = QPushButton("Close")
+            btn_close.clicked.connect(dialog.accept)
+            layout.addWidget(btn_close)
+
+            dialog.exec_()
+
+        except Exception as e:
+            logger.error(f"Identify missing HTS units error: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to identify missing HTS units:\n{str(e)}")
+
+    def load_hts_units_table_data(self):
+        """Load HTS units from hts.db into the table"""
+        if not hasattr(self, 'hts_units_table'):
+            return
+
+        try:
+            hts_db_path = BASE_DIR / "Resources" / "References" / "hts.db"
+            if not hts_db_path.exists():
+                return
+
+            conn = sqlite3.connect(str(hts_db_path))
+            c = conn.cursor()
+            c.execute("SELECT full_code, unit_of_quantity FROM hts_codes WHERE length(unit_of_quantity) > 0 ORDER BY full_code LIMIT 1000")
+            rows = c.fetchall()
+            conn.close()
+
+            self.hts_units_table.setRowCount(len(rows))
+            for i, (hts_code, qty_unit) in enumerate(rows):
+                self.hts_units_table.setItem(i, 0, QTableWidgetItem(str(hts_code)))
+                self.hts_units_table.setItem(i, 1, QTableWidgetItem(str(qty_unit)))
+
+        except Exception as e:
+            logger.error(f"Load HTS units table error: {e}")
+
+    def filter_hts_units_table(self):
+        """Filter HTS units table based on search text"""
+        if not hasattr(self, 'hts_units_table') or not hasattr(self, 'hts_units_filter'):
+            return
+
+        filter_text = self.hts_units_filter.text().strip().lower()
+
+        for row in range(self.hts_units_table.rowCount()):
+            show_row = True
+            if filter_text:
+                hts_code = self.hts_units_table.item(row, 0)
+                qty_unit = self.hts_units_table.item(row, 1)
+                hts_text = hts_code.text().lower() if hts_code else ""
+                unit_text = qty_unit.text().lower() if qty_unit else ""
+                show_row = filter_text in hts_text or filter_text in unit_text
+            self.hts_units_table.setRowHidden(row, not show_row)
+
+    def show_preview_context_menu(self, pos):
+        """Show context menu for the preview table"""
+        menu = QMenu(self)
+
+        # Get the column under the cursor
+        col = self.table.columnAt(pos.x())
+
+        autofit_all = menu.addAction("Auto-fit All Column Widths")
+        autofit_all.triggered.connect(self.autofit_preview_columns)
+
+        if col >= 0:
+            col_name = self.table.horizontalHeaderItem(col).text() if self.table.horizontalHeaderItem(col) else f"Column {col}"
+            autofit_single = menu.addAction(f"Auto-fit '{col_name}' Column")
+            autofit_single.triggered.connect(lambda: self.autofit_single_column(col))
+
+        menu.addSeparator()
+
+        reset_widths = menu.addAction("Reset Column Widths")
+        reset_widths.triggered.connect(self.reset_preview_column_widths)
+
+        menu.exec_(self.table.viewport().mapToGlobal(pos))
+
+    def autofit_preview_columns(self):
+        """Auto-fit all column widths based on content"""
+        if not hasattr(self, 'table'):
+            return
+
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        QApplication.processEvents()
+        # Switch back to interactive mode to preserve the sizes
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        # Save the new widths
+        self.save_column_widths()
+        self.bottom_status.setText("Column widths auto-fitted")
+
+    def autofit_single_column(self, col):
+        """Auto-fit a single column width based on content"""
+        if not hasattr(self, 'table') or col < 0:
+            return
+
+        self.table.resizeColumnToContents(col)
+        self.save_column_widths()
+        col_name = self.table.horizontalHeaderItem(col).text() if self.table.horizontalHeaderItem(col) else f"Column {col}"
+        self.bottom_status.setText(f"Auto-fitted column: {col_name}")
+
+    def reset_preview_column_widths(self):
+        """Reset all column widths to default"""
+        if not hasattr(self, 'table'):
+            return
+
+        default_width = 80
+        for col in range(self.table.columnCount()):
+            self.table.setColumnWidth(col, default_width)
+
+        # Clear saved widths from database
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("DELETE FROM app_config WHERE key LIKE 'preview_col_width_%'")
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.warning(f"Failed to clear saved column widths: {e}")
+
+        self.bottom_status.setText("Column widths reset to default")
 
     def show_settings_dialog(self):
         dialog = QDialog(self)
@@ -6277,6 +6692,40 @@ class DerivativeMill(QMainWindow):
         top_bar.addStretch()
         layout.addWidget(top_bar_widget)
 
+        # Profile linking row - link input profile to export profile
+        link_bar_widget = QWidget()
+        link_bar = QHBoxLayout(link_bar_widget)
+        link_bar.addWidget(QLabel("Linked Export Profile:"))
+        self.linked_export_combo = QComboBox()
+        self.linked_export_combo.setMinimumWidth(250)
+        self.linked_export_combo.addItem("(None)")
+        # Populate with export profiles
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("SELECT DISTINCT profile_name FROM output_column_mappings ORDER BY profile_name")
+            for row in c.fetchall():
+                self.linked_export_combo.addItem(row[0])
+            conn.close()
+        except Exception as e:
+            logger.warning(f"Failed to load export profiles for linking: {e}")
+        link_bar.addWidget(self.linked_export_combo)
+
+        btn_save_link = QPushButton("Save Link")
+        btn_save_link.setStyleSheet(self.get_button_style("success"))
+        btn_save_link.clicked.connect(self.save_profile_link)
+        btn_save_link.setToolTip("Save the link between the current input profile and selected export profile")
+        link_bar.addWidget(btn_save_link)
+
+        btn_clear_link = QPushButton("Clear Link")
+        btn_clear_link.setStyleSheet(self.get_button_style("secondary"))
+        btn_clear_link.clicked.connect(self.clear_profile_link)
+        btn_clear_link.setToolTip("Remove the link for the current input profile")
+        link_bar.addWidget(btn_clear_link)
+
+        link_bar.addStretch()
+        layout.addWidget(link_bar_widget)
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll_widget = QWidget()
@@ -7311,6 +7760,10 @@ class DerivativeMill(QMainWindow):
                 self.apply_current_mapping()
                 logger.info(f"Profile loaded: {name} (header_row={header_row_value})")
                 self.bottom_status.setText(f"Loaded profile: {name}")
+                # Load linked export profile
+                self.load_profile_link(name)
+                # Apply linked export profile settings
+                self.apply_linked_export_profile(name)
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Load failed: {e}")
 
@@ -7325,6 +7778,8 @@ class DerivativeMill(QMainWindow):
             conn = sqlite3.connect(str(DB_PATH))
             c = conn.cursor()
             c.execute("DELETE FROM mapping_profiles WHERE profile_name = ?", (name,))
+            # Also delete any profile link
+            c.execute("DELETE FROM profile_links WHERE input_profile_name = ?", (name,))
             conn.commit()
             conn.close()
             self.load_mapping_profiles()
@@ -7334,6 +7789,98 @@ class DerivativeMill(QMainWindow):
             logger.info(f"Profile deleted: {name}")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Delete failed: {e}")
+
+    def save_profile_link(self):
+        """Save link between current input profile and selected export profile"""
+        input_profile = self.profile_combo_map.currentText()
+        if not input_profile or input_profile == "-- Select Profile --":
+            QMessageBox.warning(self, "No Profile", "Please select an input profile first")
+            return
+
+        export_profile = self.linked_export_combo.currentText()
+        if export_profile == "(None)":
+            export_profile = None
+
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            if export_profile:
+                c.execute("INSERT OR REPLACE INTO profile_links (input_profile_name, export_profile_name) VALUES (?, ?)",
+                         (input_profile, export_profile))
+                logger.info(f"Linked profile '{input_profile}' to export profile '{export_profile}'")
+                self.bottom_status.setText(f"Linked to export profile: {export_profile}")
+            else:
+                c.execute("DELETE FROM profile_links WHERE input_profile_name = ?", (input_profile,))
+                logger.info(f"Removed link for profile '{input_profile}'")
+                self.bottom_status.setText("Export profile link removed")
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.error(f"Failed to save profile link: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to save link: {e}")
+
+    def clear_profile_link(self):
+        """Clear the export profile link for current input profile"""
+        input_profile = self.profile_combo_map.currentText()
+        if not input_profile or input_profile == "-- Select Profile --":
+            return
+
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("DELETE FROM profile_links WHERE input_profile_name = ?", (input_profile,))
+            conn.commit()
+            conn.close()
+            self.linked_export_combo.setCurrentIndex(0)  # Set to "(None)"
+            logger.info(f"Cleared link for profile '{input_profile}'")
+            self.bottom_status.setText("Export profile link cleared")
+        except Exception as e:
+            logger.error(f"Failed to clear profile link: {e}")
+
+    def load_profile_link(self, input_profile_name):
+        """Load the linked export profile for an input profile"""
+        if not hasattr(self, 'linked_export_combo'):
+            return
+
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("SELECT export_profile_name FROM profile_links WHERE input_profile_name = ?", (input_profile_name,))
+            row = c.fetchone()
+            conn.close()
+
+            if row and row[0]:
+                # Find and select the export profile in combo
+                idx = self.linked_export_combo.findText(row[0])
+                if idx >= 0:
+                    self.linked_export_combo.setCurrentIndex(idx)
+                else:
+                    self.linked_export_combo.setCurrentIndex(0)
+            else:
+                self.linked_export_combo.setCurrentIndex(0)
+        except Exception as e:
+            logger.warning(f"Failed to load profile link: {e}")
+            self.linked_export_combo.setCurrentIndex(0)
+
+    def apply_linked_export_profile(self, input_profile_name):
+        """Apply the linked export profile settings when an input profile is loaded"""
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("SELECT export_profile_name FROM profile_links WHERE input_profile_name = ?", (input_profile_name,))
+            row = c.fetchone()
+            conn.close()
+
+            if row and row[0]:
+                export_profile = row[0]
+                # Load the export profile settings
+                if hasattr(self, 'output_profile_combo'):
+                    idx = self.output_profile_combo.findText(export_profile)
+                    if idx >= 0:
+                        self.output_profile_combo.setCurrentIndex(idx)
+                        logger.info(f"Auto-loaded linked export profile: {export_profile}")
+        except Exception as e:
+            logger.warning(f"Failed to apply linked export profile: {e}")
 
     def apply_current_mapping(self):
         # Check if shipment_targets is valid (not deleted after dialog close)
