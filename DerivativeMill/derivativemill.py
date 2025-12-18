@@ -6065,8 +6065,8 @@ class DerivativeMill(QMainWindow):
         fields = {
             "part_number": "Part Number *",
             "hts_code": "HTS Code *",
-            "mid": "MID *",
-            "steel_ratio": "Steel % *",
+            "mid": "MID",
+            "steel_ratio": "Steel %",
             "aluminum_ratio": "Aluminum %",
             "copper_ratio": "Copper %",
             "wood_ratio": "Wood %",
