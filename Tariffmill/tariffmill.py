@@ -1811,7 +1811,7 @@ class TariffMill(QMainWindow):
             logo_label = QLabel()
             pixmap = QPixmap(str(logo_path))
             # Scale to fit header height while maintaining aspect ratio
-            scaled_pixmap = pixmap.scaledToHeight(fixed_header_height - 8, Qt.SmoothTransformation)
+            scaled_pixmap = pixmap.scaledToHeight(fixed_header_height, Qt.SmoothTransformation)
             logo_label.setPixmap(scaled_pixmap)
             logo_label.setStyleSheet("background: transparent;")
             logo_label.setFixedHeight(fixed_header_height)
