@@ -1804,52 +1804,31 @@ class TariffMill(QMainWindow):
         header_layout.setContentsMargins(20, 6, 20, 6)
         header_layout.setSpacing(10)
 
-        # TariffMill logo on left (larger and more opaque)
-        bg_path = TEMP_RESOURCES_DIR / "tariffmill_icon_hybrid_2.svg"
+        # TariffMill logo with wordmark
+        logo_path = TEMP_RESOURCES_DIR / "tariffmill_logo_small.svg"
         fixed_header_height = 48
-        if bg_path.exists():
-            bg_label = QLabel()
-            pixmap = QPixmap(str(bg_path))
-            scaled_pixmap = pixmap.scaled(fixed_header_height, fixed_header_height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            painter_pixmap = QPixmap(scaled_pixmap.size())
-            painter_pixmap.fill(Qt.transparent)
-            from PyQt5.QtGui import QPainter
-            painter = QPainter(painter_pixmap)
-            painter.setOpacity(0.85)
-            painter.drawPixmap(0, 0, scaled_pixmap)
-            painter.end()
-            bg_label.setPixmap(painter_pixmap)
-            bg_label.setStyleSheet("background: transparent;")
-            bg_label.setFixedSize(fixed_header_height, fixed_header_height)
-            self.header_bg_label = bg_label
+        if logo_path.exists():
+            logo_label = QLabel()
+            pixmap = QPixmap(str(logo_path))
+            # Scale to fit header height while maintaining aspect ratio
+            scaled_pixmap = pixmap.scaledToHeight(fixed_header_height - 8, Qt.SmoothTransformation)
+            logo_label.setPixmap(scaled_pixmap)
+            logo_label.setStyleSheet("background: transparent;")
+            logo_label.setFixedHeight(fixed_header_height)
+            self.header_logo_label = logo_label
         else:
-            self.header_bg_label = None
+            # Fallback to text if logo not found
+            self.header_logo_label = QLabel(f"{APP_NAME}")
+            self.header_logo_label.setStyleSheet("""
+                font-size: 22px;
+                font-weight: bold;
+                color: #555555;
+                font-family: 'Impact', 'Arial Black', sans-serif;
+            """)
 
-        # App name centered
-        app_name = QLabel(f"{APP_NAME}")
-        app_name.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
-        app_name.setFixedHeight(fixed_header_height)
-        # Set font color based on theme
-        dark_mode_teal_color = "#42A0BD"  # Matches enabled Process Invoice button color in dark mode
-        light_mode_color = "#555555"  # Original color for light mode
-        color = dark_mode_teal_color if hasattr(self, 'current_theme') and self.current_theme in ["Fusion (Dark)", "Ocean"] else light_mode_color
-        app_name.setStyleSheet(f"""
-            font-size: 22px;
-            font-weight: bold;
-            color: {color};
-            font-family: 'Impact', 'Arial Black', sans-serif;
-            padding: 0px;
-        """)
-        from PyQt5.QtWidgets import QGraphicsDropShadowEffect
-        shadow = QGraphicsDropShadowEffect()
-        shadow.setBlurRadius(15)
-        shadow.setColor(QColor(0, 0, 0, 120))
-        shadow.setOffset(3, 3)
-        app_name.setGraphicsEffect(shadow)
-        # Add logo and title directly to the QHBoxLayout, both vertically centered, same height
-        if self.header_bg_label:
-            header_layout.addWidget(self.header_bg_label, 0, Qt.AlignVCenter)
-        header_layout.addWidget(app_name, 1, Qt.AlignVCenter)
+        # Add logo to header layout
+        header_layout.addWidget(self.header_logo_label, 0, Qt.AlignVCenter)
+        header_layout.addStretch(1)
 
 
         layout.addWidget(header_container)
