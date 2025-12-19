@@ -1,4 +1,4 @@
-# DerivativeMill Application Requirements
+# TariffMill Application Requirements
 # Compatible with Python 3.8+
 
 # Core dependencies (cross-platform)

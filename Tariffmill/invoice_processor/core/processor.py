@@ -96,7 +96,7 @@ def process_invoice_data(
 
     Example:
         >>> from invoice_processor.core import process_invoice_data, TariffLookup
-        >>> tariff = TariffLookup.from_database("derivativemill.db")
+        >>> tariff = TariffLookup.from_database("tariffmill.db")
         >>> result = process_invoice_data(invoice_df, net_weight=1000.0, mid="USABC12345", tariff_lookup=tariff)
         >>> result.data  # Processed DataFrame
         >>> result.expanded_row_count  # Number of output rows

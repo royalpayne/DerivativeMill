@@ -34,7 +34,7 @@ invoice_data = pd.DataFrame({
 })
 
 # Initialize processor with tariff database
-processor = InvoiceProcessor.from_database("derivativemill.db")
+processor = InvoiceProcessor.from_database("tariffmill.db")
 
 # Process invoice
 result = processor.process(invoice_data, net_weight=500.0, mid="USABC12345")
@@ -217,4 +217,4 @@ CREATE TABLE tariff_232 (
 
 ## License
 
-Part of the DerivativeMill project.
+Part of the TariffMill project.

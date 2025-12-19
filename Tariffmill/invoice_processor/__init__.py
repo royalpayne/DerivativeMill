@@ -11,7 +11,7 @@ Example usage:
     from invoice_processor import InvoiceProcessor, ExportStyle
 
     # Initialize processor with tariff database
-    processor = InvoiceProcessor.from_database("derivativemill.db")
+    processor = InvoiceProcessor.from_database("tariffmill.db")
 
     # Process invoice data
     result = processor.process(invoice_df, net_weight=1000.0, mid="USABC12345")
@@ -90,7 +90,7 @@ class InvoiceProcessor:
             InvoiceProcessor instance
 
         Example:
-            processor = InvoiceProcessor.from_database("derivativemill.db")
+            processor = InvoiceProcessor.from_database("tariffmill.db")
         """
         tariff = TariffLookup.from_database(db_path, table_name)
         return cls(tariff)

@@ -107,18 +107,18 @@ nul
 
 # Archive and old documentation
 _Archive/
-DerivativeMill_Win11_Install/
+TariffMill_Win11_Install/
 /Resources/
 *.sqbpro
 
 # Database files - exclude user data but allow distribution database
 database_backups/
-DerivativeMill/derivativemill.db
-# Allow DerivativeMill/Resources/derivativemill.db for distribution
+Tariffmill/tariffmill.db
+# Allow Tariffmill/Resources/tariffmill.db for distribution
 
-# Old root-level files (keep only in DerivativeMill/)
-/derivativemill.py
-/DerivativeMill.spec
+# Old root-level files (keep only in Tariffmill/)
+/tariffmill.py
+/TariffMill.spec
 /setup.py
 /run.sh
 /INDEX.md
@@ -129,27 +129,27 @@ DerivativeMill/derivativemill.db
 /WINDOWS_BUILD_INSTRUCTIONS.md
 
 # Utility/dev scripts (not needed for distribution)
-DerivativeMill/add_*.py
-DerivativeMill/create_*.py
-DerivativeMill/debug_*.py
-DerivativeMill/extract_*.py
-DerivativeMill/migrate_*.py
-DerivativeMill/parse_*.py
-DerivativeMill/process_*.py
-DerivativeMill/test_*.py
-DerivativeMill/update_*.py
-DerivativeMill/anthropic.py
-DerivativeMill/database.py
-DerivativeMill/platform_utils.py
-DerivativeMill/docs/
+Tariffmill/add_*.py
+Tariffmill/create_*.py
+Tariffmill/debug_*.py
+Tariffmill/extract_*.py
+Tariffmill/migrate_*.py
+Tariffmill/parse_*.py
+Tariffmill/process_*.py
+Tariffmill/test_*.py
+Tariffmill/update_*.py
+Tariffmill/anthropic.py
+Tariffmill/database.py
+Tariffmill/platform_utils.py
+Tariffmill/docs/
 
 # Data files (should not be in repo)
-DerivativeMill/Section_232*.csv
-DerivativeMill/Section_232*.xlsx
-DerivativeMill/*.csv
-DerivativeMill/ProcessedPDFs/
+Tariffmill/Section_232*.csv
+Tariffmill/Section_232*.xlsx
+Tariffmill/*.csv
+Tariffmill/ProcessedPDFs/
 
 # User xlsx files (but allow Resources/References/*.xlsx)
 /*.xlsx
-DerivativeMill/*.xlsx
-!DerivativeMill/Resources/References/*.xlsx
+Tariffmill/*.xlsx
+!Tariffmill/Resources/References/*.xlsx

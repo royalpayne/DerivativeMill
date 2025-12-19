@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==============================================================================
-# Derivative Mill - Customs Documentation Processing System
+# TariffMill - Customs Documentation Processing System
 # ==============================================================================
 # Professional PyQt5 application for automating invoice processing, parts
 # management, and Section 232 tariff compliance tracking.
@@ -14,12 +14,12 @@
 #   - Real-time data validation and status feedback
 # ==============================================================================
 
-APP_NAME = "Derivative Mill"
-DB_NAME = "derivativemill.db"
+APP_NAME = "TariffMill"
+DB_NAME = "tariffmill.db"
 
 # Import version from version.py
 try:
-    from DerivativeMill.version import get_version
+    from TariffMill.version import get_version
     VERSION = get_version()
 except ImportError:
     try:
@@ -115,7 +115,7 @@ logger = ErrorLogger()
 # Checks GitHub releases for new versions and provides update notifications.
 # Uses the GitHub API to fetch the latest release information.
 
-GITHUB_REPO = "royalpayne/DerivativeMill"
+GITHUB_REPO = "royalpayne/TariffMill"
 GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases"
 
@@ -180,7 +180,7 @@ class UpdateChecker:
             # Create request with user-agent header (required by GitHub API)
             request = urllib.request.Request(
                 GITHUB_API_URL,
-                headers={'User-Agent': f'DerivativeMill/{self.current_version}'}
+                headers={'User-Agent': f'TariffMill/{self.current_version}'}
             )
             
             with urllib.request.urlopen(request, timeout=10) as response:
@@ -374,7 +374,7 @@ class LicenseManager:
                 GUMROAD_VERIFY_URL,
                 data=data,
                 method='POST',
-                headers={'User-Agent': f'DerivativeMill/{VERSION}'}
+                headers={'User-Agent': f'TariffMill/{VERSION}'}
             )
 
             with urllib.request.urlopen(request, timeout=10) as response:
@@ -503,7 +503,7 @@ class LicenseManager:
 # Detects if the exe is running from a different location (e.g., Downloads)
 # than the installed location, and offers to update the installed version.
 
-INSTALL_PATH_FILE = Path(os.environ.get('APPDATA', '')) / "DerivativeMill" / "install_path.txt"
+INSTALL_PATH_FILE = Path(os.environ.get('APPDATA', '')) / "TariffMill" / "install_path.txt"
 
 def get_installed_path():
     """Get the stored installation path, if any."""
@@ -549,7 +549,7 @@ def check_and_perform_self_update():
     if current_exe_resolved == installed_path_resolved:
         return False
 
-    # Check if installed path still exists and is a DerivativeMill exe
+    # Check if installed path still exists and is a TariffMill exe
     if not installed_path.exists():
         return False
 
@@ -567,8 +567,8 @@ def check_and_perform_self_update():
 
     msg = QMessageBox()
     msg.setIcon(QMessageBox.Question)
-    msg.setWindowTitle("Update DerivativeMill")
-    msg.setText(f"A DerivativeMill installation was found at:\n{installed_path.parent}\n\n"
+    msg.setWindowTitle("Update TariffMill")
+    msg.setText(f"A TariffMill installation was found at:\n{installed_path.parent}\n\n"
                 f"Would you like to update it with this version ({current_version})?")
     msg.setInformativeText("The application will restart after updating.")
     msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
@@ -634,7 +634,7 @@ del "%~f0"
 '''
 
     # Write batch file to temp directory
-    batch_path = Path(tempfile.gettempdir()) / "derivativemill_update.bat"
+    batch_path = Path(tempfile.gettempdir()) / "tariffmill_update.bat"
     batch_path.write_text(batch_content)
 
     # Run the batch file hidden
@@ -753,13 +753,13 @@ DB_PATH = get_database_path()
 # Per-User Settings (QSettings - Windows Registry)
 # ==============================================================================
 # These settings are stored per-user in the Windows Registry under
-# HKEY_CURRENT_USER\Software\DerivativeMill\DerivativeMill
+# HKEY_CURRENT_USER\Software\TariffMill\TariffMill
 # This allows each user to have their own personal preferences while
 # sharing the same database for parts data, profiles, etc.
 
 def get_user_settings():
     """Get QSettings object for per-user settings stored in Windows Registry."""
-    return QSettings("DerivativeMill", "DerivativeMill")
+    return QSettings("TariffMill", "TariffMill")
 
 def get_user_setting(key, default=None):
     """
@@ -1714,7 +1714,7 @@ class FileDropZone(QLabel):
 # ----------------------------------------------------------------------
 # VISUAL PDF PATTERN TRAINER WITH DRAWING CANVAS
 # ----------------------------------------------------------------------
-class DerivativeMill(QMainWindow):
+class TariffMill(QMainWindow):
     def eventFilter(self, obj, event):
         """Application-level event filter - intercepts ALL events before any widget processing"""
         from PyQt5.QtCore import QEvent, Qt
@@ -1759,12 +1759,10 @@ class DerivativeMill(QMainWindow):
         self._processed_events = set()
         
         # Set window icon (use TEMP_RESOURCES_DIR for bundled resources)
-        # Prefer icon.ico which is a proper multi-size icon created from banner_bg.png
-        icon_path = TEMP_RESOURCES_DIR / "icon.ico"
+        # Prefer SVG icon for scalability, fall back to ICO for Windows taskbar
+        icon_path = TEMP_RESOURCES_DIR / "tariffmill_icon_hybrid_2.svg"
         if not icon_path.exists():
-            icon_path = TEMP_RESOURCES_DIR / "banner_bg.png"
-        if not icon_path.exists():
-            icon_path = TEMP_RESOURCES_DIR / "icon.png"
+            icon_path = TEMP_RESOURCES_DIR / "icon.ico"
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
         
@@ -1806,8 +1804,8 @@ class DerivativeMill(QMainWindow):
         header_layout.setContentsMargins(20, 6, 20, 6)
         header_layout.setSpacing(10)
 
-        # Watermill logo on left (larger and more opaque)
-        bg_path = TEMP_RESOURCES_DIR / "banner_bg.png"
+        # TariffMill logo on left (larger and more opaque)
+        bg_path = TEMP_RESOURCES_DIR / "tariffmill_icon_hybrid_2.svg"
         fixed_header_height = 48
         if bg_path.exists():
             bg_label = QLabel()
@@ -3792,7 +3790,7 @@ class DerivativeMill(QMainWindow):
         # Path input row
         path_row = QHBoxLayout()
         shared_path_input = QLineEdit()
-        shared_path_input.setPlaceholderText("e.g., \\\\server\\share\\derivativemill.db")
+        shared_path_input.setPlaceholderText("e.g., \\\\server\\share\\tariffmill.db")
         if config.has_option('Database', 'path'):
             shared_path_input.setText(config.get('Database', 'path'))
         path_row.addWidget(shared_path_input)
@@ -4288,7 +4286,7 @@ class DerivativeMill(QMainWindow):
                 self.update_license_status_title()
                 QMessageBox.information(dialog, "License Activated",
                     "Your license has been activated successfully!\n\n"
-                    "Thank you for purchasing DerivativeMill.")
+                    "Thank you for purchasing TariffMill.")
             else:
                 message_label.setText(f"<span style='color: #e74c3c;'>{message}</span>")
 
@@ -4349,7 +4347,7 @@ class DerivativeMill(QMainWindow):
 
         # Message
         message = QLabel(
-            "<p style='font-size: 13px;'>Your 30-day trial of DerivativeMill has ended.</p>"
+            "<p style='font-size: 13px;'>Your 30-day trial of TariffMill has ended.</p>"
             "<p style='font-size: 13px;'>Please purchase and activate a license to continue "
             "using the software.</p>"
         )
@@ -4399,7 +4397,7 @@ class DerivativeMill(QMainWindow):
                 feedback_label.setText(f"<span style='color: #27ae60;'>{msg}</span>")
                 QMessageBox.information(dialog, "License Activated",
                     "Your license has been activated successfully!\n\n"
-                    "Thank you for purchasing DerivativeMill.")
+                    "Thank you for purchasing TariffMill.")
                 self.update_license_status_title()
                 dialog.accept()
             else:
@@ -4449,7 +4447,7 @@ class DerivativeMill(QMainWindow):
             if days <= 7:
                 QMessageBox.information(self, "Trial Reminder",
                     f"Your trial period will expire in {days} day{'s' if days != 1 else ''}.\n\n"
-                    "Please consider purchasing a license to continue using DerivativeMill.\n\n"
+                    "Please consider purchasing a license to continue using TariffMill.\n\n"
                     "Go to Help → License & Activation to enter your license key.")
 
     def update_license_status_title(self):
@@ -4476,11 +4474,11 @@ class DerivativeMill(QMainWindow):
         # App icon and name
         header_layout = QHBoxLayout()
         
-        # Try to load app icon
-        icon_path = TEMP_RESOURCES_DIR / "icon.ico"
+        # Try to load app icon - prefer SVG for higher quality display
+        icon_path = TEMP_RESOURCES_DIR / "tariffmill_icon_hybrid_2.svg"
         if not icon_path.exists():
-            icon_path = TEMP_RESOURCES_DIR / "banner_bg.png"
-        
+            icon_path = TEMP_RESOURCES_DIR / "icon.ico"
+
         if icon_path.exists():
             icon_label = QLabel()
             pixmap = QPixmap(str(icon_path))
@@ -10949,7 +10947,7 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     try:
         # Theme will be set by apply_saved_theme() during initialization
-        icon_path = TEMP_RESOURCES_DIR / "banner_bg.png"
+        icon_path = TEMP_RESOURCES_DIR / "tariffmill_icon_hybrid_2.svg"
         if not icon_path.exists():
             icon_path = TEMP_RESOURCES_DIR / "icon.ico"
         if icon_path.exists():
@@ -11063,7 +11061,7 @@ if __name__ == "__main__":
         splash_progress.setValue(20)
         app.processEvents()
 
-        win = DerivativeMill()
+        win = TariffMill()
         win.hide()  # Explicitly hide immediately after creation
         win.setWindowTitle(APP_NAME)
 

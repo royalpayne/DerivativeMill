@@ -1,8 +1,8 @@
-# DerivativeMill
+# TariffMill
 
 **Professional Customs Documentation Processing System**
 
-DerivativeMill is a desktop application for import/export businesses, customs brokers, and trade compliance professionals. It automates invoice processing, manages parts databases, and ensures compliance with Section 232 and Section 301 tariff requirements.
+TariffMill is a desktop application for import/export businesses, customs brokers, and trade compliance professionals. It automates invoice processing, manages parts databases, and ensures compliance with Section 232 and Section 301 tariff requirements.
 
 ## Key Features
 
@@ -51,7 +51,7 @@ The application features:
 
 ### Windows Executable (Recommended)
 
-Download the latest `DerivativeMill.exe` from the [Releases](https://github.com/royalpayne/DerivativeMill/releases) page.
+Download the latest `TariffMill.exe` from the [Releases](https://github.com/royalpayne/TariffMill/releases) page.
 
 No installation required - just run the executable.
 
@@ -69,8 +69,8 @@ The application is safe to use. This warning will decrease as more users downloa
 
 1. **Clone the repository:**
 ```bash
-git clone https://github.com/royalpayne/DerivativeMill.git
-cd DerivativeMill
+git clone https://github.com/royalpayne/TariffMill.git
+cd TariffMill
 ```
 
 2. **Create virtual environment:**
@@ -86,7 +86,7 @@ pip install -r requirements.txt
 
 4. **Run the application:**
 ```bash
-python DerivativeMill/derivativemill.py
+python Tariffmill/tariffmill.py
 ```
 
 ## Usage
@@ -119,11 +119,11 @@ Customize which columns appear in your export:
 ## File Structure
 
 ```
-DerivativeMill/
-├── derivativemill.py     # Main application
+Tariffmill/
+├── tariffmill.py         # Main application
 ├── version.py            # Version management
 ├── Resources/
-│   ├── derivativemill.db # SQLite database
+│   ├── tariffmill.db     # SQLite database
 │   └── icon.ico          # Application icon
 ├── Input/                # Invoice files to process
 │   └── Processed/        # Archived processed files
@@ -134,7 +134,7 @@ DerivativeMill/
 ## Configuration
 
 Settings are stored in:
-- **Database**: `Resources/derivativemill.db` (shared settings, parts data)
+- **Database**: `Resources/tariffmill.db` (shared settings, parts data)
 - **Registry**: Windows Registry (per-user preferences like theme, colors)
 
 ### Customizable Options
@@ -155,11 +155,18 @@ Settings are stored in:
 
 ## Version
 
-**Current Version**: v0.90.2
+**Current Version**: v0.93.3
 
-Version is automatically derived from git tags. See [version.py](DerivativeMill/version.py) for details.
+Version is automatically derived from git tags. See [version.py](Tariffmill/version.py) for details.
 
 ## Recent Changes
+
+### v0.93.3
+- Fix startup ghost window flash and update column names
+- Remove required field restriction from MID and Steel % in Parts Import
+- Remove Export Profile dropdown and MID Management menu item
+- Rename Net Wt/Pcs columns to Qty1/Qty2 in Result Preview
+- Add profile linking, MID/Tariff tabs, and preview table enhancements
 
 ### v0.90.2
 - Add landscape page setup for exported Excel files
@@ -182,7 +189,7 @@ Version is automatically derived from git tags. See [version.py](DerivativeMill/
 
 ## Support
 
-- **Issues**: [GitHub Issues](https://github.com/royalpayne/DerivativeMill/issues)
+- **Issues**: [GitHub Issues](https://github.com/royalpayne/TariffMill/issues)
 - **Documentation**: See this README and in-app help
 
 ## License
