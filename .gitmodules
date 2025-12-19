@@ -1,0 +1,3 @@
+[submodule "OCRInvoiceMill"]
+	path = OCRInvoiceMill
+	url = /home/heath/Dev/OCRInvoiceMill
