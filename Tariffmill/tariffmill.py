@@ -2450,7 +2450,7 @@ class TariffMill(QMainWindow):
         dialog.exec_()
 
     def show_references_dialog(self):
-        """Show the References dialog with Customs Config and Section 232 Actions tabs"""
+        """Show the References dialog with Customs Config, Section 232 Actions, and HTS Database tabs"""
         dialog = QDialog(self)
         dialog.setWindowTitle("References")
         dialog.resize(1000, 700)
@@ -2462,6 +2462,7 @@ class TariffMill(QMainWindow):
         # Create new tab widgets for the dialog
         tab_config = QWidget()
         tab_actions = QWidget()
+        tab_hts = QWidget()
 
         # Temporarily swap the instance variables so setup methods populate the new widgets
         original_tab_config = self.tab_config
@@ -2473,6 +2474,7 @@ class TariffMill(QMainWindow):
         # Setup the tabs
         self.setup_config_tab()
         self.setup_actions_tab()
+        self.setup_hts_database_tab(tab_hts)
 
         # Restore original references (though they may be deleted)
         self.tab_config = original_tab_config
@@ -2481,6 +2483,7 @@ class TariffMill(QMainWindow):
         # Add the new tabs to the dialog
         tabs.addTab(tab_config, "Customs Config")
         tabs.addTab(tab_actions, "Section 232 Actions")
+        tabs.addTab(tab_hts, "HTS Database")
 
         layout.addWidget(tabs)
 
@@ -9101,9 +9104,143 @@ class TariffMill(QMainWindow):
         layout.addWidget(self.actions_count_label)
         
         self.tab_actions.setLayout(layout)
-        
+
         # Load data
         self.refresh_actions_view()
+
+    def setup_hts_database_tab(self, tab_widget):
+        """HTS Database Reference Tab - displays contents of hts.db"""
+        layout = QVBoxLayout(tab_widget)
+
+        # Title
+        title = QLabel("<h2>HTS Code Database</h2>")
+        title.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title)
+
+        # Info box
+        info_box = QGroupBox("Reference Information")
+        info_layout = QVBoxLayout()
+        info_text = QLabel(
+            "This table contains HTS (Harmonized Tariff Schedule) codes with their descriptions, "
+            "units of quantity, and duty rates. Use this reference to look up tariff classifications."
+        )
+        info_text.setWordWrap(True)
+        info_layout.addWidget(info_text)
+        info_box.setLayout(info_layout)
+        layout.addWidget(info_box)
+
+        # Search/Filter bar
+        filter_bar = QHBoxLayout()
+
+        self.hts_db_search = QLineEdit()
+        self.hts_db_search.setPlaceholderText("Search HTS code or description...")
+        self.hts_db_search.setStyleSheet(self.get_input_style())
+        self.hts_db_search.returnPressed.connect(lambda: self.search_hts_database())
+        filter_bar.addWidget(self.hts_db_search, 1)
+
+        btn_search = QPushButton("Search")
+        btn_search.setStyleSheet(self.get_button_style("info"))
+        btn_search.clicked.connect(self.search_hts_database)
+        filter_bar.addWidget(btn_search)
+
+        btn_clear = QPushButton("Clear")
+        btn_clear.setStyleSheet(self.get_button_style("default"))
+        btn_clear.clicked.connect(self.clear_hts_database_search)
+        filter_bar.addWidget(btn_clear)
+
+        layout.addLayout(filter_bar)
+
+        # Table
+        self.hts_db_table = QTableWidget()
+        self.hts_db_table.setColumnCount(7)
+        self.hts_db_table.setHorizontalHeaderLabels([
+            "HTS Code", "Description", "Unit of Qty", "General Rate",
+            "Special Rate", "Column 2 Rate", "Chapter"
+        ])
+        self.hts_db_table.horizontalHeader().setStretchLastSection(True)
+        self.hts_db_table.setAlternatingRowColors(True)
+        self.hts_db_table.setSortingEnabled(True)
+        self.hts_db_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.hts_db_table.setEditTriggers(QTableWidget.NoEditTriggers)
+
+        # Set column widths
+        self.hts_db_table.setColumnWidth(0, 120)  # HTS Code
+        self.hts_db_table.setColumnWidth(1, 400)  # Description
+        self.hts_db_table.setColumnWidth(2, 80)   # Unit
+        self.hts_db_table.setColumnWidth(3, 100)  # General Rate
+        self.hts_db_table.setColumnWidth(4, 100)  # Special Rate
+        self.hts_db_table.setColumnWidth(5, 100)  # Column 2 Rate
+        self.hts_db_table.setColumnWidth(6, 60)   # Chapter
+
+        layout.addWidget(self.hts_db_table)
+
+        # Count label
+        self.hts_db_count_label = QLabel("Enter a search term to find HTS codes (showing first 500 results)")
+        self.hts_db_count_label.setStyleSheet("font-weight:bold; padding:5px;")
+        layout.addWidget(self.hts_db_count_label)
+
+        tab_widget.setLayout(layout)
+
+    def search_hts_database(self):
+        """Search the HTS database and display results"""
+        search_term = self.hts_db_search.text().strip()
+
+        hts_db_path = BASE_DIR / "Resources" / "References" / "hts.db"
+        if not hts_db_path.exists():
+            QMessageBox.warning(self, "Database Not Found", "hts.db not found in Resources/References/")
+            return
+
+        try:
+            conn = sqlite3.connect(str(hts_db_path))
+            cursor = conn.cursor()
+
+            if search_term:
+                # Search in full_code and description
+                # Use FTS if available, otherwise use LIKE
+                search_pattern = f"%{search_term}%"
+                cursor.execute("""
+                    SELECT full_code, description, unit_of_quantity, general_rate,
+                           special_rate, column2_rate, chapter
+                    FROM hts_codes
+                    WHERE full_code LIKE ? OR description LIKE ?
+                    ORDER BY full_code
+                    LIMIT 500
+                """, (search_pattern, search_pattern))
+            else:
+                # Show first 500 entries if no search term
+                cursor.execute("""
+                    SELECT full_code, description, unit_of_quantity, general_rate,
+                           special_rate, column2_rate, chapter
+                    FROM hts_codes
+                    ORDER BY full_code
+                    LIMIT 500
+                """)
+
+            rows = cursor.fetchall()
+            conn.close()
+
+            # Populate table
+            self.hts_db_table.setRowCount(len(rows))
+            for row_idx, row_data in enumerate(rows):
+                for col_idx, value in enumerate(row_data):
+                    item = QTableWidgetItem(str(value) if value else "")
+                    self.hts_db_table.setItem(row_idx, col_idx, item)
+
+            # Update count label
+            if search_term:
+                self.hts_db_count_label.setText(f"Found {len(rows)} results for '{search_term}'" +
+                                                (" (showing first 500)" if len(rows) == 500 else ""))
+            else:
+                self.hts_db_count_label.setText(f"Showing first {len(rows)} HTS codes")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to search HTS database: {e}")
+
+    def clear_hts_database_search(self):
+        """Clear HTS database search and results"""
+        self.hts_db_search.clear()
+        self.hts_db_table.setRowCount(0)
+        self.hts_db_count_label.setText("Enter a search term to find HTS codes (showing first 500 results)")
 
     def import_actions_csv(self):
         """Import Section 232 Actions from CSV/TSV"""
