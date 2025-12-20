@@ -8420,6 +8420,21 @@ class TariffMill(QMainWindow):
         self.crmill_templates_list = QListWidget()
         templates_layout.addWidget(self.crmill_templates_list, 1)
 
+        # Template management buttons
+        template_btn_layout = QHBoxLayout()
+
+        self.crmill_create_template_btn = QPushButton("Create New Template (AI-Assisted)")
+        self.crmill_create_template_btn.setToolTip("Use local Ollama LLM to create a new invoice template")
+        self.crmill_create_template_btn.clicked.connect(self.crmill_open_template_builder)
+        template_btn_layout.addWidget(self.crmill_create_template_btn)
+
+        self.crmill_refresh_templates_btn = QPushButton("Refresh")
+        self.crmill_refresh_templates_btn.clicked.connect(self.crmill_refresh_templates)
+        template_btn_layout.addWidget(self.crmill_refresh_templates_btn)
+
+        template_btn_layout.addStretch()
+        templates_layout.addLayout(template_btn_layout)
+
         # Populate templates
         self.crmill_refresh_templates()
 
@@ -8680,6 +8695,28 @@ Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             else:
                 item.setForeground(Qt.gray)
             self.crmill_templates_list.addItem(item)
+
+    def crmill_open_template_builder(self):
+        """Open the AI-assisted template builder dialog."""
+        try:
+            from template_builder import TemplateBuilderDialog
+            dialog = TemplateBuilderDialog(self)
+            dialog.template_created.connect(self.crmill_on_template_created)
+            dialog.exec_()
+        except ImportError as e:
+            QMessageBox.warning(
+                self, "Import Error",
+                f"Failed to load Template Builder: {e}\n\n"
+                "Make sure template_builder.py and ollama_helper.py exist."
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to open Template Builder: {e}")
+
+    def crmill_on_template_created(self, template_name: str, file_path: str):
+        """Handle new template creation."""
+        self.crmill_log(f"New template created: {template_name} at {file_path}")
+        self.crmill_log("Note: Restart the application to use the new template, or manually register it in templates/__init__.py")
+        self.crmill_refresh_templates()
 
     def refresh_parts_table(self):
         try:
