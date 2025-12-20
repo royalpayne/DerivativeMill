@@ -1,5 +1,5 @@
 """
-CRMill Database Extensions for TariffMill
+OCRMill Database Extensions for TariffMill
 Extends TariffMill's database with OCR invoice processing capabilities.
 """
 
@@ -142,10 +142,10 @@ class PartDescriptionExtractor:
         return best_match if best_score > 0 else None
 
 
-class CRMillDatabase:
+class OCRMillDatabase:
     """
-    Database extensions for CRMill invoice processing.
-    Uses TariffMill's existing database with additional CRMill tables.
+    Database extensions for OCRMill invoice processing.
+    Uses TariffMill's existing database with additional OCRMill tables.
     """
 
     def __init__(self, db_path: Path):
@@ -449,7 +449,7 @@ class CRMillDatabase:
             return False
 
     def get_statistics(self) -> Dict:
-        """Get database statistics for CRMill."""
+        """Get database statistics for OCRMill."""
         conn = self._get_connection()
         cursor = conn.cursor()
 

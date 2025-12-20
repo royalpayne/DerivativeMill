@@ -1,5 +1,5 @@
 """
-CRMill Processing Engine for TariffMill
+OCRMill Processing Engine for TariffMill
 PDF invoice processing using OCR templates.
 """
 
@@ -18,12 +18,12 @@ from templates import get_all_templates
 from templates.bill_of_lading import BillOfLadingTemplate
 
 
-class CRMillConfig:
-    """Configuration holder for CRMill processing."""
+class OCRMillConfig:
+    """Configuration holder for OCRMill processing."""
 
     def __init__(self):
-        self.input_folder = Path("Input/CRMill")
-        self.output_folder = Path("Output/CRMill")
+        self.input_folder = Path("Input/OCRMill")
+        self.output_folder = Path("Output/OCRMill")
         self.consolidate_multi_invoice = False
         self.poll_interval = 60
         self.auto_start = False
@@ -41,16 +41,16 @@ class CRMillConfig:
 class ProcessorEngine:
     """Core processing engine using templates for PDF invoice extraction."""
 
-    def __init__(self, db, config: CRMillConfig = None, log_callback: Callable[[str], None] = None):
+    def __init__(self, db, config: OCRMillConfig = None, log_callback: Callable[[str], None] = None):
         """
         Initialize the processor engine.
 
         Args:
-            db: CRMillDatabase instance for parts tracking
-            config: CRMillConfig with processing settings
+            db: OCRMillDatabase instance for parts tracking
+            config: OCRMillConfig with processing settings
             log_callback: Function to call with log messages
         """
-        self.config = config or CRMillConfig()
+        self.config = config or OCRMillConfig()
         self.log_callback = log_callback or print
         self.templates = {}
         self.parts_db = db

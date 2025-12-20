@@ -1,5 +1,5 @@
 """
-Auto Template Builder for CRMill
+Auto Template Builder for OCRMill
 Automatically analyzes PDF invoices and generates extraction templates with minimal user input.
 """
 

@@ -1,6 +1,6 @@
 """
-AI-Assisted Template Builder for CRMill
-Semi-guided template creation using local Ollama LLM.
+AI-Assisted Template Builder for OCRMill
+Semi-guided template creation using multiple AI providers (Ollama, Claude, OpenAI, OpenRouter).
 """
 
 import re
@@ -24,7 +24,10 @@ try:
 except ImportError:
     HAS_PDFPLUMBER = False
 
-from ollama_helper import OllamaHelper, TemplateAnalysis, ExtractionPattern
+from ai_providers import (
+    AIProvider, AIProviderManager, TemplateAnalysis, ExtractionPattern,
+    generate_template_code
+)
 
 
 class AnalysisWorker(QThread):
@@ -33,15 +36,15 @@ class AnalysisWorker(QThread):
     error = pyqtSignal(str)
     progress = pyqtSignal(str)
 
-    def __init__(self, helper: OllamaHelper, text: str):
+    def __init__(self, provider: AIProvider, text: str):
         super().__init__()
-        self.helper = helper
+        self.provider = provider
         self.text = text
 
     def run(self):
         try:
             self.progress.emit("Analyzing invoice structure...")
-            analysis = self.helper.analyze_invoice_text(self.text)
+            analysis = self.provider.analyze_invoice_text(self.text)
             self.finished.emit(analysis)
         except Exception as e:
             self.error.emit(str(e))
@@ -92,11 +95,148 @@ class PythonHighlighter(QSyntaxHighlighter):
                 self.setFormat(match.start(), match.end() - match.start(), fmt)
 
 
+class APIKeyDialog(QDialog):
+    """Dialog for configuring AI provider API keys."""
+
+    def __init__(self, provider_manager, parent=None):
+        super().__init__(parent)
+        self.provider_manager = provider_manager
+        self.setWindowTitle("Configure AI Providers")
+        self.setMinimumWidth(500)
+        self.setup_ui()
+
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+
+        # Instructions
+        instructions = QLabel(
+            "Enter API keys for the AI providers you want to use.\n"
+            "Keys are stored locally in your user profile.\n"
+            "Ollama runs locally and doesn't require an API key."
+        )
+        instructions.setWordWrap(True)
+        layout.addWidget(instructions)
+
+        # Provider API key inputs
+        self.key_inputs = {}
+
+        # Claude (Anthropic)
+        claude_group = QGroupBox("Claude (Anthropic)")
+        claude_layout = QFormLayout(claude_group)
+        self.claude_key = QLineEdit()
+        self.claude_key.setEchoMode(QLineEdit.Password)
+        self.claude_key.setPlaceholderText("sk-ant-...")
+        self.claude_key.setText(self.provider_manager.get_api_key('claude') or '')
+        claude_layout.addRow("API Key:", self.claude_key)
+
+        claude_link = QLabel('<a href="https://console.anthropic.com/settings/keys">Get API key from Anthropic Console</a>')
+        claude_link.setOpenExternalLinks(True)
+        claude_layout.addRow("", claude_link)
+
+        self.claude_test = QPushButton("Test Connection")
+        self.claude_test.clicked.connect(lambda: self.test_provider('claude', self.claude_key.text()))
+        self.claude_status = QLabel("")
+        test_layout = QHBoxLayout()
+        test_layout.addWidget(self.claude_test)
+        test_layout.addWidget(self.claude_status)
+        test_layout.addStretch()
+        claude_layout.addRow("", test_layout)
+
+        layout.addWidget(claude_group)
+        self.key_inputs['claude'] = self.claude_key
+
+        # OpenAI
+        openai_group = QGroupBox("OpenAI")
+        openai_layout = QFormLayout(openai_group)
+        self.openai_key = QLineEdit()
+        self.openai_key.setEchoMode(QLineEdit.Password)
+        self.openai_key.setPlaceholderText("sk-...")
+        self.openai_key.setText(self.provider_manager.get_api_key('openai') or '')
+        openai_layout.addRow("API Key:", self.openai_key)
+
+        openai_link = QLabel('<a href="https://platform.openai.com/api-keys">Get API key from OpenAI</a>')
+        openai_link.setOpenExternalLinks(True)
+        openai_layout.addRow("", openai_link)
+
+        self.openai_test = QPushButton("Test Connection")
+        self.openai_test.clicked.connect(lambda: self.test_provider('openai', self.openai_key.text()))
+        self.openai_status = QLabel("")
+        test_layout2 = QHBoxLayout()
+        test_layout2.addWidget(self.openai_test)
+        test_layout2.addWidget(self.openai_status)
+        test_layout2.addStretch()
+        openai_layout.addRow("", test_layout2)
+
+        layout.addWidget(openai_group)
+        self.key_inputs['openai'] = self.openai_key
+
+        # OpenRouter
+        openrouter_group = QGroupBox("OpenRouter (Access multiple models)")
+        openrouter_layout = QFormLayout(openrouter_group)
+        self.openrouter_key = QLineEdit()
+        self.openrouter_key.setEchoMode(QLineEdit.Password)
+        self.openrouter_key.setPlaceholderText("sk-or-...")
+        self.openrouter_key.setText(self.provider_manager.get_api_key('openrouter') or '')
+        openrouter_layout.addRow("API Key:", self.openrouter_key)
+
+        openrouter_link = QLabel('<a href="https://openrouter.ai/keys">Get API key from OpenRouter</a>')
+        openrouter_link.setOpenExternalLinks(True)
+        openrouter_layout.addRow("", openrouter_link)
+
+        self.openrouter_test = QPushButton("Test Connection")
+        self.openrouter_test.clicked.connect(lambda: self.test_provider('openrouter', self.openrouter_key.text()))
+        self.openrouter_status = QLabel("")
+        test_layout3 = QHBoxLayout()
+        test_layout3.addWidget(self.openrouter_test)
+        test_layout3.addWidget(self.openrouter_status)
+        test_layout3.addStretch()
+        openrouter_layout.addRow("", test_layout3)
+
+        layout.addWidget(openrouter_group)
+        self.key_inputs['openrouter'] = self.openrouter_key
+
+        # Buttons
+        button_box = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        button_box.accepted.connect(self.save_keys)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+    def test_provider(self, provider_name: str, api_key: str):
+        """Test a provider connection."""
+        if not api_key:
+            status_label = getattr(self, f"{provider_name}_status")
+            status_label.setText("Enter API key first")
+            status_label.setStyleSheet("color: orange;")
+            return
+
+        # Temporarily set the key and test
+        self.provider_manager.set_api_key(provider_name, api_key)
+        available, message = self.provider_manager.test_provider(provider_name)
+
+        status_label = getattr(self, f"{provider_name}_status")
+        if available:
+            status_label.setText("✓ Connected")
+            status_label.setStyleSheet("color: green;")
+        else:
+            status_label.setText(f"✗ {message}")
+            status_label.setStyleSheet("color: red;")
+
+    def save_keys(self):
+        """Save all API keys."""
+        for provider_name, input_widget in self.key_inputs.items():
+            key = input_widget.text().strip()
+            if key:
+                self.provider_manager.set_api_key(provider_name, key)
+
+        self.accept()
+
+
 class TemplateBuilderDialog(QDialog):
     """
     AI-Assisted Template Builder Dialog.
 
     Guides users through creating invoice templates with AI suggestions.
+    Supports multiple AI providers: Ollama (local), Claude, OpenAI, OpenRouter.
     """
 
     template_created = pyqtSignal(str, str)  # template_name, file_path
@@ -106,36 +246,54 @@ class TemplateBuilderDialog(QDialog):
         self.setWindowTitle("AI Template Builder")
         self.setMinimumSize(1200, 800)
 
-        self.ollama = OllamaHelper()
+        self.provider_manager = AIProviderManager()
+        self.current_provider = None
         self.current_text = ""
         self.analysis: Optional[TemplateAnalysis] = None
         self.patterns: Dict[str, str] = {}
         self.worker = None
 
         self.setup_ui()
-        self.check_ollama_status()
+        self.refresh_provider_status()
 
     def setup_ui(self):
         """Build the UI."""
         layout = QVBoxLayout(self)
 
-        # Status bar at top
+        # Provider selection bar at top
         self.status_frame = QFrame()
         self.status_frame.setFrameShape(QFrame.StyledPanel)
         status_layout = QHBoxLayout(self.status_frame)
         status_layout.setContentsMargins(10, 5, 10, 5)
 
-        self.ollama_status = QLabel("Checking Ollama status...")
-        self.model_combo = QComboBox()
-        self.model_combo.setMinimumWidth(150)
-        self.refresh_btn = QPushButton("Refresh")
-        self.refresh_btn.clicked.connect(self.check_ollama_status)
+        # Provider dropdown
+        status_layout.addWidget(QLabel("AI Provider:"))
+        self.provider_combo = QComboBox()
+        self.provider_combo.setMinimumWidth(150)
+        self.provider_combo.currentIndexChanged.connect(self.on_provider_changed)
+        status_layout.addWidget(self.provider_combo)
 
-        status_layout.addWidget(QLabel("Ollama:"))
-        status_layout.addWidget(self.ollama_status)
+        # Provider status
+        self.provider_status = QLabel("Checking...")
+        status_layout.addWidget(self.provider_status)
+
+        # Configure button (for API keys)
+        self.configure_btn = QPushButton("Configure...")
+        self.configure_btn.clicked.connect(self.show_api_key_dialog)
+        status_layout.addWidget(self.configure_btn)
+
         status_layout.addStretch()
+
+        # Model dropdown
         status_layout.addWidget(QLabel("Model:"))
+        self.model_combo = QComboBox()
+        self.model_combo.setMinimumWidth(200)
+        self.model_combo.currentIndexChanged.connect(self.on_model_changed)
         status_layout.addWidget(self.model_combo)
+
+        # Refresh button
+        self.refresh_btn = QPushButton("Refresh")
+        self.refresh_btn.clicked.connect(self.refresh_provider_status)
         status_layout.addWidget(self.refresh_btn)
 
         layout.addWidget(self.status_frame)
@@ -441,28 +599,88 @@ class TemplateBuilderDialog(QDialog):
 
         self.tabs.addTab(tab, "4. Save Template")
 
-    def check_ollama_status(self):
-        """Check if Ollama is available."""
-        available, message = self.ollama.is_available()
+    def refresh_provider_status(self):
+        """Refresh provider list and status."""
+        # Populate provider combo
+        self.provider_combo.blockSignals(True)
+        self.provider_combo.clear()
+
+        providers = self.provider_manager.get_available_providers()
+        default_provider = self.provider_manager.get_default_provider()
+        default_idx = 0
+
+        for i, (key, name, is_configured) in enumerate(providers):
+            status = "" if is_configured else " (not configured)"
+            self.provider_combo.addItem(f"{name}{status}", key)
+            if key == default_provider:
+                default_idx = i
+
+        self.provider_combo.setCurrentIndex(default_idx)
+        self.provider_combo.blockSignals(False)
+
+        # Update status for current provider
+        self.on_provider_changed(default_idx)
+
+    def on_provider_changed(self, index: int):
+        """Handle provider selection change."""
+        if index < 0:
+            return
+
+        provider_key = self.provider_combo.itemData(index)
+        if not provider_key:
+            return
+
+        # Test provider availability
+        available, message = self.provider_manager.test_provider(provider_key)
 
         if available:
-            self.ollama_status.setText(f"<span style='color:green;'>{message}</span>")
-            self.ollama_status.setStyleSheet("color: green;")
-            models = self.ollama.get_available_models()
-            self.model_combo.clear()
-            self.model_combo.addItems(models)
+            self.provider_status.setText(message)
+            self.provider_status.setStyleSheet("color: green;")
 
-            # Select best model
-            best = self.ollama.get_best_model()
-            if best:
-                idx = self.model_combo.findText(best)
-                if idx >= 0:
-                    self.model_combo.setCurrentIndex(idx)
+            # Get provider and update model list
+            try:
+                self.current_provider = self.provider_manager.get_provider(provider_key)
+                models = self.current_provider.get_available_models()
+                self.model_combo.clear()
+                self.model_combo.addItems(models)
+
+                # Select saved model or first
+                saved_model = self.provider_manager.get_selected_model(provider_key)
+                if saved_model:
+                    idx = self.model_combo.findText(saved_model)
+                    if idx >= 0:
+                        self.model_combo.setCurrentIndex(idx)
+
+                # Save as default
+                self.provider_manager.set_default_provider(provider_key)
+
+            except Exception as e:
+                self.provider_status.setText(f"Error: {e}")
+                self.provider_status.setStyleSheet("color: red;")
         else:
-            self.ollama_status.setText(message)
-            self.ollama_status.setStyleSheet("color: red;")
+            self.provider_status.setText(message)
+            self.provider_status.setStyleSheet("color: red;")
             self.model_combo.clear()
-            self.model_combo.addItem("No models available")
+            self.model_combo.addItem("Configure API key first")
+            self.current_provider = None
+
+    def on_model_changed(self, index: int):
+        """Handle model selection change."""
+        if index < 0 or not self.current_provider:
+            return
+
+        model = self.model_combo.currentText()
+        if model and model != "Configure API key first":
+            provider_key = self.provider_combo.itemData(self.provider_combo.currentIndex())
+            if provider_key:
+                self.provider_manager.set_selected_model(provider_key, model)
+                self.current_provider.model = model
+
+    def show_api_key_dialog(self):
+        """Show dialog to configure API keys."""
+        dialog = APIKeyDialog(self.provider_manager, self)
+        if dialog.exec_() == QDialog.Accepted:
+            self.refresh_provider_status()
 
     def browse_pdf(self):
         """Browse for a PDF file."""
@@ -525,17 +743,24 @@ class TemplateBuilderDialog(QDialog):
         if not self.current_text.strip():
             return
 
+        if not self.current_provider:
+            QMessageBox.warning(
+                self, "No Provider",
+                "Please select and configure an AI provider first."
+            )
+            return
+
         # Update model selection
         model = self.model_combo.currentText()
-        if model and model != "No models available":
-            self.ollama.model = model
+        if model and model != "Configure API key first":
+            self.current_provider.model = model
 
         self.analyze_btn.setEnabled(False)
         self.analysis_status.setText("Analyzing...")
         self.progress.setVisible(True)
         self.progress.setRange(0, 0)  # Indeterminate
 
-        self.worker = AnalysisWorker(self.ollama, self.current_text)
+        self.worker = AnalysisWorker(self.current_provider, self.current_text)
         self.worker.finished.connect(self.on_analysis_complete)
         self.worker.error.connect(self.on_analysis_error)
         self.worker.progress.connect(lambda msg: self.analysis_status.setText(msg))
@@ -640,7 +865,16 @@ class TemplateBuilderDialog(QDialog):
         if not pattern or not self.current_text:
             return
 
-        matches = self.ollama.test_pattern(pattern, self.current_text)
+        if self.current_provider:
+            matches = self.current_provider.test_pattern(pattern, self.current_text)
+        else:
+            # Fallback to basic regex test
+            import re
+            try:
+                compiled = re.compile(pattern, re.IGNORECASE | re.MULTILINE)
+                matches = compiled.findall(self.current_text)[:20]
+            except re.error as e:
+                matches = [f"Regex error: {e}"]
 
         if matches:
             result = f"Found {len(matches)} match(es):\n\n"
@@ -652,6 +886,13 @@ class TemplateBuilderDialog(QDialog):
 
     def refine_pattern(self):
         """Refine pattern with AI."""
+        if not self.current_provider:
+            QMessageBox.warning(
+                self, "No Provider",
+                "Please select and configure an AI provider first."
+            )
+            return
+
         current_item = self.pattern_list.currentItem()
         if not current_item:
             return
@@ -672,7 +913,7 @@ class TemplateBuilderDialog(QDialog):
         try:
             # Use first 500 chars of sample text
             sample = self.current_text[:500]
-            refined = self.ollama.refine_pattern(field, current_pattern, sample, desired)
+            refined = self.current_provider.refine_pattern(field, current_pattern, sample, desired)
 
             self.pattern_edit.setPlainText(refined)
             self.patterns[field] = refined
@@ -726,8 +967,8 @@ class TemplateBuilderDialog(QDialog):
                 if field in self.analysis.suggested_patterns:
                     self.analysis.suggested_patterns[field].pattern = pattern
 
-        # Generate code
-        code = self.ollama.generate_template_code(
+        # Generate code using standalone function
+        code = generate_template_code(
             self.analysis, template_name, class_name
         )
 
