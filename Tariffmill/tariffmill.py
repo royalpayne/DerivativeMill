@@ -9847,8 +9847,9 @@ Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         search_term = self.hts_db_search.text().strip()
 
         hts_db_path = BASE_DIR / "Resources" / "References" / "hts.db"
+        logger.info(f"HTS search: term='{search_term}', db_path={hts_db_path}, exists={hts_db_path.exists()}")
         if not hts_db_path.exists():
-            QMessageBox.warning(self, "Database Not Found", "hts.db not found in Resources/References/")
+            QMessageBox.warning(self, "Database Not Found", f"hts.db not found at: {hts_db_path}")
             return
 
         try:
@@ -9891,6 +9892,7 @@ Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
             rows = cursor.fetchall()
             conn.close()
+            logger.info(f"HTS search returned {len(rows)} rows")
 
             # Populate table
             self.hts_db_table.setRowCount(len(rows))
