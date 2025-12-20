@@ -8434,6 +8434,12 @@ class TariffMill(QMainWindow):
         self.crmill_create_template_btn.clicked.connect(self.crmill_open_template_builder)
         template_buttons_layout.addWidget(self.crmill_create_template_btn)
 
+        btn_auto_builder = QPushButton("Auto Builder")
+        btn_auto_builder.setStyleSheet(self.get_button_style("warning"))
+        btn_auto_builder.setToolTip("Automatically analyze PDF and generate template with minimal input")
+        btn_auto_builder.clicked.connect(self.crmill_open_auto_template_builder)
+        template_buttons_layout.addWidget(btn_auto_builder)
+
         btn_edit_template = QPushButton("Edit Selected")
         btn_edit_template.setStyleSheet(self.get_button_style("default"))
         btn_edit_template.clicked.connect(self.crmill_edit_template)
@@ -8724,6 +8730,22 @@ Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             )
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to open Template Builder: {e}")
+
+    def crmill_open_auto_template_builder(self):
+        """Open the automated template builder dialog."""
+        try:
+            from auto_template_builder import AutoTemplateBuilderDialog
+            dialog = AutoTemplateBuilderDialog(self)
+            dialog.template_created.connect(self.crmill_on_template_created)
+            dialog.exec_()
+        except ImportError as e:
+            QMessageBox.warning(
+                self, "Import Error",
+                f"Failed to load Auto Template Builder: {e}\n\n"
+                "Make sure auto_template_builder.py exists."
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to open Auto Template Builder: {e}")
 
     def crmill_on_template_created(self, template_name: str, file_path: str):
         """Handle new template creation."""
