@@ -272,7 +272,7 @@ class OllamaProvider(AIProvider):
         response = requests.post(
             f"{self.host}/api/generate",
             json=payload,
-            timeout=120
+            timeout=300  # 5 minutes for slower local models
         )
 
         if response.status_code != 200:
