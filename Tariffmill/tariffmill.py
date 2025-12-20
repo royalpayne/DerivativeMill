@@ -8420,20 +8420,32 @@ class TariffMill(QMainWindow):
         self.crmill_templates_list = QListWidget()
         templates_layout.addWidget(self.crmill_templates_list, 1)
 
-        # Template management buttons
-        template_btn_layout = QHBoxLayout()
+        # Template buttons
+        template_buttons_layout = QHBoxLayout()
 
-        self.crmill_create_template_btn = QPushButton("Create New Template (AI-Assisted)")
+        btn_create_template = QPushButton("Create New Template")
+        btn_create_template.setStyleSheet(self.get_button_style("success"))
+        btn_create_template.clicked.connect(self.crmill_create_new_template)
+        template_buttons_layout.addWidget(btn_create_template)
+
+        self.crmill_create_template_btn = QPushButton("AI-Assisted (Ollama)")
+        self.crmill_create_template_btn.setStyleSheet(self.get_button_style("info"))
         self.crmill_create_template_btn.setToolTip("Use local Ollama LLM to create a new invoice template")
         self.crmill_create_template_btn.clicked.connect(self.crmill_open_template_builder)
-        template_btn_layout.addWidget(self.crmill_create_template_btn)
+        template_buttons_layout.addWidget(self.crmill_create_template_btn)
 
-        self.crmill_refresh_templates_btn = QPushButton("Refresh")
-        self.crmill_refresh_templates_btn.clicked.connect(self.crmill_refresh_templates)
-        template_btn_layout.addWidget(self.crmill_refresh_templates_btn)
+        btn_edit_template = QPushButton("Edit Selected")
+        btn_edit_template.setStyleSheet(self.get_button_style("default"))
+        btn_edit_template.clicked.connect(self.crmill_edit_template)
+        template_buttons_layout.addWidget(btn_edit_template)
 
-        template_btn_layout.addStretch()
-        templates_layout.addLayout(template_btn_layout)
+        btn_refresh_templates = QPushButton("Refresh")
+        btn_refresh_templates.setStyleSheet(self.get_button_style("default"))
+        btn_refresh_templates.clicked.connect(self.crmill_refresh_templates)
+        template_buttons_layout.addWidget(btn_refresh_templates)
+
+        template_buttons_layout.addStretch()
+        templates_layout.addLayout(template_buttons_layout)
 
         # Populate templates
         self.crmill_refresh_templates()
@@ -8690,6 +8702,7 @@ Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         for name, info in templates.items():
             status = "Enabled" if info['enabled'] else "Disabled"
             item = QListWidgetItem(f"{info['name']} [{status}]")
+            item.setData(Qt.UserRole, name)  # Store template key
             if info['enabled']:
                 item.setForeground(Qt.darkGreen)
             else:
@@ -8717,6 +8730,154 @@ Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         self.crmill_log(f"New template created: {template_name} at {file_path}")
         self.crmill_log("Note: Restart the application to use the new template, or manually register it in templates/__init__.py")
         self.crmill_refresh_templates()
+
+    def crmill_create_new_template(self):
+        """Create a new invoice template from sample_template.py"""
+        # Get template name from user
+        name, ok = QInputDialog.getText(
+            self, "Create New Template",
+            "Enter template name (e.g., 'acme_corp'):\n\n"
+            "Use lowercase with underscores, no spaces.",
+            QLineEdit.Normal, ""
+        )
+        if not ok or not name:
+            return
+
+        # Validate name
+        name = name.strip().lower().replace(' ', '_').replace('-', '_')
+        if not name.replace('_', '').isalnum():
+            QMessageBox.warning(self, "Invalid Name", "Template name must contain only letters, numbers, and underscores.")
+            return
+
+        # Check if template already exists
+        templates_dir = BASE_DIR / "templates"
+        new_template_path = templates_dir / f"{name}.py"
+        if new_template_path.exists():
+            QMessageBox.warning(self, "Template Exists", f"A template named '{name}' already exists.")
+            return
+
+        # Read sample template
+        sample_path = templates_dir / "sample_template.py"
+        if not sample_path.exists():
+            QMessageBox.critical(self, "Error", "sample_template.py not found in templates folder.")
+            return
+
+        try:
+            with open(sample_path, 'r', encoding='utf-8') as f:
+                sample_content = f.read()
+
+            # Create class name from template name
+            class_name = ''.join(word.capitalize() for word in name.split('_')) + 'Template'
+
+            # Replace sample values with new template name
+            new_content = sample_content.replace('SampleTemplate', class_name)
+            new_content = new_content.replace('Sample Template', name.replace('_', ' ').title())
+            new_content = new_content.replace('Sample Client', 'Client Name')
+            new_content = new_content.replace('enabled = False', 'enabled = True')
+
+            # Write new template
+            with open(new_template_path, 'w', encoding='utf-8') as f:
+                f.write(new_content)
+
+            # Ask user if they want to edit the template now
+            reply = QMessageBox.question(
+                self, "Template Created",
+                f"Template '{name}' created successfully!\n\n"
+                f"File: {new_template_path}\n\n"
+                f"Would you like to open it for editing?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+
+            if reply == QMessageBox.Yes:
+                self.crmill_open_template_file(new_template_path)
+
+            # Show instructions
+            QMessageBox.information(
+                self, "Next Steps",
+                f"To complete your template:\n\n"
+                f"1. Edit {name}.py to customize extraction logic\n"
+                f"2. Register in templates/__init__.py:\n\n"
+                f"   from .{name} import {class_name}\n\n"
+                f"   Add to TEMPLATE_REGISTRY:\n"
+                f"   '{name}': {class_name},\n\n"
+                f"3. Restart TariffMill or click Refresh"
+            )
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to create template: {e}")
+
+    def crmill_edit_template(self):
+        """Edit the selected template file"""
+        current_item = self.crmill_templates_list.currentItem()
+        if not current_item:
+            QMessageBox.information(self, "No Selection", "Please select a template to edit.")
+            return
+
+        template_key = current_item.data(Qt.UserRole)
+        if not template_key:
+            # Try to extract from text
+            template_name = current_item.text().split('[')[0].strip().lower().replace(' ', '_')
+        else:
+            template_name = template_key
+
+        # Find template file
+        templates_dir = BASE_DIR / "templates"
+
+        # Try common naming patterns
+        possible_files = [
+            templates_dir / f"{template_name}.py",
+            templates_dir / f"{template_name.replace('mmcité', 'mmcite')}.py",
+            templates_dir / f"{template_name.replace(' ', '_')}.py",
+        ]
+
+        template_path = None
+        for path in possible_files:
+            if path.exists():
+                template_path = path
+                break
+
+        # If not found, list available templates
+        if not template_path:
+            # List all .py files in templates dir
+            py_files = list(templates_dir.glob("*.py"))
+            file_names = [f.stem for f in py_files if f.stem not in ('__init__', 'base_template')]
+
+            if file_names:
+                file_name, ok = QInputDialog.getItem(
+                    self, "Select Template File",
+                    "Could not auto-detect template file. Please select:",
+                    file_names, 0, False
+                )
+                if ok and file_name:
+                    template_path = templates_dir / f"{file_name}.py"
+            else:
+                QMessageBox.warning(self, "No Templates", "No template files found.")
+                return
+
+        if template_path and template_path.exists():
+            self.crmill_open_template_file(template_path)
+        else:
+            QMessageBox.warning(self, "File Not Found", f"Template file not found: {template_path}")
+
+    def crmill_open_template_file(self, file_path):
+        """Open a template file in the default editor"""
+        import os
+        import subprocess
+        import platform
+
+        try:
+            if platform.system() == 'Windows':
+                os.startfile(str(file_path))
+            elif platform.system() == 'Darwin':  # macOS
+                subprocess.run(['open', str(file_path)])
+            else:  # Linux
+                subprocess.run(['xdg-open', str(file_path)])
+        except Exception as e:
+            # Fallback: show path to user
+            QMessageBox.information(
+                self, "Open Template",
+                f"Please open the following file in your text editor:\n\n{file_path}"
+            )
 
     def refresh_parts_table(self):
         try:
