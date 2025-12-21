@@ -3952,7 +3952,7 @@ class TariffMill(QMainWindow):
 
         shared_info = QLabel(
             "Configure platform-specific database paths for cross-platform use.\n"
-            f"Current platform: <b>{current_platform}</b>\n\n"
+            f"Current platform: {current_platform}\n\n"
             "When running on Linux, the Linux path is used. When running on Windows, the Windows path is used.\n"
             "This allows the same config.ini to work on both platforms."
         )
@@ -5765,8 +5765,21 @@ class TariffMill(QMainWindow):
                 auto_pct *= scale
                 non_steel_pct *= scale
 
-            # Create derivative rows in order: Steel first, then Aluminum, Copper, Wood, Auto, Non-232 last
-            # This ensures derivatives appear BELOW the primary row in the preview
+            # Create derivative rows in order: Non-232 first, then Steel, Aluminum, Copper, Wood, Auto
+            # This ensures 232 materials appear BELOW their non-232 counterparts in the preview
+
+            # Create non-232 portion row first (if non_steel_pct > 0)
+            if non_steel_pct > 0:
+                non_232_row = row.copy()
+                non_232_row['value_usd'] = original_value * non_steel_pct / 100.0
+                non_232_row['SteelRatio'] = 0.0
+                non_232_row['AluminumRatio'] = 0.0
+                non_232_row['CopperRatio'] = 0.0
+                non_232_row['WoodRatio'] = 0.0
+                non_232_row['AutoRatio'] = 0.0
+                non_232_row['NonSteelRatio'] = non_steel_pct
+                non_232_row['_content_type'] = 'non_232'
+                expanded_rows.append(non_232_row)
 
             # Create steel portion row (if steel_pct > 0)
             if steel_pct > 0:
@@ -5832,19 +5845,6 @@ class TariffMill(QMainWindow):
                 auto_row['NonSteelRatio'] = 0.0
                 auto_row['_content_type'] = 'auto'
                 expanded_rows.append(auto_row)
-
-            # Create non-232 portion row (if non_steel_pct > 0)
-            if non_steel_pct > 0:
-                non_232_row = row.copy()
-                non_232_row['value_usd'] = original_value * non_steel_pct / 100.0
-                non_232_row['SteelRatio'] = 0.0
-                non_232_row['AluminumRatio'] = 0.0
-                non_232_row['CopperRatio'] = 0.0
-                non_232_row['WoodRatio'] = 0.0
-                non_232_row['AutoRatio'] = 0.0
-                non_232_row['NonSteelRatio'] = non_steel_pct
-                non_232_row['_content_type'] = 'non_232'
-                expanded_rows.append(non_232_row)
 
         # Rebuild dataframe from expanded rows
         df = pd.DataFrame(expanded_rows).reset_index(drop=True)
