@@ -53,6 +53,8 @@ import configparser
 import webbrowser
 import urllib.request
 import urllib.error
+import xml.etree.ElementTree as ET
+from xml.dom import minidom
 from pathlib import Path
 from datetime import datetime
 from threading import Thread
@@ -1062,6 +1064,14 @@ def init_database():
             export_profile_name TEXT
         )""")
 
+        # Create folder_profiles table for input/output folder location profiles
+        c.execute("""CREATE TABLE IF NOT EXISTS folder_profiles (
+            profile_name TEXT PRIMARY KEY,
+            input_folder TEXT,
+            output_folder TEXT,
+            created_date TEXT
+        )""")
+
         # Migration: Add manufacturer_name and customer_id columns to mid_table if they don't exist
         try:
             c.execute("PRAGMA table_info(mid_table)")
@@ -2040,6 +2050,16 @@ class TariffMill(QMainWindow):
         config_action.triggered.connect(self.show_configuration_dialog)
         config_menu.addAction(config_action)
 
+        # Add Export menu
+        export_menu = menubar.addMenu("Export")
+
+        # Export to XML action
+        xml_icon = self.style().standardIcon(QStyle.SP_FileIcon)
+        xml_export_action = QAction(xml_icon, "Export to XML...", self)
+        xml_export_action.triggered.connect(self.export_to_xml)
+        xml_export_action.setToolTip("Export processed invoice data to XML format for e2Open Customs Management")
+        export_menu.addAction(xml_export_action)
+
         # Add Help menu
         help_menu = menubar.addMenu("Help")
 
@@ -2105,13 +2125,13 @@ class TariffMill(QMainWindow):
         
         # Bottom status bar with export progress indicator
         bottom_bar = QWidget()
-        bottom_bar.setMinimumHeight(28)
+        bottom_bar.setMinimumHeight(18)
         bottom_bar_layout = QHBoxLayout(bottom_bar)
-        bottom_bar_layout.setContentsMargins(10, 5, 10, 5)
+        bottom_bar_layout.setContentsMargins(10, 2, 10, 2)
         bottom_bar_layout.setSpacing(10)
 
         self.bottom_status = QLabel("Ready")
-        self.bottom_status.setMinimumHeight(20)
+        self.bottom_status.setStyleSheet("font-size: 8px;")
         bottom_bar_layout.addWidget(self.bottom_status, 1)
         
         # Export progress indicator (hidden by default)
@@ -2325,6 +2345,13 @@ class TariffMill(QMainWindow):
         self.mid_combo.currentTextChanged.connect(self.on_mid_changed)
         values_layout.addRow(self.mid_label, self.mid_combo)
 
+        # Customer Reference Number (for XML export)
+        self.customer_ref_input = ForceEditableLineEdit("")
+        self.customer_ref_input.setObjectName("customer_ref_input")
+        self.customer_ref_input.setPlaceholderText("Optional - for XML export")
+        self.customer_ref_input.setToolTip("Customer reference number included in XML export header")
+        values_layout.addRow("Customer Ref:", self.customer_ref_input)
+
         # Removed broken setTabOrder calls - they were causing Qt warnings and possibly blocking keyboard input
 
         # Invoice check label and Edit Values button
@@ -2361,6 +2388,20 @@ class TariffMill(QMainWindow):
         file_group.setObjectName("SavedProfilesGroup")
         file_layout = QFormLayout()
         file_layout.setLabelAlignment(Qt.AlignRight)
+
+        # Folder profile selector with manage button
+        folder_profile_row = QHBoxLayout()
+        self.folder_profile_combo = QComboBox()
+        self.folder_profile_combo.setMinimumWidth(150)
+        self.folder_profile_combo.currentTextChanged.connect(self.load_folder_profile)
+        folder_profile_row.addWidget(self.folder_profile_combo)
+        self.manage_folder_profiles_btn = QPushButton("...")
+        self.manage_folder_profiles_btn.setFixedWidth(30)
+        self.manage_folder_profiles_btn.setToolTip("Manage folder profiles")
+        self.manage_folder_profiles_btn.clicked.connect(self.show_folder_profile_dialog)
+        folder_profile_row.addWidget(self.manage_folder_profiles_btn)
+        file_layout.addRow("Folder Profile:", folder_profile_row)
+
         # Profile selector
         self.profile_combo = QComboBox()
         self.profile_combo.currentTextChanged.connect(self.load_selected_profile)
@@ -2464,9 +2505,9 @@ class TariffMill(QMainWindow):
         preview_layout = QVBoxLayout()
 
         self.table = QTableWidget()
-        self.table.setColumnCount(19)
+        self.table.setColumnCount(20)
         self.table.setHorizontalHeaderLabels([
-            "Product No","Value","HTS","MID","Qty1","Qty2","Qty Unit","Dec","Melt","Cast","Smelt","Flag","Steel%","Al%","Cu%","Wood%","Auto%","Non-232%","232 Status"
+            "Product No","Value","HTS","MID","Qty1","Qty2","Qty Unit","Dec","Melt","Cast","Smelt","Flag","Steel%","Al%","Cu%","Wood%","Auto%","Non-232%","232 Status","Cust Ref"
         ])
         # Make columns manually resizable instead of auto-stretch
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
@@ -2525,7 +2566,8 @@ class TariffMill(QMainWindow):
         self.setTabOrder(self.refresh_input_btn, self.ci_input)
         self.setTabOrder(self.ci_input, self.wt_input)
         self.setTabOrder(self.wt_input, self.mid_combo)
-        self.setTabOrder(self.mid_combo, self.process_btn)
+        self.setTabOrder(self.mid_combo, self.customer_ref_input)
+        self.setTabOrder(self.customer_ref_input, self.process_btn)
         self.setTabOrder(self.process_btn, self.edit_values_btn)
         self.setTabOrder(self.edit_values_btn, self.clear_btn)
         self.setTabOrder(self.clear_btn, self.exports_list)
@@ -3804,93 +3846,7 @@ class TariffMill(QMainWindow):
         updates_layout.addStretch()
         tabs.addTab(updates_widget, "Updates")
 
-        # ===== TAB 5: CRMILL SETTINGS =====
-        ocrmill_widget = QWidget()
-        ocrmill_layout = QVBoxLayout(ocrmill_widget)
-
-        # OCRMill Folders Group
-        ocrmill_folders_group = QGroupBox("OCRMill Folder Settings")
-        ocrmill_folders_layout = QFormLayout()
-
-        # Input folder
-        ocrmill_input_path = get_user_setting('ocrmill_input_folder', str(BASE_DIR / "Input" / "OCRMill"))
-        ocrmill_input_edit = QLineEdit(str(Path(ocrmill_input_path)))
-        ocrmill_input_edit.setReadOnly(True)
-        ocrmill_input_browse = QPushButton("Browse...")
-        ocrmill_input_row = QHBoxLayout()
-        ocrmill_input_row.addWidget(ocrmill_input_edit)
-        ocrmill_input_row.addWidget(ocrmill_input_browse)
-        ocrmill_folders_layout.addRow("Input Folder:", ocrmill_input_row)
-
-        def browse_ocrmill_input():
-            folder = QFileDialog.getExistingDirectory(dialog, "Select OCRMill Input Folder", ocrmill_input_edit.text())
-            if folder:
-                # Normalize path to OS-native format
-                folder_str = str(Path(folder))
-                ocrmill_input_edit.setText(folder_str)
-                set_user_setting('ocrmill_input_folder', folder_str)
-        ocrmill_input_browse.clicked.connect(browse_ocrmill_input)
-
-        # Output folder
-        ocrmill_output_path = get_user_setting('ocrmill_output_folder', str(BASE_DIR / "Output" / "OCRMill"))
-        ocrmill_output_edit = QLineEdit(str(Path(ocrmill_output_path)))
-        ocrmill_output_edit.setReadOnly(True)
-        ocrmill_output_browse = QPushButton("Browse...")
-        ocrmill_output_row = QHBoxLayout()
-        ocrmill_output_row.addWidget(ocrmill_output_edit)
-        ocrmill_output_row.addWidget(ocrmill_output_browse)
-        ocrmill_folders_layout.addRow("Output Folder:", ocrmill_output_row)
-
-        def browse_ocrmill_output():
-            folder = QFileDialog.getExistingDirectory(dialog, "Select OCRMill Output Folder", ocrmill_output_edit.text())
-            if folder:
-                # Normalize path to OS-native format
-                folder_str = str(Path(folder))
-                ocrmill_output_edit.setText(folder_str)
-                set_user_setting('ocrmill_output_folder', folder_str)
-        ocrmill_output_browse.clicked.connect(browse_ocrmill_output)
-
-        ocrmill_folders_group.setLayout(ocrmill_folders_layout)
-        ocrmill_layout.addWidget(ocrmill_folders_group)
-
-        # OCRMill Processing Options
-        ocrmill_options_group = QGroupBox("Processing Options")
-        ocrmill_options_layout = QFormLayout()
-
-        # Poll interval
-        ocrmill_poll_spin = QSpinBox()
-        ocrmill_poll_spin.setRange(10, 300)
-        ocrmill_poll_spin.setValue(get_user_setting_int('ocrmill_poll_interval', 60))
-        ocrmill_poll_spin.setSuffix(" seconds")
-        ocrmill_poll_spin.valueChanged.connect(lambda v: set_user_setting('ocrmill_poll_interval', str(v)))
-        ocrmill_options_layout.addRow("Monitoring Poll Interval:", ocrmill_poll_spin)
-
-        # Consolidate multi-invoice
-        ocrmill_consolidate_check = QCheckBox("Consolidate multiple invoices into single CSV")
-        ocrmill_consolidate_check.setChecked(get_user_setting_bool('ocrmill_consolidate', False))
-        ocrmill_consolidate_check.stateChanged.connect(lambda s: set_user_setting('ocrmill_consolidate', 'true' if s else 'false'))
-        ocrmill_options_layout.addRow("", ocrmill_consolidate_check)
-
-        # Auto-start monitoring
-        ocrmill_autostart_check = QCheckBox("Auto-start monitoring on application launch")
-        ocrmill_autostart_check.setChecked(get_user_setting_bool('ocrmill_autostart', False))
-        ocrmill_autostart_check.stateChanged.connect(lambda s: set_user_setting('ocrmill_autostart', 'true' if s else 'false'))
-        ocrmill_options_layout.addRow("", ocrmill_autostart_check)
-
-        ocrmill_options_group.setLayout(ocrmill_options_layout)
-        ocrmill_layout.addWidget(ocrmill_options_group)
-
-        # Info label
-        ocrmill_info = QLabel(
-            "OCRMill integrates OCRInvoiceMill for automated PDF invoice processing.\n"
-            "Drop PDF invoices in the input folder and OCRMill will extract line items,\n"
-            "enrich with HTS codes, and export to CSV."
-        )
-        ocrmill_info.setStyleSheet(f"color: {info_text_color}; font-style: italic;")
-        ocrmill_layout.addWidget(ocrmill_info)
-
-        ocrmill_layout.addStretch()
-        tabs.addTab(ocrmill_widget, "OCRMill")
+        # OCRMill settings moved to OCRMill tab's Settings sub-tab
 
         # Add tabs to main dialog layout
         layout.addWidget(tabs)
@@ -4904,6 +4860,8 @@ class TariffMill(QMainWindow):
         self.file_label.setText("No file selected")
         self.ci_input.clear()
         self.wt_input.clear()
+        if hasattr(self, 'customer_ref_input'):
+            self.customer_ref_input.clear()
         self.mid_combo.setCurrentIndex(-1)
         self.selected_mid = ""
         self.table.setRowCount(0)
@@ -5527,7 +5485,7 @@ class TariffMill(QMainWindow):
 
         # Dual units: first quantity is count, second is weight (Qty1 = count, Qty2 = weight)
         # Includes NO. AND KG and metal+weight combinations
-        DUAL_UNITS = {'NO. AND KG', 'NO/KG', 'NO\KG',
+        DUAL_UNITS = {'NO. AND KG', 'NO/KG', 'NO\\KG',
                       'CU KG', 'CY KG', 'NI KG', 'PB KG', 'ZN KG', 'KG AMC',
                       'AG G', 'AU G', 'IR G', 'OS G', 'PD G', 'PT G', 'RH G', 'RU G'}
 
@@ -5980,6 +5938,9 @@ class TariffMill(QMainWindow):
             # Get qty_unit from database (KG, NO, etc.) for display
             qty_unit_display = str(r.get('qty_unit', '')).strip().upper() if pd.notna(r.get('qty_unit')) else ""
 
+            # Get customer reference from input field
+            customer_ref_display = self.customer_ref_input.text().strip() if hasattr(self, 'customer_ref_input') else ""
+
             items = [
                 QTableWidgetItem(product_no),                        # 0: Product No
                 value_item,                                          # 1: Value
@@ -5999,12 +5960,13 @@ class TariffMill(QMainWindow):
                 QTableWidgetItem(wood_display),                      # 15: Wood%
                 QTableWidgetItem(auto_display),                      # 16: Auto%
                 QTableWidgetItem(non_steel_display),                 # 17: Non-232%
-                QTableWidgetItem(status_display)                     # 18: 232 Status
+                QTableWidgetItem(status_display),                    # 18: 232 Status
+                QTableWidgetItem(customer_ref_display)               # 19: Cust Ref
             ]
 
-            # Make all items editable except Net Wt, Pcs, Steel%, Al%, Cu%, Wood%, Auto%, Non-232%, 232 Status
+            # Make all items editable except Qty1, Qty2, Steel%, Al%, Cu%, Wood%, Auto%, Non-232%, 232 Status
             for idx, item in enumerate(items):
-                if idx not in [4, 5, 12, 13, 14, 15, 16, 17, 18]:  # Not Net Wt, Pcs, Steel%, Al%, Cu%, Wood%, Auto%, Non-232%, 232 Status
+                if idx not in [4, 5, 12, 13, 14, 15, 16, 17, 18]:  # Not Qty1, Qty2, Steel%, Al%, Cu%, Wood%, Auto%, Non-232%, 232 Status
                     item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsEditable)
 
             # Set font colors based on Section 232 material type
@@ -7113,7 +7075,7 @@ class TariffMill(QMainWindow):
             'Product No', 'ValueUSD', 'HTSCode', 'MID', 'Qty1', 'Qty2',
             'DecTypeCd', 'CountryofMelt', 'CountryOfCast', 'PrimCountryOfSmelt',
             'DeclarationFlag', 'SteelRatio', 'AluminumRatio', 'CopperRatio',
-            'WoodRatio', 'AutoRatio', 'NonSteelRatio', '232_Status'
+            'WoodRatio', 'AutoRatio', 'NonSteelRatio', '232_Status', 'CustomerRef'
         ]
 
         # Default column mappings (internal_name: display_name)
@@ -7985,6 +7947,255 @@ class TariffMill(QMainWindow):
         except Exception as e:
             logger.warning(f"Failed to refresh linked export combo: {e}")
 
+    # ========== FOLDER PROFILE FUNCTIONS ==========
+
+    def load_folder_profiles(self):
+        """Load folder profiles into the dropdown"""
+        if not hasattr(self, 'folder_profile_combo'):
+            return
+
+        try:
+            current_text = self.folder_profile_combo.currentText()
+            self.folder_profile_combo.blockSignals(True)
+            self.folder_profile_combo.clear()
+            self.folder_profile_combo.addItem("-- Select Folder Profile --")
+
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("SELECT profile_name FROM folder_profiles ORDER BY profile_name")
+            for row in c.fetchall():
+                self.folder_profile_combo.addItem(row[0])
+            conn.close()
+
+            # Restore selection if it exists
+            if current_text and current_text != "-- Select Folder Profile --":
+                idx = self.folder_profile_combo.findText(current_text)
+                if idx >= 0:
+                    self.folder_profile_combo.setCurrentIndex(idx)
+
+            self.folder_profile_combo.blockSignals(False)
+        except Exception as e:
+            logger.warning(f"Failed to load folder profiles: {e}")
+            self.folder_profile_combo.blockSignals(False)
+
+    def load_folder_profile(self, name):
+        """Load a folder profile and update INPUT_DIR and OUTPUT_DIR"""
+        global INPUT_DIR, OUTPUT_DIR
+
+        if not name or name == "-- Select Folder Profile --":
+            return
+
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("SELECT input_folder, output_folder FROM folder_profiles WHERE profile_name = ?", (name,))
+            row = c.fetchone()
+            conn.close()
+
+            if row:
+                input_folder, output_folder = row
+                if input_folder:
+                    input_folder = os.path.normpath(input_folder)
+                    INPUT_DIR = Path(input_folder)
+                    set_user_setting('input_folder', input_folder)
+                if output_folder:
+                    output_folder = os.path.normpath(output_folder)
+                    OUTPUT_DIR = Path(output_folder)
+                    set_user_setting('output_folder', output_folder)
+
+                # Refresh the input files list
+                self.refresh_input_files()
+                self.refresh_exported_files()
+
+                logger.info(f"Loaded folder profile: {name}")
+                self.bottom_status.setText(f"Folder profile loaded: {name}")
+        except Exception as e:
+            logger.error(f"Failed to load folder profile: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to load folder profile: {e}")
+
+    def show_folder_profile_dialog(self):
+        """Show dialog to manage folder profiles"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Manage Folder Profiles")
+        dialog.setMinimumSize(500, 400)
+
+        layout = QVBoxLayout(dialog)
+
+        # Profile list
+        list_group = QGroupBox("Saved Folder Profiles")
+        list_layout = QVBoxLayout()
+
+        self.folder_profile_list = QListWidget()
+        self.folder_profile_list.itemClicked.connect(self._folder_profile_selected)
+        list_layout.addWidget(self.folder_profile_list)
+
+        list_group.setLayout(list_layout)
+        layout.addWidget(list_group)
+
+        # Edit group
+        edit_group = QGroupBox("Profile Details")
+        edit_layout = QFormLayout()
+
+        self.folder_profile_name_edit = QLineEdit()
+        self.folder_profile_name_edit.setPlaceholderText("Enter profile name...")
+        edit_layout.addRow("Profile Name:", self.folder_profile_name_edit)
+
+        # Input folder
+        input_row = QHBoxLayout()
+        self.folder_profile_input_edit = QLineEdit()
+        self.folder_profile_input_edit.setPlaceholderText("Select input folder...")
+        input_browse_btn = QPushButton("Browse...")
+        input_browse_btn.clicked.connect(self._browse_folder_profile_input)
+        input_row.addWidget(self.folder_profile_input_edit)
+        input_row.addWidget(input_browse_btn)
+        edit_layout.addRow("Input Folder:", input_row)
+
+        # Output folder
+        output_row = QHBoxLayout()
+        self.folder_profile_output_edit = QLineEdit()
+        self.folder_profile_output_edit.setPlaceholderText("Select output folder...")
+        output_browse_btn = QPushButton("Browse...")
+        output_browse_btn.clicked.connect(self._browse_folder_profile_output)
+        output_row.addWidget(self.folder_profile_output_edit)
+        output_row.addWidget(output_browse_btn)
+        edit_layout.addRow("Output Folder:", output_row)
+
+        edit_group.setLayout(edit_layout)
+        layout.addWidget(edit_group)
+
+        # Buttons
+        btn_layout = QHBoxLayout()
+
+        save_btn = QPushButton("Save Profile")
+        save_btn.setStyleSheet(self.get_button_style("success"))
+        save_btn.clicked.connect(lambda: self._save_folder_profile(dialog))
+        btn_layout.addWidget(save_btn)
+
+        delete_btn = QPushButton("Delete Profile")
+        delete_btn.setStyleSheet(self.get_button_style("danger"))
+        delete_btn.clicked.connect(lambda: self._delete_folder_profile(dialog))
+        btn_layout.addWidget(delete_btn)
+
+        btn_layout.addStretch()
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dialog.accept)
+        btn_layout.addWidget(close_btn)
+
+        layout.addLayout(btn_layout)
+
+        # Load existing profiles
+        self._refresh_folder_profile_list()
+
+        # Pre-fill with current folders
+        self.folder_profile_input_edit.setText(str(INPUT_DIR))
+        self.folder_profile_output_edit.setText(str(OUTPUT_DIR))
+
+        dialog.exec_()
+
+        # Refresh dropdown after dialog closes
+        self.load_folder_profiles()
+
+    def _refresh_folder_profile_list(self):
+        """Refresh the folder profile list in the dialog"""
+        self.folder_profile_list.clear()
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("SELECT profile_name, input_folder, output_folder FROM folder_profiles ORDER BY profile_name")
+            for row in c.fetchall():
+                item = QListWidgetItem(row[0])
+                item.setData(Qt.UserRole, {'input': row[1], 'output': row[2]})
+                self.folder_profile_list.addItem(item)
+            conn.close()
+        except Exception as e:
+            logger.warning(f"Failed to refresh folder profile list: {e}")
+
+    def _folder_profile_selected(self, item):
+        """Handle folder profile selection in dialog"""
+        self.folder_profile_name_edit.setText(item.text())
+        data = item.data(Qt.UserRole)
+        if data:
+            self.folder_profile_input_edit.setText(self._normalize_path(data.get('input', '')))
+            self.folder_profile_output_edit.setText(self._normalize_path(data.get('output', '')))
+
+    def _normalize_path(self, path):
+        """Normalize path for the current operating system"""
+        if not path:
+            return path
+        # Use os.path.normpath to convert slashes appropriately for the OS
+        return os.path.normpath(path)
+
+    def _browse_folder_profile_input(self):
+        """Browse for input folder in profile dialog"""
+        folder = QFileDialog.getExistingDirectory(self, "Select Input Folder", self.folder_profile_input_edit.text())
+        if folder:
+            self.folder_profile_input_edit.setText(self._normalize_path(folder))
+
+    def _browse_folder_profile_output(self):
+        """Browse for output folder in profile dialog"""
+        folder = QFileDialog.getExistingDirectory(self, "Select Output Folder", self.folder_profile_output_edit.text())
+        if folder:
+            self.folder_profile_output_edit.setText(self._normalize_path(folder))
+
+    def _save_folder_profile(self, dialog):
+        """Save the folder profile"""
+        name = self.folder_profile_name_edit.text().strip()
+        if not name:
+            QMessageBox.warning(dialog, "Missing Name", "Please enter a profile name.")
+            return
+
+        input_folder = self._normalize_path(self.folder_profile_input_edit.text().strip())
+        output_folder = self._normalize_path(self.folder_profile_output_edit.text().strip())
+
+        if not input_folder or not output_folder:
+            QMessageBox.warning(dialog, "Missing Folders", "Please select both input and output folders.")
+            return
+
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("""INSERT OR REPLACE INTO folder_profiles
+                        (profile_name, input_folder, output_folder, created_date)
+                        VALUES (?, ?, ?, ?)""",
+                     (name, input_folder, output_folder, datetime.now().isoformat()))
+            conn.commit()
+            conn.close()
+
+            logger.success(f"Folder profile saved: {name}")
+            QMessageBox.information(dialog, "Saved", f"Folder profile '{name}' saved successfully.")
+            self._refresh_folder_profile_list()
+        except Exception as e:
+            logger.error(f"Failed to save folder profile: {e}")
+            QMessageBox.critical(dialog, "Error", f"Failed to save folder profile: {e}")
+
+    def _delete_folder_profile(self, dialog):
+        """Delete the selected folder profile"""
+        current_item = self.folder_profile_list.currentItem()
+        if not current_item:
+            QMessageBox.information(dialog, "No Selection", "Please select a profile to delete.")
+            return
+
+        name = current_item.text()
+        reply = QMessageBox.question(dialog, "Confirm Delete",
+                                    f"Are you sure you want to delete the folder profile '{name}'?",
+                                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+
+        if reply == QMessageBox.Yes:
+            try:
+                conn = sqlite3.connect(str(DB_PATH))
+                c = conn.cursor()
+                c.execute("DELETE FROM folder_profiles WHERE profile_name = ?", (name,))
+                conn.commit()
+                conn.close()
+
+                logger.info(f"Folder profile deleted: {name}")
+                self._refresh_folder_profile_list()
+                self.folder_profile_name_edit.clear()
+            except Exception as e:
+                logger.error(f"Failed to delete folder profile: {e}")
+                QMessageBox.critical(dialog, "Error", f"Failed to delete folder profile: {e}")
+
     def apply_current_mapping(self):
         # Check if shipment_targets is valid (not deleted after dialog close)
         if not hasattr(self, 'shipment_targets') or not self.shipment_targets:
@@ -8385,6 +8596,11 @@ class TariffMill(QMainWindow):
         btn_edit_template.clicked.connect(self.ocrmill_edit_template)
         template_buttons_layout.addWidget(btn_edit_template)
 
+        btn_delete_template = QPushButton("Delete Selected")
+        btn_delete_template.setStyleSheet(self.get_button_style("danger"))
+        btn_delete_template.clicked.connect(self.ocrmill_delete_template)
+        template_buttons_layout.addWidget(btn_delete_template)
+
         btn_refresh_templates = QPushButton("Refresh")
         btn_refresh_templates.setStyleSheet(self.get_button_style("default"))
         btn_refresh_templates.clicked.connect(self.ocrmill_refresh_templates)
@@ -8397,6 +8613,99 @@ class TariffMill(QMainWindow):
         self.ocrmill_refresh_templates()
 
         self.ocrmill_tabs.addTab(templates_widget, "Templates")
+
+        # ===== TAB 3: SETTINGS =====
+        settings_widget = QWidget()
+        settings_layout = QVBoxLayout(settings_widget)
+
+        # Folder Settings Group
+        folders_group = QGroupBox("Folder Settings")
+        folders_layout = QFormLayout()
+
+        # Input folder (uses same controls as Invoice Processing tab)
+        settings_input_row = QHBoxLayout()
+        self.ocrmill_settings_input_edit = QLineEdit(str(self.ocrmill_config.input_folder))
+        self.ocrmill_settings_input_edit.setReadOnly(True)
+        settings_input_browse = QPushButton("Browse...")
+        settings_input_browse.clicked.connect(self.ocrmill_settings_browse_input)
+        settings_input_row.addWidget(self.ocrmill_settings_input_edit)
+        settings_input_row.addWidget(settings_input_browse)
+        folders_layout.addRow("Input Folder:", settings_input_row)
+
+        # Output folder
+        settings_output_row = QHBoxLayout()
+        self.ocrmill_settings_output_edit = QLineEdit(str(self.ocrmill_config.output_folder))
+        self.ocrmill_settings_output_edit.setReadOnly(True)
+        settings_output_browse = QPushButton("Browse...")
+        settings_output_browse.clicked.connect(self.ocrmill_settings_browse_output)
+        settings_output_row.addWidget(self.ocrmill_settings_output_edit)
+        settings_output_row.addWidget(settings_output_browse)
+        folders_layout.addRow("Output Folder:", settings_output_row)
+
+        folders_group.setLayout(folders_layout)
+        settings_layout.addWidget(folders_group)
+
+        # Processing Options Group
+        options_group = QGroupBox("Processing Options")
+        options_layout = QFormLayout()
+
+        # Poll interval
+        self.ocrmill_poll_spin = QSpinBox()
+        self.ocrmill_poll_spin.setRange(10, 300)
+        self.ocrmill_poll_spin.setValue(self.ocrmill_config.poll_interval)
+        self.ocrmill_poll_spin.setSuffix(" seconds")
+        self.ocrmill_poll_spin.valueChanged.connect(self.ocrmill_poll_interval_changed)
+        options_layout.addRow("Monitoring Poll Interval:", self.ocrmill_poll_spin)
+
+        # Auto-start monitoring
+        self.ocrmill_autostart_check = QCheckBox("Auto-start monitoring on application launch")
+        self.ocrmill_autostart_check.setChecked(get_user_setting_bool('ocrmill_autostart', False))
+        self.ocrmill_autostart_check.stateChanged.connect(lambda s: set_user_setting('ocrmill_autostart', 'true' if s else 'false'))
+        options_layout.addRow("", self.ocrmill_autostart_check)
+
+        options_group.setLayout(options_layout)
+        settings_layout.addWidget(options_group)
+
+        # Output Mode Group
+        output_mode_group = QGroupBox("Output Mode")
+        output_mode_layout = QVBoxLayout()
+
+        output_mode_label = QLabel("When processing a PDF containing multiple invoices:")
+        output_mode_layout.addWidget(output_mode_label)
+
+        self.ocrmill_output_mode_group = QButtonGroup(self)
+
+        self.ocrmill_split_output_radio = QRadioButton("Split into separate CSV files (one per invoice)")
+        self.ocrmill_split_output_radio.setToolTip("Each invoice in the PDF will be saved as a separate CSV file")
+        self.ocrmill_output_mode_group.addButton(self.ocrmill_split_output_radio, 0)
+        output_mode_layout.addWidget(self.ocrmill_split_output_radio)
+
+        self.ocrmill_single_output_radio = QRadioButton("Combine into single CSV file (all invoices together)")
+        self.ocrmill_single_output_radio.setToolTip("All invoices in the PDF will be combined into one CSV file")
+        self.ocrmill_output_mode_group.addButton(self.ocrmill_single_output_radio, 1)
+        output_mode_layout.addWidget(self.ocrmill_single_output_radio)
+
+        # Set initial state from config
+        if get_user_setting_bool('ocrmill_consolidate', False):
+            self.ocrmill_single_output_radio.setChecked(True)
+        else:
+            self.ocrmill_split_output_radio.setChecked(True)
+
+        self.ocrmill_output_mode_group.buttonClicked.connect(self.ocrmill_output_mode_changed)
+
+        output_mode_group.setLayout(output_mode_layout)
+        settings_layout.addWidget(output_mode_group)
+
+        # Info label
+        info_label = QLabel(
+            "OCRMill processes PDF invoices and extracts line items with HTS codes.\n"
+            "Configure folders and processing options above."
+        )
+        info_label.setStyleSheet("color: #666666; font-style: italic;")
+        settings_layout.addWidget(info_label)
+
+        settings_layout.addStretch()
+        self.ocrmill_tabs.addTab(settings_widget, "Settings")
 
         layout.addWidget(self.ocrmill_tabs, 1)
 
@@ -8437,6 +8746,47 @@ class TariffMill(QMainWindow):
             self.ocrmill_output_edit.setText(folder_str)
             set_user_setting('ocrmill_output_folder', folder_str)
             self.ocrmill_log(f"Output folder set to: {folder_str}")
+
+    def ocrmill_settings_browse_input(self):
+        """Browse for input folder from Settings tab."""
+        folder = QFileDialog.getExistingDirectory(self, "Select Input Folder", str(self.ocrmill_config.input_folder))
+        if folder:
+            folder_path = Path(folder)
+            folder_str = str(folder_path)
+            self.ocrmill_config.input_folder = folder_path
+            # Update both the Settings tab and Invoice Processing tab
+            self.ocrmill_settings_input_edit.setText(folder_str)
+            self.ocrmill_input_edit.setText(folder_str)
+            self.ocrmill_drop_zone.set_browse_folder(folder_str)
+            set_user_setting('ocrmill_input_folder', folder_str)
+            self.ocrmill_log(f"Input folder set to: {folder_str}")
+
+    def ocrmill_settings_browse_output(self):
+        """Browse for output folder from Settings tab."""
+        folder = QFileDialog.getExistingDirectory(self, "Select Output Folder", str(self.ocrmill_config.output_folder))
+        if folder:
+            folder_path = Path(folder)
+            folder_str = str(folder_path)
+            self.ocrmill_config.output_folder = folder_path
+            # Update both the Settings tab and Invoice Processing tab
+            self.ocrmill_settings_output_edit.setText(folder_str)
+            self.ocrmill_output_edit.setText(folder_str)
+            set_user_setting('ocrmill_output_folder', folder_str)
+            self.ocrmill_log(f"Output folder set to: {folder_str}")
+
+    def ocrmill_poll_interval_changed(self, value):
+        """Handle poll interval change."""
+        self.ocrmill_config.poll_interval = value
+        set_user_setting('ocrmill_poll_interval', str(value))
+
+    def ocrmill_output_mode_changed(self, button):
+        """Handle output mode radio button change."""
+        # Button ID 0 = split files, Button ID 1 = single file
+        consolidate = self.ocrmill_output_mode_group.id(button) == 1
+        self.ocrmill_config.consolidate_multi_invoice = consolidate
+        set_user_setting('ocrmill_consolidate', 'true' if consolidate else 'false')
+        mode_text = "single combined file" if consolidate else "separate files per invoice"
+        self.ocrmill_log(f"Output mode changed to: {mode_text}")
 
     def ocrmill_toggle_monitoring(self):
         """Toggle folder monitoring on/off."""
@@ -8875,6 +9225,73 @@ Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                 self, "Open Template",
                 f"Please open the following file in your text editor:\n\n{file_path}"
             )
+
+    def ocrmill_delete_template(self):
+        """Delete the selected template file"""
+        current_item = self.ocrmill_templates_list.currentItem()
+        if not current_item:
+            QMessageBox.information(self, "No Selection", "Please select a template to delete.")
+            return
+
+        template_key = current_item.data(Qt.UserRole)
+        if not template_key:
+            # Try to extract from text
+            template_name = current_item.text().split('[')[0].strip().lower().replace(' ', '_')
+        else:
+            template_name = template_key
+
+        # Find template file
+        templates_dir = BASE_DIR / "templates"
+
+        # Try common naming patterns
+        possible_files = [
+            templates_dir / f"{template_name}.py",
+            templates_dir / f"{template_name.replace('mmcité', 'mmcite')}.py",
+            templates_dir / f"{template_name.replace(' ', '_')}.py",
+        ]
+
+        template_path = None
+        for path in possible_files:
+            if path.exists():
+                template_path = path
+                break
+
+        # If not found, list available templates
+        if not template_path:
+            py_files = list(templates_dir.glob("*.py"))
+            file_names = [f.stem for f in py_files if f.stem not in ('__init__', 'base_template')]
+
+            if file_names:
+                file_name, ok = QInputDialog.getItem(
+                    self, "Select Template File",
+                    "Could not auto-detect template file. Please select:",
+                    file_names, 0, False
+                )
+                if ok and file_name:
+                    template_path = templates_dir / f"{file_name}.py"
+            else:
+                QMessageBox.warning(self, "No Templates", "No template files found.")
+                return
+
+        if template_path and template_path.exists():
+            # Confirm deletion
+            reply = QMessageBox.question(
+                self, "Confirm Delete",
+                f"Are you sure you want to delete the template:\n\n{template_path.name}\n\nThis action cannot be undone.",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+
+            if reply == QMessageBox.Yes:
+                try:
+                    template_path.unlink()
+                    self.ocrmill_log(f"Deleted template: {template_path.name}")
+                    self.ocrmill_refresh_templates()
+                    QMessageBox.information(self, "Deleted", f"Template '{template_path.name}' has been deleted.")
+                except Exception as e:
+                    QMessageBox.critical(self, "Error", f"Failed to delete template:\n{str(e)}")
+        else:
+            QMessageBox.warning(self, "File Not Found", f"Template file not found: {template_path}")
 
     def refresh_parts_table(self):
         try:
@@ -11037,6 +11454,10 @@ Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
         df_out = pd.DataFrame(export_data)
 
+        # Add CustomerRef column from input field
+        customer_ref = self.customer_ref_input.text().strip() if hasattr(self, 'customer_ref_input') else ""
+        df_out['CustomerRef'] = customer_ref
+
         # Build masks for each Section 232 material type BEFORE converting to percentage strings
         steel_mask = df_out['_232_flag'].fillna('').str.contains('232_Steel', case=False, na=False)
         aluminum_mask = df_out['_232_flag'].fillna('').str.contains('232_Aluminum', case=False, na=False)
@@ -11066,7 +11487,7 @@ Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             all_columns = ['Product No', 'ValueUSD', 'HTSCode', 'MID', 'Qty1', 'Qty2',
                 'DecTypeCd', 'CountryofMelt', 'CountryOfCast', 'PrimCountryOfSmelt',
                 'DeclarationFlag', 'SteelRatio', 'AluminumRatio', 'CopperRatio',
-                'WoodRatio', 'AutoRatio', 'NonSteelRatio', '232_Status']
+                'WoodRatio', 'AutoRatio', 'NonSteelRatio', '232_Status', 'CustomerRef']
 
         # Filter columns based on visibility settings
         cols = []
@@ -11090,6 +11511,14 @@ Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             else:
                 # Non-ratio columns are always included
                 cols.append(col)
+
+        # Filter out columns that don't exist in the DataFrame
+        cols = [col for col in cols if col in df_out.columns]
+
+        # Ensure we have at least one column to export
+        if not cols:
+            QMessageBox.critical(self, "Export Error", "No valid columns to export. Please check your column configuration.")
+            return
 
         # Apply custom column mapping if set
         if hasattr(self, 'output_column_mapping') and self.output_column_mapping:
@@ -11485,6 +11914,232 @@ Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             QMessageBox.critical(self, "Export Failed", str(e))
             return
         self.clear_all()
+
+    def export_to_xml(self):
+        """Export processed invoice data to XML format for e2Open Customs Management."""
+        if self.last_processed_df is None or self.table.rowCount() == 0:
+            QMessageBox.warning(self, "No Data", "No processed data to export. Please process a shipment file first.")
+            return
+
+        # Build filename from CSV name + date/time
+        # Get customer reference from input field, fall back to CSV filename
+        customer_ref = self.customer_ref_input.text().strip() if hasattr(self, 'customer_ref_input') else ""
+        if self.current_csv:
+            csv_name = Path(self.current_csv).stem  # Get filename without extension
+        else:
+            csv_name = "Invoice"
+        # Use customer reference for filename if provided, otherwise use CSV name
+        filename_base = customer_ref if customer_ref else csv_name
+        default_filename = f"{filename_base}_{datetime.now():%Y%m%d_%H%M}.xml"
+
+        # Prompt user for save location
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Commercial Invoice XML",
+            str(OUTPUT_DIR / default_filename),
+            "XML Files (*.xml);;All Files (*)"
+        )
+
+        if not file_path:
+            return  # User cancelled
+
+        try:
+            # Build export data from current table state
+            export_rows = []
+            for i in range(self.table.rowCount()):
+                value_cell = self.table.item(i, 1)
+                value = value_cell.data(Qt.UserRole) if value_cell else 0.0
+
+                # Get Qty1/Qty2 from last_processed_df
+                qty1_value = ""
+                qty2_value = ""
+                qty_unit = ""
+                if self.last_processed_df is not None and i < len(self.last_processed_df):
+                    qty1_value = str(self.last_processed_df.iloc[i].get('Qty1', '')).strip()
+                    if qty1_value in ['nan', 'None']:
+                        qty1_value = ""
+                    qty2_value = str(self.last_processed_df.iloc[i].get('Qty2', '')).strip()
+                    if qty2_value in ['nan', 'None']:
+                        qty2_value = ""
+                    qty_unit = str(self.last_processed_df.iloc[i].get('qty_unit', '')).strip().upper()
+                    if qty_unit in ['nan', 'None']:
+                        qty_unit = ""
+
+                row_data = {
+                    'product_no': self.table.item(i, 0).text() if self.table.item(i, 0) else "",
+                    'value_usd': value,
+                    'hts_code': self.table.item(i, 2).text() if self.table.item(i, 2) else "",
+                    'mid': self.table.item(i, 3).text() if self.table.item(i, 3) else "",
+                    'qty1': qty1_value,
+                    'qty2': qty2_value,
+                    'qty_unit': qty_unit,
+                    'dec_type_cd': self.table.item(i, 7).text() if self.table.item(i, 7) else "",
+                    'country_of_melt': self.table.item(i, 8).text() if self.table.item(i, 8) else "",
+                    'country_of_cast': self.table.item(i, 9).text() if self.table.item(i, 9) else "",
+                    'country_of_smelt': self.table.item(i, 10).text() if self.table.item(i, 10) else "",
+                    'declaration_flag': self.table.item(i, 11).text() if self.table.item(i, 11) else "",
+                    'status_232': self.table.item(i, 18).text() if self.table.item(i, 18) else ""
+                }
+                export_rows.append(row_data)
+
+            # Get client_code (importer ID) from parts_master for any part in the invoice
+            importer_id = ""
+            try:
+                part_numbers = [row['product_no'] for row in export_rows if row.get('product_no')]
+                if part_numbers:
+                    conn = sqlite3.connect(str(DB_PATH))
+                    c = conn.cursor()
+                    placeholders = ','.join(['?' for _ in part_numbers])
+                    c.execute(f"""SELECT DISTINCT client_code FROM parts_master
+                                 WHERE part_number IN ({placeholders})
+                                 AND client_code IS NOT NULL AND client_code != ''
+                                 LIMIT 1""", part_numbers)
+                    result = c.fetchone()
+                    if result:
+                        importer_id = result[0]
+                    conn.close()
+            except Exception as e:
+                logger.warning(f"Could not fetch client_code for XML export: {e}")
+
+            # Generate XML (use customer ref if provided, otherwise CSV name; client_code as importer ID)
+            reference_number = customer_ref if customer_ref else csv_name
+            xml_content = self._generate_commercial_invoice_xml(export_rows, reference_number, importer_id)
+
+            # Write to file
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(xml_content)
+
+            QMessageBox.information(self, "Success", f"XML export complete!\nSaved: {Path(file_path).name}")
+            logger.success(f"XML export complete: {file_path}")
+
+        except Exception as e:
+            logger.error(f"XML export failed: {e}")
+            QMessageBox.critical(self, "Export Failed", f"XML export failed: {str(e)}")
+
+    def _generate_commercial_invoice_xml(self, rows, customer_reference="", importer_id=""):
+        """Generate XML content for commercial invoice in e2Open-compatible format."""
+        # Create root element with namespace
+        root = ET.Element('CommercialInvoice')
+        root.set('xmlns', 'urn:customs:commercial-invoice:v1')
+        root.set('xmlns:xsi', 'http://www.w3.org/2001/XMLSchema-instance')
+
+        # Add header information
+        header = ET.SubElement(root, 'Header')
+
+        # Document information
+        doc_info = ET.SubElement(header, 'DocumentInfo')
+        ET.SubElement(doc_info, 'DocumentType').text = 'CommercialInvoice'
+        ET.SubElement(doc_info, 'CreationDateTime').text = datetime.now().isoformat()
+        ET.SubElement(doc_info, 'DocumentID').text = f"INV-{datetime.now():%Y%m%d%H%M%S}"
+        if customer_reference:
+            ET.SubElement(doc_info, 'CustomerReferenceNumber').text = customer_reference
+
+        # Importer information (from client_code in parts_master)
+        if importer_id:
+            importer = ET.SubElement(header, 'Importer')
+            ET.SubElement(importer, 'ImporterID').text = importer_id
+
+        # Exporter/Shipper information (from MID if available)
+        first_mid = rows[0].get('mid', '') if rows else ''
+        if first_mid:
+            shipper = ET.SubElement(header, 'Shipper')
+            ET.SubElement(shipper, 'ManufacturerID').text = first_mid
+            # Extract country from MID prefix (first 2 characters)
+            if len(first_mid) >= 2:
+                ET.SubElement(shipper, 'CountryCode').text = first_mid[:2]
+
+        # Invoice summary
+        summary = ET.SubElement(header, 'InvoiceSummary')
+        total_value = sum(row.get('value_usd', 0) for row in rows)
+        ET.SubElement(summary, 'TotalValue').text = f"{total_value:.2f}"
+        ET.SubElement(summary, 'CurrencyCode').text = 'USD'
+        ET.SubElement(summary, 'TotalLineItems').text = str(len(rows))
+
+        # Line items
+        line_items = ET.SubElement(root, 'LineItems')
+
+        for idx, row in enumerate(rows, start=1):
+            item = ET.SubElement(line_items, 'LineItem')
+            item.set('lineNumber', str(idx))
+
+            # Product identification
+            ET.SubElement(item, 'ProductNumber').text = row.get('product_no', '')
+
+            # Tariff classification
+            tariff = ET.SubElement(item, 'TariffClassification')
+            hts_code = row.get('hts_code', '')
+            ET.SubElement(tariff, 'HTSCode').text = hts_code
+            # Extract chapter for material type indication
+            if len(hts_code.replace('.', '')) >= 2:
+                ET.SubElement(tariff, 'HTSChapter').text = hts_code.replace('.', '')[:2]
+
+            # Value
+            value_elem = ET.SubElement(item, 'Value')
+            ET.SubElement(value_elem, 'Amount').text = f"{row.get('value_usd', 0):.2f}"
+            ET.SubElement(value_elem, 'CurrencyCode').text = 'USD'
+
+            # Quantities
+            quantities = ET.SubElement(item, 'Quantities')
+            qty_unit = row.get('qty_unit', '')
+            if qty_unit:
+                ET.SubElement(quantities, 'UnitOfMeasure').text = qty_unit
+            qty1 = row.get('qty1', '')
+            if qty1:
+                ET.SubElement(quantities, 'Quantity1').text = str(qty1)
+            qty2 = row.get('qty2', '')
+            if qty2:
+                ET.SubElement(quantities, 'Quantity2').text = str(qty2)
+
+            # Manufacturer ID
+            mid = row.get('mid', '')
+            if mid:
+                ET.SubElement(item, 'ManufacturerID').text = mid
+
+            # Section 232 information
+            dec_type_cd = row.get('dec_type_cd', '')
+            status_232 = row.get('status_232', '')
+
+            if dec_type_cd or status_232:
+                section232 = ET.SubElement(item, 'Section232')
+
+                if dec_type_cd:
+                    ET.SubElement(section232, 'DeclarationTypeCode').text = dec_type_cd
+
+                if status_232:
+                    ET.SubElement(section232, 'MaterialStatus').text = status_232
+
+                # Country of origin information (for Section 232 materials)
+                country_melt = row.get('country_of_melt', '')
+                country_cast = row.get('country_of_cast', '')
+                country_smelt = row.get('country_of_smelt', '')
+                dec_flag = row.get('declaration_flag', '')
+
+                if country_melt or country_cast or country_smelt:
+                    origin = ET.SubElement(section232, 'CountryOfOrigin')
+                    if country_melt:
+                        ET.SubElement(origin, 'CountryOfMelt').text = country_melt
+                    if country_cast:
+                        ET.SubElement(origin, 'CountryOfCast').text = country_cast
+                    if country_smelt:
+                        ET.SubElement(origin, 'PrimaryCountryOfSmelt').text = country_smelt
+
+                if dec_flag:
+                    ET.SubElement(section232, 'DeclarationFlag').text = dec_flag
+
+        # Convert to pretty-printed XML string
+        xml_str = ET.tostring(root, encoding='unicode')
+        # Use minidom for pretty printing
+        dom = minidom.parseString(xml_str)
+        pretty_xml = dom.toprettyxml(indent='  ', encoding=None)
+
+        # Remove the XML declaration line that minidom adds (we'll add our own)
+        lines = pretty_xml.split('\n')
+        if lines[0].startswith('<?xml'):
+            lines = lines[1:]
+
+        # Add proper XML declaration
+        xml_declaration = '<?xml version="1.0" encoding="UTF-8"?>'
+        return xml_declaration + '\n' + '\n'.join(lines)
 
     def log_context_menu(self, pos):
         menu = QMenu()
@@ -12092,6 +12747,7 @@ if __name__ == "__main__":
             splash_progress.setValue(60)
             app.processEvents()
             win.load_mapping_profiles()
+            win.load_folder_profiles()
 
             splash_message.setText("Loading export profiles...")
             splash_progress.setValue(70)
