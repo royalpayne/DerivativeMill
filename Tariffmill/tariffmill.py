@@ -8867,7 +8867,7 @@ Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             return -1
 
     def import_hts_units(self):
-        """Import CBP Qty1 units from hts.db and update parts_master"""
+        """Import CBP Qty1 units from hts.db, update parts_master, and highlight invalid HTS codes"""
         hts_db_path = BASE_DIR / "Resources" / "References" / "hts.db"
 
         if not hts_db_path.exists():
@@ -8882,17 +8882,18 @@ Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                     return ""
                 return str(hts).replace(".", "").strip()
 
-            # Load unit_of_quantity lookup from hts.db
+            # Load ALL HTS codes from hts.db for validation
             hts_conn = sqlite3.connect(str(hts_db_path))
             hts_cursor = hts_conn.cursor()
+
+            # Get all valid HTS codes
+            hts_cursor.execute("SELECT full_code FROM hts_codes")
+            all_valid_hts = {row[0] for row in hts_cursor.fetchall()}
+
+            # Get HTS codes with unit_of_quantity
             hts_cursor.execute("SELECT full_code, unit_of_quantity FROM hts_codes WHERE unit_of_quantity IS NOT NULL AND unit_of_quantity != ''")
             hts_units = {row[0]: row[1] for row in hts_cursor.fetchall()}
             hts_conn.close()
-
-            if not hts_units:
-                QMessageBox.warning(self, "No Data",
-                    "No unit_of_quantity data found in hts.db.")
-                return
 
             # Update parts_master database
             conn = sqlite3.connect(str(DB_PATH))
@@ -8903,8 +8904,16 @@ Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             parts = c.fetchall()
 
             updated = 0
+            invalid_hts_parts = []  # Track parts with invalid HTS codes
+
             for part_number, hts_code in parts:
                 normalized = normalize_hts(hts_code)
+
+                # Check if HTS code exists in hts.db
+                if normalized and normalized not in all_valid_hts:
+                    invalid_hts_parts.append((part_number, hts_code))
+
+                # Update qty_unit if we have unit data
                 if normalized in hts_units:
                     c.execute("UPDATE parts_master SET qty_unit=? WHERE part_number=?",
                               (hts_units[normalized], part_number))
@@ -8916,113 +8925,127 @@ Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             # Refresh the table
             self.refresh_parts_table()
 
-            QMessageBox.information(self, "Import Complete",
-                f"Updated {updated} parts with Qty Unit values from hts.db.\n"
-                f"hts.db contains {len(hts_units)} HTS codes with unit data.")
+            # Highlight rows with invalid HTS codes (red background on HTS column)
+            invalid_count = 0
+            if invalid_hts_parts:
+                invalid_part_numbers = {p[0] for p in invalid_hts_parts}
+                for row in range(self.parts_table.rowCount()):
+                    part_item = self.parts_table.item(row, 0)
+                    if part_item and part_item.text() in invalid_part_numbers:
+                        # Highlight the HTS code cell (column 2) with light red background
+                        hts_item = self.parts_table.item(row, 2)
+                        if hts_item:
+                            hts_item.setBackground(QColor(255, 200, 200))  # Light red
+                            invalid_count += 1
+
+            # Show results message
+            msg = f"Updated {updated} parts with Qty Unit values from hts.db.\n"
+            msg += f"hts.db contains {len(hts_units)} HTS codes with unit data.\n"
+            if invalid_count > 0:
+                msg += f"\n⚠ {invalid_count} parts have HTS codes not found in hts.db (highlighted in red)."
+
+            QMessageBox.information(self, "Import Complete", msg)
 
         except Exception as e:
             QMessageBox.critical(self, "Import Error", f"Failed to import HTS units:\n{e}")
 
     def export_missing_hts_codes(self):
-        """Export HTS codes that are missing Qty Unit values to the reference file for lookup."""
-        ref_file = BASE_DIR / "Resources" / "References" / "HTS_qty1.xlsx"
+        """Export HTS codes that are missing from hts.db or missing Qty Unit values, including part numbers."""
+        hts_db_path = BASE_DIR / "Resources" / "References" / "hts.db"
 
         try:
-            # Query database for unique HTS codes missing qty_unit
+            def normalize_hts(hts):
+                if pd.isna(hts) or hts is None:
+                    return ""
+                return str(hts).replace(".", "").strip()
+
+            # Load all valid HTS codes from hts.db
+            all_valid_hts = set()
+            if hts_db_path.exists():
+                hts_conn = sqlite3.connect(str(hts_db_path))
+                hts_cursor = hts_conn.cursor()
+                hts_cursor.execute("SELECT full_code FROM hts_codes")
+                all_valid_hts = {row[0] for row in hts_cursor.fetchall()}
+                hts_conn.close()
+
+            # Query database for all parts with HTS codes (including part_number and client_code)
             conn = sqlite3.connect(str(DB_PATH))
             c = conn.cursor()
             c.execute("""
-                SELECT DISTINCT hts_code
+                SELECT part_number, hts_code, qty_unit, client_code
                 FROM parts_master
                 WHERE hts_code IS NOT NULL
                 AND hts_code != ''
-                AND (qty_unit IS NULL OR qty_unit = '')
-                ORDER BY hts_code
+                ORDER BY client_code, hts_code, part_number
             """)
-            missing_hts = [row[0] for row in c.fetchall()]
+            all_parts = c.fetchall()
             conn.close()
 
-            if not missing_hts:
-                QMessageBox.information(self, "No Missing HTS Codes",
-                    "All parts with HTS codes already have Qty Unit values assigned.")
+            # Categorize parts
+            invalid_parts = []  # Parts with HTS not found in hts.db
+            missing_unit_parts = []  # Parts with valid HTS but missing qty_unit
+
+            for part_number, hts_code, qty_unit, client_code in all_parts:
+                normalized = normalize_hts(hts_code)
+                if not normalized:
+                    continue
+
+                if normalized not in all_valid_hts:
+                    invalid_parts.append((part_number, hts_code, client_code, "INVALID - Not in HTS Database"))
+                elif not qty_unit or pd.isna(qty_unit) or str(qty_unit).strip() == '':
+                    missing_unit_parts.append((part_number, hts_code, client_code, "Missing Qty Unit"))
+
+            if not invalid_parts and not missing_unit_parts:
+                QMessageBox.information(self, "No Issues Found",
+                    "All HTS codes are valid and have Qty Unit values assigned.")
                 return
 
-            # Load existing reference file if it exists
-            existing_hts = set()
-            if ref_file.exists():
-                try:
-                    df_existing = pd.read_excel(ref_file)
-                    if 'Tariff No' in df_existing.columns:
-                        # Normalize existing HTS codes for comparison
-                        for hts in df_existing['Tariff No']:
-                            if pd.notna(hts):
-                                normalized = str(hts).replace(".", "").strip()
-                                existing_hts.add(normalized)
-                except Exception as e:
-                    logger.warning(f"Could not read existing reference file: {e}")
+            # Create export data with part numbers and client codes
+            export_data = []
+            for part_number, hts, client_code, status in invalid_parts:
+                export_data.append({'Part Number': part_number, 'Client Code': client_code or '', 'HTS Code': hts, 'Status': status, 'Qty Unit': ''})
+            for part_number, hts, client_code, status in missing_unit_parts:
+                export_data.append({'Part Number': part_number, 'Client Code': client_code or '', 'HTS Code': hts, 'Status': status, 'Qty Unit': ''})
 
-            # Filter out HTS codes that already exist in the reference file
-            def normalize_hts(hts):
-                return str(hts).replace(".", "").strip()
+            df_export = pd.DataFrame(export_data)
 
-            new_hts_codes = []
-            for hts in missing_hts:
-                normalized = normalize_hts(hts)
-                if normalized not in existing_hts:
-                    new_hts_codes.append(hts)
+            # Ask user where to save
+            file_path, _ = QFileDialog.getSaveFileName(
+                self, "Export HTS Issues",
+                str(BASE_DIR / "Resources" / "References" / "HTS_Issues.xlsx"),
+                "Excel Files (*.xlsx);;CSV Files (*.csv)"
+            )
 
-            if not new_hts_codes:
-                QMessageBox.information(self, "No New HTS Codes",
-                    f"All {len(missing_hts)} HTS codes missing Qty Unit are already in the reference file.\n\n"
-                    "Try clicking 'Import HTS Units' to update the database from the reference file.")
+            if not file_path:
                 return
 
-            # Create or append to the reference file
-            if ref_file.exists():
-                # Read existing file and append new rows
-                df_existing = pd.read_excel(ref_file)
-
-                # Create dataframe for new HTS codes with empty Uom 1
-                df_new = pd.DataFrame({
-                    'Tariff No': new_hts_codes,
-                    'Uom 1': [''] * len(new_hts_codes)
-                })
-
-                # Append new rows
-                df_combined = pd.concat([df_existing, df_new], ignore_index=True)
-                df_combined.to_excel(ref_file, index=False)
-
-                QMessageBox.information(self, "Export Complete",
-                    f"Added {len(new_hts_codes)} new HTS codes to the reference file.\n\n"
-                    f"File: {ref_file}\n\n"
-                    "Please fill in the 'Uom 1' column for the new entries, then click 'Import HTS Units' to update the database.")
+            # Save the file
+            if file_path.endswith('.csv'):
+                df_export.to_csv(file_path, index=False)
             else:
-                # Create new file
-                # Ensure directory exists
-                ref_file.parent.mkdir(parents=True, exist_ok=True)
+                df_export.to_excel(file_path, index=False)
 
-                df_new = pd.DataFrame({
-                    'Tariff No': new_hts_codes,
-                    'Uom 1': [''] * len(new_hts_codes)
-                })
-                df_new.to_excel(ref_file, index=False)
+            # Show summary
+            msg = f"Exported {len(export_data)} parts with HTS issues:\n\n"
+            if invalid_parts:
+                msg += f"  • {len(invalid_parts)} parts with INVALID HTS (not found in hts.db)\n"
+            if missing_unit_parts:
+                msg += f"  • {len(missing_unit_parts)} parts missing Qty Unit\n"
+            msg += f"\nFile: {file_path}"
 
-                QMessageBox.information(self, "Export Complete",
-                    f"Created reference file with {len(new_hts_codes)} HTS codes.\n\n"
-                    f"File: {ref_file}\n\n"
-                    "Please fill in the 'Uom 1' column, then click 'Import HTS Units' to update the database.")
+            QMessageBox.information(self, "Export Complete", msg)
 
             # Ask if user wants to open the file
             reply = QMessageBox.question(self, "Open File?",
-                "Would you like to open the reference file now?",
+                "Would you like to open the exported file now?",
                 QMessageBox.Yes | QMessageBox.No)
             if reply == QMessageBox.Yes:
                 import os
-                os.startfile(str(ref_file))
+                os.startfile(str(file_path))
 
         except Exception as e:
-            logger.error(f"Failed to export missing HTS codes: {e}")
-            QMessageBox.critical(self, "Export Error", f"Failed to export missing HTS codes:\n{e}")
+            logger.error(f"Failed to export HTS issues: {e}")
+            QMessageBox.critical(self, "Export Error", f"Failed to export HTS issues:\n{e}")
 
     def export_parts_by_client(self):
         """Export parts list filtered by client code to Excel."""
