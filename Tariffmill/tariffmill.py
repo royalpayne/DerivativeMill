@@ -1617,6 +1617,108 @@ def init_database():
         except Exception as e:
             logger.warning(f"Failed to add FSC columns: {e}")
 
+        # =====================================================================
+        # LACEY ACT TABLES AND MIGRATIONS
+        # =====================================================================
+
+        # Create lacey_hts_codes table - HTS codes subject to Lacey Act requirements
+        # Covers chapters 44 (Wood), 47 (Pulp), 48 (Paper), 94 (Furniture with wood)
+        c.execute("""CREATE TABLE IF NOT EXISTS lacey_hts_codes (
+            hts_code TEXT PRIMARY KEY,
+            chapter TEXT,
+            description TEXT,
+            plant_type TEXT,
+            requires_scientific_name TEXT DEFAULT 'Y',
+            requires_country_harvest TEXT DEFAULT 'Y',
+            notes TEXT
+        )""")
+
+        # Create lacey_species table - Common wood species and their scientific names
+        c.execute("""CREATE TABLE IF NOT EXISTS lacey_species (
+            species_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            common_name TEXT,
+            scientific_name TEXT,
+            cites_appendix TEXT,
+            origin_countries TEXT,
+            notes TEXT
+        )""")
+
+        # Migration: Add Lacey Act fields to parts_master if they don't exist
+        try:
+            c.execute("PRAGMA table_info(parts_master)")
+            columns = [col[1] for col in c.fetchall()]
+
+            lacey_columns = [
+                ('lacey_applicable', "TEXT DEFAULT 'N'"),
+                ('species_scientific_name', "TEXT"),
+                ('species_common_name', "TEXT"),
+                ('country_of_harvest', "TEXT"),
+                ('percent_recycled', "REAL DEFAULT 0.0"),
+                ('lacey_certificate', "TEXT"),
+            ]
+
+            for col_name, col_def in lacey_columns:
+                if col_name not in columns:
+                    c.execute(f"ALTER TABLE parts_master ADD COLUMN {col_name} {col_def}")
+                    logger.info(f"Added {col_name} column to parts_master for Lacey Act")
+        except Exception as e:
+            logger.warning(f"Failed to add Lacey Act columns to parts_master: {e}")
+
+        # Populate lacey_hts_codes with common wood/paper HTS chapters if empty
+        try:
+            c.execute("SELECT COUNT(*) FROM lacey_hts_codes")
+            if c.fetchone()[0] == 0:
+                lacey_hts_data = [
+                    # Chapter 44 - Wood and articles of wood
+                    ('44', '44', 'Wood and articles of wood; wood charcoal', 'Wood', 'Y', 'Y', 'Full chapter 44 coverage'),
+                    # Chapter 47 - Pulp of wood
+                    ('47', '47', 'Pulp of wood or other fibrous cellulosic material', 'Wood Pulp', 'Y', 'Y', 'Wood pulp products'),
+                    # Chapter 48 - Paper and paperboard
+                    ('48', '48', 'Paper and paperboard; articles of paper pulp', 'Paper', 'Y', 'Y', 'Paper products from wood'),
+                    # Chapter 94 - Furniture (wood furniture)
+                    ('9401', '94', 'Seats (wood frames)', 'Furniture', 'Y', 'Y', 'Wood frame seats'),
+                    ('9403', '94', 'Other furniture (wood)', 'Furniture', 'Y', 'Y', 'Wood furniture'),
+                ]
+                c.executemany("""INSERT OR IGNORE INTO lacey_hts_codes
+                    (hts_code, chapter, description, plant_type, requires_scientific_name, requires_country_harvest, notes)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)""", lacey_hts_data)
+                logger.info("Populated lacey_hts_codes with default HTS chapters")
+        except Exception as e:
+            logger.warning(f"Failed to populate lacey_hts_codes: {e}")
+
+        # Populate lacey_species with common wood species if empty
+        try:
+            c.execute("SELECT COUNT(*) FROM lacey_species")
+            if c.fetchone()[0] == 0:
+                species_data = [
+                    ('Oak', 'Quercus spp.', None, 'US, EU, CN', 'Common hardwood'),
+                    ('Pine', 'Pinus spp.', None, 'US, CA, EU, CN', 'Common softwood'),
+                    ('Maple', 'Acer spp.', None, 'US, CA, EU', 'Hardwood'),
+                    ('Birch', 'Betula spp.', None, 'US, CA, EU, RU', 'Hardwood'),
+                    ('Walnut', 'Juglans spp.', None, 'US, EU', 'Premium hardwood'),
+                    ('Cherry', 'Prunus spp.', None, 'US, EU', 'Hardwood'),
+                    ('Ash', 'Fraxinus spp.', None, 'US, EU', 'Hardwood'),
+                    ('Beech', 'Fagus spp.', None, 'EU, US', 'Hardwood'),
+                    ('Spruce', 'Picea spp.', None, 'US, CA, EU, RU', 'Softwood'),
+                    ('Fir', 'Abies spp.', None, 'US, CA, EU', 'Softwood'),
+                    ('Cedar', 'Cedrus spp.', None, 'US, CA', 'Softwood'),
+                    ('Mahogany', 'Swietenia spp.', 'II', 'MX, BR, PE', 'CITES listed - tropical hardwood'),
+                    ('Teak', 'Tectona grandis', None, 'MM, ID, IN', 'Tropical hardwood'),
+                    ('Rosewood', 'Dalbergia spp.', 'II', 'BR, IN, MG', 'CITES listed - tropical hardwood'),
+                    ('Ebony', 'Diospyros spp.', 'II', 'MG, IN, LK', 'CITES listed - tropical hardwood'),
+                    ('Eucalyptus', 'Eucalyptus spp.', None, 'AU, BR, CL', 'Fast-growing hardwood'),
+                    ('Bamboo', 'Bambusoideae', None, 'CN, VN, ID', 'Grass - may be exempt'),
+                    ('Poplar', 'Populus spp.', None, 'US, CA, EU, CN', 'Fast-growing hardwood'),
+                    ('MDF/Particleboard', 'Mixed species', None, 'Various', 'Composite - list primary species'),
+                    ('Plywood', 'Mixed species', None, 'Various', 'Composite - list face/core species'),
+                ]
+                c.executemany("""INSERT OR IGNORE INTO lacey_species
+                    (common_name, scientific_name, cites_appendix, origin_countries, notes)
+                    VALUES (?, ?, ?, ?, ?)""", species_data)
+                logger.info("Populated lacey_species with common wood species")
+        except Exception as e:
+            logger.warning(f"Failed to populate lacey_species: {e}")
+
         conn.commit()
         conn.close()
         logger.success("Database initialized")
@@ -2059,6 +2161,13 @@ class TariffMill(QMainWindow):
         xml_export_action.triggered.connect(self.export_to_xml)
         xml_export_action.setToolTip("Export processed invoice data to XML format for e2Open Customs Management")
         export_menu.addAction(xml_export_action)
+
+        # Export Lacey Act PPQ Form 505 action
+        lacey_icon = self.style().standardIcon(QStyle.SP_FileDialogContentsView)
+        lacey_export_action = QAction(lacey_icon, "Export Lacey Act (PPQ 505)...", self)
+        lacey_export_action.triggered.connect(self.export_lacey_act_ppq505)
+        lacey_export_action.setToolTip("Export items requiring Lacey Act declaration to PPQ Form 505 format")
+        export_menu.addAction(lacey_export_action)
 
         # Add Help menu
         help_menu = menubar.addMenu("Help")
@@ -5669,6 +5778,70 @@ class TariffMill(QMainWindow):
         df['DeclarationFlag'] = prim_smelt_flag_list
         df['_232_flag'] = flag_list
 
+        # =====================================================================
+        # LACEY ACT DETECTION
+        # Check if HTS codes fall under Lacey Act requirements (Chapters 44, 47, 48, 94)
+        # =====================================================================
+        lacey_flag_list = []
+        lacey_species_list = []
+        lacey_harvest_country_list = []
+        lacey_recycled_list = []
+
+        for _, r in df.iterrows():
+            hts = str(r.get('hts_code', '')).replace('.', '').strip()
+            part_no = r.get('part_number', '')
+            wood_ratio = float(r.get('WoodRatio', 0) or 0)
+
+            # Check if Lacey Act applies based on HTS chapter
+            lacey_required = False
+            if hts:
+                chapter = hts[:2]
+                # Chapters subject to Lacey Act: 44 (Wood), 47 (Pulp), 48 (Paper)
+                if chapter in ('44', '47', '48'):
+                    lacey_required = True
+                # Chapter 94 furniture - check for wood furniture (9401, 9403)
+                elif hts[:4] in ('9401', '9403'):
+                    lacey_required = True
+
+            # Also flag if wood_ratio > 0 (product contains wood content)
+            if wood_ratio > 0:
+                lacey_required = True
+
+            # Look up Lacey data from parts_master if available
+            species_name = ''
+            harvest_country = ''
+            recycled_pct = 0.0
+
+            if part_no:
+                try:
+                    conn = sqlite3.connect(str(DB_PATH))
+                    c = conn.cursor()
+                    c.execute("""SELECT species_scientific_name, species_common_name, country_of_harvest, percent_recycled
+                                 FROM parts_master WHERE part_number = ?""", (part_no,))
+                    row = c.fetchone()
+                    conn.close()
+                    if row:
+                        species_name = row[0] or row[1] or ''  # Prefer scientific name
+                        harvest_country = row[2] or ''
+                        recycled_pct = float(row[3] or 0)
+                except:
+                    pass
+
+            lacey_flag_list.append('Y' if lacey_required else 'N')
+            lacey_species_list.append(species_name)
+            lacey_harvest_country_list.append(harvest_country)
+            lacey_recycled_list.append(recycled_pct)
+
+        df['_lacey_required'] = lacey_flag_list
+        df['LaceySpecies'] = lacey_species_list
+        df['LaceyHarvestCountry'] = lacey_harvest_country_list
+        df['LaceyRecycledPct'] = lacey_recycled_list
+
+        # Log Lacey Act summary
+        lacey_count = sum(1 for f in lacey_flag_list if f == 'Y')
+        if lacey_count > 0:
+            logger.info(f"Lacey Act: {lacey_count} items require PPQ Form 505 declaration")
+
         # Rename columns for preview
         df['Product No'] = df['part_number']
         df['ValueUSD'] = df['value_usd']
@@ -5681,7 +5854,8 @@ class TariffMill(QMainWindow):
         base_preview_cols = [
             'Product No','ValueUSD','HTSCode','MID','CalcWtNet','quantity','qty_unit','Qty1','Qty2','cbp_qty','DecTypeCd',
             'CountryofMelt','CountryOfCast','PrimCountryOfSmelt','DeclarationFlag',
-            'SteelRatio','AluminumRatio','CopperRatio','WoodRatio','AutoRatio','NonSteelRatio','_232_flag','_not_in_db','Sec301_Exclusion_Tariff'
+            'SteelRatio','AluminumRatio','CopperRatio','WoodRatio','AutoRatio','NonSteelRatio','_232_flag','_not_in_db','Sec301_Exclusion_Tariff',
+            '_lacey_required','LaceySpecies','LaceyHarvestCountry','LaceyRecycledPct'
         ]
         preview_cols = base_preview_cols.copy()
         if 'invoice_number' in df.columns:
@@ -12025,6 +12199,129 @@ Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         except Exception as e:
             logger.error(f"XML export failed: {e}")
             QMessageBox.critical(self, "Export Failed", f"XML export failed: {str(e)}")
+
+    def export_lacey_act_ppq505(self):
+        """Export items requiring Lacey Act declaration to PPQ Form 505 format (Excel)."""
+        if self.last_processed_df is None or self.table.rowCount() == 0:
+            QMessageBox.warning(self, "No Data", "No processed data to export. Please process a shipment file first.")
+            return
+
+        # Filter for Lacey Act items only
+        df = self.last_processed_df.copy()
+        if '_lacey_required' not in df.columns:
+            QMessageBox.warning(self, "No Lacey Data",
+                "Lacey Act information not available. This may be an older processed file.\n"
+                "Please reprocess the invoice to detect Lacey Act items.")
+            return
+
+        lacey_df = df[df['_lacey_required'] == 'Y'].copy()
+
+        if len(lacey_df) == 0:
+            QMessageBox.information(self, "No Lacey Items",
+                "No items in this shipment require Lacey Act declaration.\n\n"
+                "Lacey Act applies to:\n"
+                "- HTS Chapters 44, 47, 48 (Wood, Pulp, Paper)\n"
+                "- HTS 9401, 9403 (Wood furniture)\n"
+                "- Any item with wood content > 0%")
+            return
+
+        # Build filename
+        csv_name = Path(self.current_csv).stem if self.current_csv else "Invoice"
+        default_filename = f"{csv_name}_PPQ505_{datetime.now():%Y%m%d_%H%M}.xlsx"
+
+        # Prompt user for save location
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Lacey Act PPQ Form 505",
+            str(OUTPUT_DIR / default_filename),
+            "Excel Files (*.xlsx);;All Files (*)"
+        )
+
+        if not file_path:
+            return  # User cancelled
+
+        try:
+            # Prepare PPQ 505 columns
+            ppq505_columns = {
+                'HTSCode': 'HTSUS Number',
+                'ValueUSD': 'Entered Value (USD)',
+                'Product No': 'Article/Component',
+                'LaceySpecies': 'Genus & Species (Scientific Name)',
+                'LaceyHarvestCountry': 'Country of Harvest',
+                'CalcWtNet': 'Quantity',
+                'qty_unit': 'Unit of Measure',
+                'LaceyRecycledPct': '% Recycled',
+                'WoodRatio': 'Wood Content %',
+            }
+
+            # Create export dataframe with PPQ 505 format
+            export_df = pd.DataFrame()
+            for src_col, dest_col in ppq505_columns.items():
+                if src_col in lacey_df.columns:
+                    export_df[dest_col] = lacey_df[src_col]
+                else:
+                    export_df[dest_col] = ''
+
+            # Add warning column for missing data
+            warnings = []
+            for _, row in export_df.iterrows():
+                missing = []
+                if not row.get('Genus & Species (Scientific Name)', ''):
+                    missing.append('Species')
+                if not row.get('Country of Harvest', ''):
+                    missing.append('Harvest Country')
+                warnings.append(', '.join(missing) if missing else '')
+            export_df['Missing Data'] = warnings
+
+            # Export to Excel with formatting
+            with pd.ExcelWriter(file_path, engine='openpyxl') as writer:
+                export_df.to_excel(writer, index=False, sheet_name='PPQ 505 Data')
+
+                # Access workbook for formatting
+                workbook = writer.book
+                worksheet = writer.sheets['PPQ 505 Data']
+
+                # Format header row
+                from openpyxl.styles import Font, PatternFill, Alignment
+                header_fill = PatternFill(start_color='27ae60', end_color='27ae60', fill_type='solid')
+                header_font = Font(bold=True, color='FFFFFF')
+
+                for col_num, cell in enumerate(worksheet[1], 1):
+                    cell.fill = header_fill
+                    cell.font = header_font
+                    cell.alignment = Alignment(horizontal='center')
+
+                # Highlight rows with missing data
+                warning_fill = PatternFill(start_color='FFCC99', end_color='FFCC99', fill_type='solid')
+                for row_num, row in enumerate(worksheet.iter_rows(min_row=2, max_row=worksheet.max_row), 2):
+                    missing_data_cell = worksheet.cell(row=row_num, column=len(ppq505_columns) + 1)
+                    if missing_data_cell.value:
+                        for cell in row:
+                            cell.fill = warning_fill
+
+                # Adjust column widths
+                for column in worksheet.columns:
+                    max_length = 0
+                    column_letter = column[0].column_letter
+                    for cell in column:
+                        try:
+                            if len(str(cell.value)) > max_length:
+                                max_length = len(str(cell.value))
+                        except:
+                            pass
+                    adjusted_width = min(max_length + 2, 50)
+                    worksheet.column_dimensions[column_letter].width = adjusted_width
+
+            QMessageBox.information(self, "Success",
+                f"Lacey Act PPQ 505 export complete!\n\n"
+                f"Items exported: {len(lacey_df)}\n"
+                f"File: {Path(file_path).name}\n\n"
+                f"Note: Review items highlighted in orange - they have missing species or country of harvest data.")
+            logger.success(f"Lacey Act PPQ 505 export: {len(lacey_df)} items to {file_path}")
+
+        except Exception as e:
+            logger.error(f"Lacey Act export failed: {e}")
+            QMessageBox.critical(self, "Export Failed", f"Lacey Act export failed: {str(e)}")
 
     def _generate_commercial_invoice_xml(self, rows, customer_reference="", importer_id=""):
         """Generate XML content for commercial invoice in e2Open-compatible format."""
