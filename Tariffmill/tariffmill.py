@@ -5511,19 +5511,48 @@ class TariffMill(QMainWindow):
         else:
             df['CalcWtNet'] = (df['value_usd'] / total_value) * wt
 
-        # Calculate Qty1 and Qty2 based on qty_unit type
-        # KG = Qty1 is CalcWtNet, Qty2 empty
-        # NO = Qty1 is Pcs, Qty2 empty
-        # NO/KG = Qty1 is Pcs, Qty2 is CalcWtNet
+        # Calculate Qty1 and Qty2 based on qty_unit type from HTS database
+        # Categories:
+        # - Weight-only: KG, G, T -> Qty1 = CalcWtNet, Qty2 = empty
+        # - Count-only: NO, PCS, DOZ, etc. -> Qty1 = quantity (pieces), Qty2 = empty
+        # - Dual (count + weight): NO. AND KG, XX KG, XX G -> Qty1 = quantity, Qty2 = CalcWtNet
+        # - Other units (volume, area, length): Use quantity if available, else empty
+
+        # Weight-only units (Qty1 = weight in KG)
+        WEIGHT_UNITS = {'KG', 'G', 'T', 'T ADW', 'T DWB'}
+
+        # Count-only units (Qty1 = piece count)
+        COUNT_UNITS = {'NO', 'PCS', 'DOZ', 'DOZ. PRS', 'DZ PCS', 'GROSS', 'HUNDREDS',
+                       'THOUSANDS', 'PRS', 'PACK', 'DOSES', 'CARAT'}
+
+        # Dual units: first quantity is count, second is weight (Qty1 = count, Qty2 = weight)
+        # Includes NO. AND KG and metal+weight combinations
+        DUAL_UNITS = {'NO. AND KG', 'NO/KG', 'NO\KG',
+                      'CU KG', 'CY KG', 'NI KG', 'PB KG', 'ZN KG', 'KG AMC',
+                      'AG G', 'AU G', 'IR G', 'OS G', 'PD G', 'PT G', 'RH G', 'RU G'}
+
+        # Volume/Area/Length units (use quantity from invoice)
+        MEASURE_UNITS = {'LITERS', 'PF.LITERS', 'BBL', 'M', 'LIN. M', 'M2', 'CM2', 'M3',
+                         'SQUARE', 'FIBER M', 'GBQ', 'MWH', 'THOUSAND M', 'THOUSAND M3'}
+
+        # Units that should have BOTH Qty1 and Qty2 empty (measurement-only units per CBP requirements)
+        NO_QTY_UNITS = {'M', 'M2', 'M3', 'DOZ', 'DPR', 'PRS', 'DOZ. PRS'}
+
         def get_qty1(row):
             qty_unit = str(row.get('qty_unit', '')).strip().upper() if pd.notna(row.get('qty_unit')) else ''
             if qty_unit == '':
                 return ''
-            elif qty_unit == 'KG':
-                # KG: Qty1 is net weight
+
+            # If qty_unit is in NO_QTY_UNITS, leave Qty1 empty
+            if qty_unit in NO_QTY_UNITS:
+                return ''
+
+            # Weight-only units: Qty1 is net weight
+            if qty_unit in WEIGHT_UNITS:
                 return str(int(round(row['CalcWtNet']))) if row['CalcWtNet'] > 0 else ''
-            elif qty_unit in ['NO', 'NO/KG']:
-                # NO or NO/KG: Qty1 is piece count
+
+            # Count-only units: Qty1 is piece count from invoice
+            if qty_unit in COUNT_UNITS:
                 qty = row.get('quantity', '')
                 if pd.notna(qty) and str(qty).strip():
                     try:
@@ -5531,17 +5560,85 @@ class TariffMill(QMainWindow):
                     except (ValueError, TypeError):
                         return ''
                 return ''
-            else:
+
+            # Dual units: Qty1 is piece count
+            if qty_unit in DUAL_UNITS:
+                qty = row.get('quantity', '')
+                if pd.notna(qty) and str(qty).strip():
+                    try:
+                        return str(int(float(str(qty).replace(',', '').strip())))
+                    except (ValueError, TypeError):
+                        return ''
                 return ''
+
+            # Measure units: Use quantity from invoice if available
+            if qty_unit in MEASURE_UNITS:
+                qty = row.get('quantity', '')
+                if pd.notna(qty) and str(qty).strip():
+                    try:
+                        return str(int(float(str(qty).replace(',', '').strip())))
+                    except (ValueError, TypeError):
+                        return ''
+                return ''
+
+            # Unknown unit type - try quantity first, fall back to empty
+            qty = row.get('quantity', '')
+            if pd.notna(qty) and str(qty).strip():
+                try:
+                    return str(int(float(str(qty).replace(',', '').strip())))
+                except (ValueError, TypeError):
+                    return ''
+            return ''
 
         def get_qty2(row):
             qty_unit = str(row.get('qty_unit', '')).strip().upper() if pd.notna(row.get('qty_unit')) else ''
-            if qty_unit == 'NO/KG':
-                # NO/KG: Qty2 is net weight
-                return str(int(round(row['CalcWtNet']))) if row['CalcWtNet'] > 0 else ''
-            else:
-                # All other cases: Qty2 is empty
+
+            # If qty_unit is in NO_QTY_UNITS, leave Qty2 empty
+            if qty_unit in NO_QTY_UNITS:
                 return ''
+
+            # Get content_type safely - handle NaN, None, and various string formats
+            content_type_raw = row.get('_content_type', '')
+            if pd.notna(content_type_raw) and content_type_raw:
+                content_type = str(content_type_raw).strip().lower()
+            else:
+                content_type = ''
+
+            # Get HTS code to check material type by chapter
+            hts_raw = row.get('hts_code', '')
+            hts_code = str(hts_raw).replace('.', '').strip() if pd.notna(hts_raw) else ''
+            hts_chapter = hts_code[:2] if len(hts_code) >= 2 else ''
+
+            # Get CalcWtNet safely
+            calc_wt = row.get('CalcWtNet', 0)
+            if pd.isna(calc_wt):
+                calc_wt = 0
+
+            # CBP requires Qty2 (weight) for ALL derivative rows (including non_232)
+            # This includes steel, aluminum, copper, wood, auto, AND non_232 portions
+            # Also applies to items in specific HTS chapters:
+            # - Aluminum = HTS Chapter 76
+            # - Steel = HTS Chapters 72, 73
+            # - Copper = HTS Chapter 74
+            is_derivative_row = content_type in ['steel', 'aluminum', 'copper', 'wood', 'auto', 'non_232']
+            is_aluminum_hts = hts_chapter == '76'
+            is_steel_hts = hts_chapter in ['72', '73']
+            is_copper_hts = hts_chapter == '74'
+
+            # Include Qty2 for any derivative row OR specific HTS chapters
+            if is_derivative_row or is_aluminum_hts or is_steel_hts or is_copper_hts:
+                if calc_wt > 0:
+                    return str(int(round(calc_wt)))
+                return ''
+
+            # Dual units: Qty2 is net weight
+            if qty_unit in DUAL_UNITS:
+                if calc_wt > 0:
+                    return str(int(round(calc_wt)))
+                return ''
+
+            # All other cases: Qty2 is empty
+            return ''
 
         df['Qty1'] = df.apply(get_qty1, axis=1)
         df['Qty2'] = df.apply(get_qty2, axis=1)
@@ -5611,7 +5708,7 @@ class TariffMill(QMainWindow):
         df['CountryofMelt'] = country_melt_list
         df['CountryOfCast'] = country_cast_list
         df['PrimCountryOfSmelt'] = prim_country_smelt_list
-        df['PrimSmeltFlag'] = prim_smelt_flag_list
+        df['DeclarationFlag'] = prim_smelt_flag_list
         df['_232_flag'] = flag_list
 
         # Rename columns for preview
@@ -5625,7 +5722,7 @@ class TariffMill(QMainWindow):
         # Include invoice_number if mapped (for split by invoice export feature)
         base_preview_cols = [
             'Product No','ValueUSD','HTSCode','MID','CalcWtNet','quantity','qty_unit','Qty1','Qty2','cbp_qty','DecTypeCd',
-            'CountryofMelt','CountryOfCast','PrimCountryOfSmelt','PrimSmeltFlag',
+            'CountryofMelt','CountryOfCast','PrimCountryOfSmelt','DeclarationFlag',
             'SteelRatio','AluminumRatio','CopperRatio','WoodRatio','AutoRatio','NonSteelRatio','_232_flag','_not_in_db','Sec301_Exclusion_Tariff'
         ]
         preview_cols = base_preview_cols.copy()
@@ -5874,14 +5971,11 @@ class TariffMill(QMainWindow):
 
             product_no = str(r['Product No'])
 
-            # Get net weight (CalcWtNet) and quantity for display
-            calc_wt_net = r.get('CalcWtNet', 0.0)
-            net_wt_display = str(int(round(calc_wt_net))) if pd.notna(calc_wt_net) and calc_wt_net > 0 else ""
-            quantity = r.get('quantity', '')
-            try:
-                pcs_display = str(int(float(str(quantity).replace(',', '')))) if pd.notna(quantity) and str(quantity).strip() else ""
-            except (ValueError, TypeError):
-                pcs_display = ""
+            # Get Qty1 and Qty2 from calculated values (these were computed during processing)
+            qty1_val = r.get('Qty1', '')
+            qty1_display = str(qty1_val) if pd.notna(qty1_val) and str(qty1_val).strip() not in ['', 'nan', 'None'] else ""
+            qty2_val = r.get('Qty2', '')
+            qty2_display = str(qty2_val) if pd.notna(qty2_val) and str(qty2_val).strip() not in ['', 'nan', 'None'] else ""
 
             # Get qty_unit from database (KG, NO, etc.) for display
             qty_unit_display = str(r.get('qty_unit', '')).strip().upper() if pd.notna(r.get('qty_unit')) else ""
@@ -5891,14 +5985,14 @@ class TariffMill(QMainWindow):
                 value_item,                                          # 1: Value
                 hts_item,                                            # 2: HTS
                 QTableWidgetItem(str(r.get('MID',''))),              # 3: MID
-                QTableWidgetItem(net_wt_display),                    # 4: Net Wt
-                QTableWidgetItem(pcs_display),                       # 5: Pcs
+                QTableWidgetItem(qty1_display),                      # 4: Qty1
+                QTableWidgetItem(qty2_display),                      # 5: Qty2
                 QTableWidgetItem(qty_unit_display),                  # 6: Qty Unit
                 QTableWidgetItem(str(r.get('DecTypeCd',''))),        # 7: Dec
                 QTableWidgetItem(str(r.get('CountryofMelt',''))),    # 8: Melt
                 QTableWidgetItem(str(r.get('CountryOfCast',''))),    # 9: Cast
                 QTableWidgetItem(str(r.get('PrimCountryOfSmelt',''))), # 10: Smelt
-                QTableWidgetItem(str(r.get('PrimSmeltFlag',''))),    # 11: Flag
+                QTableWidgetItem(str(r.get('DeclarationFlag',''))),    # 11: Flag
                 QTableWidgetItem(steel_display),                     # 12: Steel%
                 QTableWidgetItem(aluminum_display),                  # 13: Al%
                 QTableWidgetItem(copper_display),                    # 14: Cu%
@@ -7018,7 +7112,7 @@ class TariffMill(QMainWindow):
         self.default_output_column_order = [
             'Product No', 'ValueUSD', 'HTSCode', 'MID', 'Qty1', 'Qty2',
             'DecTypeCd', 'CountryofMelt', 'CountryOfCast', 'PrimCountryOfSmelt',
-            'PrimSmeltFlag', 'SteelRatio', 'AluminumRatio', 'CopperRatio',
+            'DeclarationFlag', 'SteelRatio', 'AluminumRatio', 'CopperRatio',
             'WoodRatio', 'AutoRatio', 'NonSteelRatio', '232_Status'
         ]
 
@@ -10928,7 +11022,7 @@ Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                 'CountryofMelt': self.table.item(i, 8).text() if self.table.item(i, 8) else "",
                 'CountryOfCast': self.table.item(i, 9).text() if self.table.item(i, 9) else "",
                 'PrimCountryOfSmelt': self.table.item(i, 10).text() if self.table.item(i, 10) else "",
-                'PrimSmeltFlag': self.table.item(i, 11).text() if self.table.item(i, 11) else "",
+                'DeclarationFlag': self.table.item(i, 11).text() if self.table.item(i, 11) else "",
                 'SteelRatio': steel_ratio,
                 'AluminumRatio': aluminum_ratio,
                 'CopperRatio': copper_ratio,
@@ -10971,7 +11065,7 @@ Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         else:
             all_columns = ['Product No', 'ValueUSD', 'HTSCode', 'MID', 'Qty1', 'Qty2',
                 'DecTypeCd', 'CountryofMelt', 'CountryOfCast', 'PrimCountryOfSmelt',
-                'PrimSmeltFlag', 'SteelRatio', 'AluminumRatio', 'CopperRatio',
+                'DeclarationFlag', 'SteelRatio', 'AluminumRatio', 'CopperRatio',
                 'WoodRatio', 'AutoRatio', 'NonSteelRatio', '232_Status']
 
         # Filter columns based on visibility settings
