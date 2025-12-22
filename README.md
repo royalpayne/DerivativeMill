@@ -17,7 +17,6 @@ TariffMill is a desktop application for import/export businesses, customs broker
 - AI-powered invoice text extraction
 - Customizable template system for different invoice formats
 - Automatic field mapping and data extraction
-- Support for Lacey Act PPQ Form 505 declarations
 - Dynamic template discovery and hot-reload
 
 ### Parts Master Database
