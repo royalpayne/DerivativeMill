@@ -19,7 +19,7 @@ import os
 import sys
 
 # Fallback version if git is not available
-__fallback_version__ = "v0.93.9-edi"
+__fallback_version__ = "v0.94.0"
 
 def _get_subprocess_startupinfo():
     """Get startupinfo to hide console window on Windows"""

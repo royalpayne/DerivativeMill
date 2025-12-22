@@ -12,7 +12,6 @@ TariffMill is a desktop application for import/export businesses, customs broker
 - Automatic value distribution and calculations
 - Preview and edit data before export
 - Split exports by invoice number
-- EDI-formatted export for broker integration
 
 ### OCRMill - Invoice OCR Processing
 - AI-powered invoice text extraction
@@ -163,16 +162,14 @@ Settings are stored in:
 
 ## Version
 
-**Current Version**: v0.93.9-edi
+**Current Version**: v0.94.0
 
 Version is automatically derived from git tags. See [version.py](Tariffmill/version.py) for details.
 
 ## Recent Changes
 
-### v0.93.9-edi
-- **EDI Invoice Export**: New EDI-formatted export for customs broker systems
+### v0.94.0
 - **OCRMill Integration**: AI-powered invoice OCR processing with template system
-- **Lacey Act Support** (OCRMill): Template for PPQ Form 505 wood product declarations
 - **Copyright Protection**: Added proprietary license and copyright notices
 - **Dark Theme Improvements**: Enhanced dark theme styling consistency
 - **Result Preview Enhancements**: Improved column layout and value rounding fixes

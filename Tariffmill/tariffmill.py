@@ -2232,18 +2232,18 @@ class TariffMill(QMainWindow):
         config_action.triggered.connect(self.show_configuration_dialog)
         config_menu.addAction(config_action)
 
-        # Add Export menu
-        export_menu = menubar.addMenu("Export")
-
-        # TODO: XML Export - To be implemented at a later date
+        # TODO: Export menu - To be implemented at a later date
+        # export_menu = menubar.addMenu("Export")
+        #
+        # # TODO: XML Export - To be implemented at a later date
         # # Export to XML action
         # xml_icon = self.style().standardIcon(QStyle.SP_FileIcon)
         # xml_export_action = QAction(xml_icon, "Export to XML...", self)
         # xml_export_action.triggered.connect(self.export_to_xml)
         # xml_export_action.setToolTip("Export processed invoice data to XML format for e2Open Customs Management")
         # export_menu.addAction(xml_export_action)
-
-        # TODO: Lacey Act Export - To be implemented at a later date
+        #
+        # # TODO: Lacey Act Export - To be implemented at a later date
         # lacey_icon = self.style().standardIcon(QStyle.SP_FileDialogContentsView)
         # lacey_export_action = QAction(lacey_icon, "Export Lacey Act (PPQ 505)...", self)
         # lacey_export_action.triggered.connect(self.export_lacey_act_ppq505)
