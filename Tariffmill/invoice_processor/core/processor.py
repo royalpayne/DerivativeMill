@@ -257,7 +257,7 @@ def process_invoice_data(
     df['CountryofMelt'] = country_melt_list
     df['CountryOfCast'] = country_cast_list
     df['PrimCountryOfSmelt'] = prim_country_smelt_list
-    df['PrimSmeltFlag'] = prim_smelt_flag_list
+    df['DeclarationFlag'] = prim_smelt_flag_list
     df['_232_flag'] = flag_list
 
     # Rename columns for output
@@ -281,17 +281,52 @@ def process_invoice_data(
     )
 
 
+# Unit type categories for Qty1/Qty2 calculation
+# Weight-only units (Qty1 = weight in KG)
+WEIGHT_UNITS = {'KG', 'G', 'T', 'T ADW', 'T DWB'}
+
+# Count-only units (Qty1 = piece count)
+COUNT_UNITS = {'NO', 'PCS', 'DOZ', 'DOZ. PRS', 'DZ PCS', 'GROSS', 'HUNDREDS',
+               'THOUSANDS', 'PRS', 'PACK', 'DOSES', 'CARAT'}
+
+# Dual units: first quantity is count, second is weight (Qty1 = count, Qty2 = weight)
+DUAL_UNITS = {'NO. AND KG', 'NO/KG', 'NO\KG',
+              'CU KG', 'CY KG', 'NI KG', 'PB KG', 'ZN KG', 'KG AMC',
+              'AG G', 'AU G', 'IR G', 'OS G', 'PD G', 'PT G', 'RH G', 'RU G'}
+
+# Volume/Area/Length units (use quantity from invoice)
+MEASURE_UNITS = {'LITERS', 'PF.LITERS', 'BBL', 'M', 'LIN. M', 'M2', 'CM2', 'M3',
+                 'SQUARE', 'FIBER M', 'GBQ', 'MWH', 'THOUSAND M', 'THOUSAND M3'}
+
+# Units that should have BOTH Qty1 and Qty2 empty (measurement-only units per CBP requirements)
+NO_QTY_UNITS = {'M', 'M2', 'M3', 'DOZ', 'DPR', 'PRS', 'DOZ. PRS'}
+
+
 def _get_qty1(row: pd.Series) -> str:
-    """Calculate Qty1 based on qty_unit type."""
+    """
+    Calculate Qty1 based on qty_unit type from HTS database.
+
+    Categories:
+    - Weight-only: KG, G, T -> Qty1 = CalcWtNet, Qty2 = empty
+    - Count-only: NO, PCS, DOZ, etc. -> Qty1 = quantity (pieces), Qty2 = empty
+    - Dual (count + weight): NO. AND KG, XX KG, XX G -> Qty1 = quantity, Qty2 = CalcWtNet
+    - Other units (volume, area, length): Use quantity if available
+    """
     qty_unit = str(row.get('qty_unit', '')).strip().upper() if pd.notna(row.get('qty_unit')) else ''
 
     if qty_unit == '':
         return ''
-    elif qty_unit == 'KG':
-        # KG: Qty1 is net weight
+
+    # If qty_unit is in NO_QTY_UNITS, leave Qty1 empty
+    if qty_unit in NO_QTY_UNITS:
+        return ''
+
+    # Weight-only units: Qty1 is net weight
+    if qty_unit in WEIGHT_UNITS:
         return str(int(round(row['CalcWtNet']))) if row['CalcWtNet'] > 0 else ''
-    elif qty_unit in ['NO', 'NO/KG']:
-        # NO or NO/KG: Qty1 is piece count
+
+    # Count-only units: Qty1 is piece count from invoice
+    if qty_unit in COUNT_UNITS:
         qty = row.get('quantity', '')
         if pd.notna(qty) and str(qty).strip():
             try:
@@ -299,20 +334,91 @@ def _get_qty1(row: pd.Series) -> str:
             except (ValueError, TypeError):
                 return ''
         return ''
-    else:
+
+    # Dual units: Qty1 is piece count
+    if qty_unit in DUAL_UNITS:
+        qty = row.get('quantity', '')
+        if pd.notna(qty) and str(qty).strip():
+            try:
+                return str(int(float(str(qty).replace(',', '').strip())))
+            except (ValueError, TypeError):
+                return ''
         return ''
+
+    # Measure units: Use quantity from invoice if available
+    if qty_unit in MEASURE_UNITS:
+        qty = row.get('quantity', '')
+        if pd.notna(qty) and str(qty).strip():
+            try:
+                return str(int(float(str(qty).replace(',', '').strip())))
+            except (ValueError, TypeError):
+                return ''
+        return ''
+
+    # Unknown unit type - try quantity first, fall back to empty
+    qty = row.get('quantity', '')
+    if pd.notna(qty) and str(qty).strip():
+        try:
+            return str(int(float(str(qty).replace(',', '').strip())))
+        except (ValueError, TypeError):
+            return ''
+    return ''
 
 
 def _get_qty2(row: pd.Series) -> str:
-    """Calculate Qty2 based on qty_unit type."""
+    """
+    Calculate Qty2 based on qty_unit type.
+    CBP requires Qty2 (weight) for ALL Section 232 material types.
+    Other dual units (NO. AND KG, metal+weight) also populate Qty2 with weight.
+    """
     qty_unit = str(row.get('qty_unit', '')).strip().upper() if pd.notna(row.get('qty_unit')) else ''
 
-    if qty_unit == 'NO/KG':
-        # NO/KG: Qty2 is net weight
-        return str(int(round(row['CalcWtNet']))) if row['CalcWtNet'] > 0 else ''
-    else:
-        # All other cases: Qty2 is empty
+    # If qty_unit is in NO_QTY_UNITS, leave Qty2 empty
+    if qty_unit in NO_QTY_UNITS:
         return ''
+
+    # Get content_type safely - handle NaN, None, and various string formats
+    content_type_raw = row.get('_content_type', '')
+    if pd.notna(content_type_raw) and content_type_raw:
+        content_type = str(content_type_raw).strip().lower()
+    else:
+        content_type = ''
+
+    # Get HTS code to check material type by chapter
+    hts_raw = row.get('hts_code', '')
+    hts_code = str(hts_raw).replace('.', '').strip() if pd.notna(hts_raw) else ''
+    hts_chapter = hts_code[:2] if len(hts_code) >= 2 else ''
+
+    # Get CalcWtNet safely
+    calc_wt = row.get('CalcWtNet', 0)
+    if pd.isna(calc_wt):
+        calc_wt = 0
+
+    # CBP requires Qty2 (weight) for ALL derivative rows (including non_232)
+    # This includes steel, aluminum, copper, wood, auto, AND non_232 portions
+    # Also applies to items in specific HTS chapters:
+    # - Aluminum = HTS Chapter 76
+    # - Steel = HTS Chapters 72, 73
+    # - Copper = HTS Chapter 74
+    is_derivative_row = content_type in ['steel', 'aluminum', 'copper', 'wood', 'auto', 'non_232']
+    is_aluminum_hts = hts_chapter == '76'
+    is_steel_hts = hts_chapter in ['72', '73']
+    is_copper_hts = hts_chapter == '74'
+
+    # Include Qty2 for any derivative row OR specific HTS chapters
+    if is_derivative_row or is_aluminum_hts or is_steel_hts or is_copper_hts:
+        if calc_wt > 0:
+            return str(int(round(calc_wt)))
+        return ''
+
+    # Dual units: Qty2 is net weight
+    if qty_unit in DUAL_UNITS:
+        if calc_wt > 0:
+            return str(int(round(calc_wt)))
+        return ''
+
+    # All other cases: Qty2 is empty
+    return ''
 
 
 def merge_with_parts_data(

@@ -2,6 +2,25 @@
 # ==============================================================================
 # TariffMill - Customs Documentation Processing System
 # ==============================================================================
+# Copyright (c) 2024-2025 Heath Payne. All Rights Reserved.
+#
+# PROPRIETARY AND CONFIDENTIAL
+#
+# This software and its source code are the exclusive property of Heath Payne
+# and are protected by copyright law and international treaties. Unauthorized
+# reproduction, distribution, or disclosure of this software, in whole or in
+# part, is strictly prohibited.
+#
+# This software is licensed, not sold. Use of this software is subject to the
+# End User License Agreement (EULA) provided with this software.
+#
+# NO WARRANTY: This software is provided "as is" without warranty of any kind,
+# express or implied, including but not limited to the warranties of
+# merchantability, fitness for a particular purpose, and noninfringement.
+#
+# For licensing inquiries, contact: paynehl@gmail.com
+# ==============================================================================
+#
 # Professional PyQt5 application for automating invoice processing, parts
 # management, and Section 232 tariff compliance tracking.
 #
@@ -17,6 +36,13 @@
 APP_NAME = "TariffMill"
 DB_NAME = "tariffmill.db"
 
+# Copyright and Legal Information
+COPYRIGHT_YEAR = "2024-2025"
+COPYRIGHT_HOLDER = "Heath Payne"
+COPYRIGHT_EMAIL = "paynehl@gmail.com"
+COPYRIGHT_NOTICE = f"Copyright (c) {COPYRIGHT_YEAR} {COPYRIGHT_HOLDER}. All Rights Reserved."
+LICENSE_TYPE = "Proprietary"
+
 # Import version from version.py
 try:
     from TariffMill.version import get_version
@@ -27,7 +53,7 @@ except ImportError:
         VERSION = get_version()
     except ImportError:
         # Fallback if version.py is not available
-        VERSION = "v0.91.0"
+        VERSION = "v0.93.4"
 
 
 import sys
@@ -53,13 +79,15 @@ import configparser
 import webbrowser
 import urllib.request
 import urllib.error
+import xml.etree.ElementTree as ET
+from xml.dom import minidom
 from pathlib import Path
 from datetime import datetime
 from threading import Thread
 import pandas as pd
 import sqlite3
 from PyQt5.QtWidgets import *
-from PyQt5.QtCore import Qt, QMimeData, pyqtSignal, QTimer, QSize, QEventLoop, QRect, QSettings
+from PyQt5.QtCore import Qt, QMimeData, pyqtSignal, QTimer, QSize, QEventLoop, QRect, QSettings, QThread, QThreadPool, QRunnable, QObject
 from PyQt5.QtGui import QColor, QFont, QDrag, QKeySequence, QIcon, QPixmap, QPainter, QDoubleValidator, QCursor, QPen, QTextCursor, QTextCharFormat
 from PyQt5.QtSvg import QSvgRenderer
 from openpyxl.styles import Font as ExcelFont, Alignment
@@ -721,30 +749,66 @@ def save_shared_config(config):
 def get_database_path():
     """
     Get the database path from shared config or use default.
-    
+    Supports platform-specific paths (linux_path, windows_path) for cross-platform use.
+
     Returns:
         Path object pointing to the SQLite database file.
     """
     config = load_shared_config()
+
+    # Check for platform-specific paths first
+    is_windows = sys.platform == 'win32'
+    platform_key = 'windows_path' if is_windows else 'linux_path'
+
+    if config.has_option('Database', platform_key):
+        platform_path = config.get('Database', platform_key)
+        if platform_path and Path(platform_path).exists():
+            return Path(platform_path)
+
+    # Fall back to generic 'path' setting
     if config.has_option('Database', 'path'):
         custom_path = config.get('Database', 'path')
         if custom_path and Path(custom_path).exists():
             return Path(custom_path)
+
     # Default to local Resources folder
     return RESOURCES_DIR / DB_NAME
 
-def set_database_path(path):
+def set_database_path(path, platform=None):
     """
     Set a custom database path in shared config.
-    
+
     Args:
         path: Path string to the database file (can be network path).
+        platform: Optional - 'linux', 'windows', or None for generic path.
     """
     config = load_shared_config()
     if not config.has_section('Database'):
         config.add_section('Database')
-    config.set('Database', 'path', str(path))
+
+    if platform == 'linux':
+        config.set('Database', 'linux_path', str(path))
+    elif platform == 'windows':
+        config.set('Database', 'windows_path', str(path))
+    else:
+        config.set('Database', 'path', str(path))
+
     save_shared_config(config)
+
+def get_platform_database_paths():
+    """
+    Get configured database paths for each platform.
+
+    Returns:
+        Dict with 'linux_path', 'windows_path', and 'path' (generic) values.
+    """
+    config = load_shared_config()
+    result = {
+        'linux_path': config.get('Database', 'linux_path', fallback=''),
+        'windows_path': config.get('Database', 'windows_path', fallback=''),
+        'path': config.get('Database', 'path', fallback=''),
+    }
+    return result
 
 # Database location - reads from config.ini or defaults to local
 DB_PATH = get_database_path()
@@ -893,8 +957,14 @@ def get_232_info(hts_code):
         2. Falls back to hardcoded HTS prefixes for common materials
         3. Returns None if material not found
     """
-    if not hts_code:
-        return None, "", ""
+    # Handle pandas NA, None, empty string, or NaN values
+    try:
+        if hts_code is None or pd.isna(hts_code) or str(hts_code).strip() == '':
+            return None, "", ""
+    except (ValueError, TypeError):
+        # pd.isna() can raise ValueError for some types
+        if not hts_code or str(hts_code).strip() == '':
+            return None, "", ""
 
     # Normalize HTS code: remove dots, strip whitespace, convert to uppercase
     hts_clean = str(hts_code).replace(".", "").strip().upper()
@@ -1018,6 +1088,14 @@ def init_database():
         c.execute("""CREATE TABLE IF NOT EXISTS profile_links (
             input_profile_name TEXT PRIMARY KEY,
             export_profile_name TEXT
+        )""")
+
+        # Create folder_profiles table for input/output folder location profiles
+        c.execute("""CREATE TABLE IF NOT EXISTS folder_profiles (
+            profile_name TEXT PRIMARY KEY,
+            input_folder TEXT,
+            output_folder TEXT,
+            created_date TEXT
         )""")
 
         # Migration: Add manufacturer_name and customer_id columns to mid_table if they don't exist
@@ -1571,6 +1649,156 @@ def init_database():
         except Exception as e:
             logger.warning(f"Failed to migrate hts_units: {e}")
 
+        # OCRMill: Create part_occurrences table for invoice line item history
+        c.execute("""CREATE TABLE IF NOT EXISTS part_occurrences (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            part_number TEXT NOT NULL,
+            invoice_number TEXT,
+            project_number TEXT,
+            quantity REAL,
+            total_price REAL,
+            unit_price REAL,
+            steel_pct REAL,
+            steel_kg REAL,
+            steel_value REAL,
+            aluminum_pct REAL,
+            aluminum_kg REAL,
+            aluminum_value REAL,
+            net_weight REAL,
+            ncm_code TEXT,
+            hts_code TEXT,
+            processed_date TEXT,
+            source_file TEXT,
+            mid TEXT,
+            client_code TEXT
+        )""")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_occurrences_part ON part_occurrences(part_number)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_occurrences_invoice ON part_occurrences(invoice_number)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_occurrences_project ON part_occurrences(project_number)")
+
+        # OCRMill: Create hts_codes reference table for HTS lookup/matching
+        c.execute("""CREATE TABLE IF NOT EXISTS hts_codes (
+            hts_code TEXT PRIMARY KEY,
+            description TEXT,
+            suggested TEXT,
+            last_updated TEXT
+        )""")
+
+        # OCRMill Migration: Add FSC fields to parts_master if they don't exist
+        try:
+            c.execute("PRAGMA table_info(parts_master)")
+            columns = [col[1] for col in c.fetchall()]
+            if 'fsc_certified' not in columns:
+                c.execute("ALTER TABLE parts_master ADD COLUMN fsc_certified TEXT DEFAULT 'N'")
+                logger.info("Added fsc_certified column to parts_master")
+            if 'fsc_certificate_code' not in columns:
+                c.execute("ALTER TABLE parts_master ADD COLUMN fsc_certificate_code TEXT")
+                logger.info("Added fsc_certificate_code column to parts_master")
+        except Exception as e:
+            logger.warning(f"Failed to add FSC columns: {e}")
+
+        # =====================================================================
+        # LACEY ACT TABLES AND MIGRATIONS
+        # =====================================================================
+
+        # Create lacey_hts_codes table - HTS codes subject to Lacey Act requirements
+        # Covers chapters 44 (Wood), 47 (Pulp), 48 (Paper), 94 (Furniture with wood)
+        c.execute("""CREATE TABLE IF NOT EXISTS lacey_hts_codes (
+            hts_code TEXT PRIMARY KEY,
+            chapter TEXT,
+            description TEXT,
+            plant_type TEXT,
+            requires_scientific_name TEXT DEFAULT 'Y',
+            requires_country_harvest TEXT DEFAULT 'Y',
+            notes TEXT
+        )""")
+
+        # Create lacey_species table - Common wood species and their scientific names
+        c.execute("""CREATE TABLE IF NOT EXISTS lacey_species (
+            species_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            common_name TEXT,
+            scientific_name TEXT,
+            cites_appendix TEXT,
+            origin_countries TEXT,
+            notes TEXT
+        )""")
+
+        # Migration: Add Lacey Act fields to parts_master if they don't exist
+        try:
+            c.execute("PRAGMA table_info(parts_master)")
+            columns = [col[1] for col in c.fetchall()]
+
+            lacey_columns = [
+                ('lacey_applicable', "TEXT DEFAULT 'N'"),
+                ('species_scientific_name', "TEXT"),
+                ('species_common_name', "TEXT"),
+                ('country_of_harvest', "TEXT"),
+                ('percent_recycled', "REAL DEFAULT 0.0"),
+                ('lacey_certificate', "TEXT"),
+            ]
+
+            for col_name, col_def in lacey_columns:
+                if col_name not in columns:
+                    c.execute(f"ALTER TABLE parts_master ADD COLUMN {col_name} {col_def}")
+                    logger.info(f"Added {col_name} column to parts_master for Lacey Act")
+        except Exception as e:
+            logger.warning(f"Failed to add Lacey Act columns to parts_master: {e}")
+
+        # Populate lacey_hts_codes with common wood/paper HTS chapters if empty
+        try:
+            c.execute("SELECT COUNT(*) FROM lacey_hts_codes")
+            if c.fetchone()[0] == 0:
+                lacey_hts_data = [
+                    # Chapter 44 - Wood and articles of wood
+                    ('44', '44', 'Wood and articles of wood; wood charcoal', 'Wood', 'Y', 'Y', 'Full chapter 44 coverage'),
+                    # Chapter 47 - Pulp of wood
+                    ('47', '47', 'Pulp of wood or other fibrous cellulosic material', 'Wood Pulp', 'Y', 'Y', 'Wood pulp products'),
+                    # Chapter 48 - Paper and paperboard
+                    ('48', '48', 'Paper and paperboard; articles of paper pulp', 'Paper', 'Y', 'Y', 'Paper products from wood'),
+                    # Chapter 94 - Furniture (wood furniture)
+                    ('9401', '94', 'Seats (wood frames)', 'Furniture', 'Y', 'Y', 'Wood frame seats'),
+                    ('9403', '94', 'Other furniture (wood)', 'Furniture', 'Y', 'Y', 'Wood furniture'),
+                ]
+                c.executemany("""INSERT OR IGNORE INTO lacey_hts_codes
+                    (hts_code, chapter, description, plant_type, requires_scientific_name, requires_country_harvest, notes)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)""", lacey_hts_data)
+                logger.info("Populated lacey_hts_codes with default HTS chapters")
+        except Exception as e:
+            logger.warning(f"Failed to populate lacey_hts_codes: {e}")
+
+        # Populate lacey_species with common wood species if empty
+        try:
+            c.execute("SELECT COUNT(*) FROM lacey_species")
+            if c.fetchone()[0] == 0:
+                species_data = [
+                    ('Oak', 'Quercus spp.', None, 'US, EU, CN', 'Common hardwood'),
+                    ('Pine', 'Pinus spp.', None, 'US, CA, EU, CN', 'Common softwood'),
+                    ('Maple', 'Acer spp.', None, 'US, CA, EU', 'Hardwood'),
+                    ('Birch', 'Betula spp.', None, 'US, CA, EU, RU', 'Hardwood'),
+                    ('Walnut', 'Juglans spp.', None, 'US, EU', 'Premium hardwood'),
+                    ('Cherry', 'Prunus spp.', None, 'US, EU', 'Hardwood'),
+                    ('Ash', 'Fraxinus spp.', None, 'US, EU', 'Hardwood'),
+                    ('Beech', 'Fagus spp.', None, 'EU, US', 'Hardwood'),
+                    ('Spruce', 'Picea spp.', None, 'US, CA, EU, RU', 'Softwood'),
+                    ('Fir', 'Abies spp.', None, 'US, CA, EU', 'Softwood'),
+                    ('Cedar', 'Cedrus spp.', None, 'US, CA', 'Softwood'),
+                    ('Mahogany', 'Swietenia spp.', 'II', 'MX, BR, PE', 'CITES listed - tropical hardwood'),
+                    ('Teak', 'Tectona grandis', None, 'MM, ID, IN', 'Tropical hardwood'),
+                    ('Rosewood', 'Dalbergia spp.', 'II', 'BR, IN, MG', 'CITES listed - tropical hardwood'),
+                    ('Ebony', 'Diospyros spp.', 'II', 'MG, IN, LK', 'CITES listed - tropical hardwood'),
+                    ('Eucalyptus', 'Eucalyptus spp.', None, 'AU, BR, CL', 'Fast-growing hardwood'),
+                    ('Bamboo', 'Bambusoideae', None, 'CN, VN, ID', 'Grass - may be exempt'),
+                    ('Poplar', 'Populus spp.', None, 'US, CA, EU, CN', 'Fast-growing hardwood'),
+                    ('MDF/Particleboard', 'Mixed species', None, 'Various', 'Composite - list primary species'),
+                    ('Plywood', 'Mixed species', None, 'Various', 'Composite - list face/core species'),
+                ]
+                c.executemany("""INSERT OR IGNORE INTO lacey_species
+                    (common_name, scientific_name, cites_appendix, origin_countries, notes)
+                    VALUES (?, ?, ?, ?, ?)""", species_data)
+                logger.info("Populated lacey_species with common wood species")
+        except Exception as e:
+            logger.warning(f"Failed to populate lacey_species: {e}")
+
         conn.commit()
         conn.close()
         logger.success("Database initialized")
@@ -1614,6 +1842,7 @@ class DropTarget(QLabel):
         self.setStyleSheet("padding: 4px 8px; background: #f8f8f8; border: 1px solid #bbb; border-radius: 4px; color: #222;")
         self.setAlignment(Qt.AlignCenter)
         self.setAcceptDrops(True)
+        self.setWordWrap(False)
         self.column_name = None
         self.setFixedHeight(28)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -1757,12 +1986,96 @@ class FileDropZone(QLabel):
     def mousePressEvent(self, event):
         # Clicking opens file dialog
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "Select CSV/Excel File", str(INPUT_DIR), 
+            self, "Select CSV/Excel File", str(INPUT_DIR),
             "CSV/Excel Files (*.csv *.xlsx *.xls)"
         )
         if file_path:
             self.file_dropped.emit(file_path)
 
+
+class PDFDropZone(QLabel):
+    """Drag-and-drop zone for PDF invoice files in OCRMill"""
+    files_dropped = pyqtSignal(list)  # Emits list of file paths
+
+    def __init__(self, browse_folder=None):
+        super().__init__()
+        self.browse_folder = browse_folder or str(Path.home())
+        self.setText("Drop PDF Invoice(s) Here\n\nor click to browse")
+        self.setAlignment(Qt.AlignCenter)
+        self.setWordWrap(True)
+        self.setMinimumHeight(100)
+        self.setAcceptDrops(True)
+        self.setCursor(Qt.PointingHandCursor)
+        self.update_style(False)
+
+    def update_style(self, hover=False):
+        if hover:
+            self.setStyleSheet("""
+                QLabel {
+                    background: #e8f5e9;
+                    border: 3px dashed #4CAF50;
+                    border-radius: 10px;
+                    font-weight: bold;
+                    color: #2E7D32;
+                    padding: 15px;
+                    font-size: 13px;
+                }
+            """)
+        else:
+            self.setStyleSheet("""
+                QLabel {
+                    background: #fafafa;
+                    border: 3px dashed #bdbdbd;
+                    border-radius: 10px;
+                    font-weight: bold;
+                    color: #757575;
+                    padding: 15px;
+                    font-size: 13px;
+                }
+            """)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            # Check if any URL is a PDF
+            for url in event.mimeData().urls():
+                if url.toLocalFile().lower().endswith('.pdf'):
+                    event.accept()
+                    self.update_style(True)
+                    return
+        event.ignore()
+
+    def dragLeaveEvent(self, event):
+        self.update_style(False)
+
+    def dropEvent(self, event):
+        self.update_style(False)
+        urls = event.mimeData().urls()
+        pdf_files = []
+        for url in urls:
+            file_path = url.toLocalFile()
+            if file_path.lower().endswith('.pdf'):
+                pdf_files.append(file_path)
+
+        if pdf_files:
+            self.files_dropped.emit(pdf_files)
+            event.accept()
+        else:
+            QMessageBox.warning(self, "Invalid File",
+                "Please drop PDF file(s) only.")
+            event.ignore()
+
+    def mousePressEvent(self, event):
+        # Clicking opens file dialog for multiple files
+        file_paths, _ = QFileDialog.getOpenFileNames(
+            self, "Select PDF Invoice(s)", self.browse_folder,
+            "PDF Files (*.pdf)"
+        )
+        if file_paths:
+            self.files_dropped.emit(file_paths)
+
+    def set_browse_folder(self, folder):
+        """Update the default browse folder"""
+        self.browse_folder = str(folder)
 
 
 # ----------------------------------------------------------------------
@@ -1860,7 +2173,7 @@ class TariffMill(QMainWindow):
 
         # TariffMill logo with wordmark
         logo_path = TEMP_RESOURCES_DIR / "tariffmill_logo_small.svg"
-        fixed_header_height = 48
+        fixed_header_height = 60
         if logo_path.exists():
             logo_label = QLabel()
             pixmap = QPixmap(str(logo_path))
@@ -1919,6 +2232,24 @@ class TariffMill(QMainWindow):
         config_action.triggered.connect(self.show_configuration_dialog)
         config_menu.addAction(config_action)
 
+        # Add Export menu
+        export_menu = menubar.addMenu("Export")
+
+        # TODO: XML Export - To be implemented at a later date
+        # # Export to XML action
+        # xml_icon = self.style().standardIcon(QStyle.SP_FileIcon)
+        # xml_export_action = QAction(xml_icon, "Export to XML...", self)
+        # xml_export_action.triggered.connect(self.export_to_xml)
+        # xml_export_action.setToolTip("Export processed invoice data to XML format for e2Open Customs Management")
+        # export_menu.addAction(xml_export_action)
+
+        # TODO: Lacey Act Export - To be implemented at a later date
+        # lacey_icon = self.style().standardIcon(QStyle.SP_FileDialogContentsView)
+        # lacey_export_action = QAction(lacey_icon, "Export Lacey Act (PPQ 505)...", self)
+        # lacey_export_action.triggered.connect(self.export_lacey_act_ppq505)
+        # lacey_export_action.setToolTip("Export items requiring Lacey Act declaration to PPQ Form 505 format")
+        # export_menu.addAction(lacey_export_action)
+
         # Add Help menu
         help_menu = menubar.addMenu("Help")
 
@@ -1967,8 +2298,10 @@ class TariffMill(QMainWindow):
         self.tab_log = QWidget()  # Keep widget for log functionality
         self.tab_config = QWidget()
         self.tab_actions = QWidget()
+        self.tab_ocrmill = QWidget()
         self.tabs.addTab(self.tab_process, "Process Shipment")
         self.tabs.addTab(self.tab_master, "Parts View")
+        self.tabs.addTab(self.tab_ocrmill, "OCRMill")
         # Invoice Mapping, Output Mapping, and Parts Import moved to Configuration menu
         # Customs Config and Section 232 Actions moved to References menu
         
@@ -1982,11 +2315,13 @@ class TariffMill(QMainWindow):
         
         # Bottom status bar with export progress indicator
         bottom_bar = QWidget()
+        bottom_bar.setMinimumHeight(18)
         bottom_bar_layout = QHBoxLayout(bottom_bar)
-        bottom_bar_layout.setContentsMargins(10, 3, 10, 3)
+        bottom_bar_layout.setContentsMargins(10, 2, 10, 2)
         bottom_bar_layout.setSpacing(10)
-        
+
         self.bottom_status = QLabel("Ready")
+        self.bottom_status.setStyleSheet("font-size: 9px;")
         bottom_bar_layout.addWidget(self.bottom_status, 1)
         
         # Export progress indicator (hidden by default)
@@ -2091,9 +2426,10 @@ class TariffMill(QMainWindow):
             return
 
         # Map tab index to setup method
-        # Tab order: 0=Process, 1=Parts View
+        # Tab order: 0=Process, 1=Parts View, 2=OCRMill
         tab_setup_methods = {
-            1: self.setup_master_tab
+            1: self.setup_master_tab,
+            2: self.setup_ocrmill_tab
             # Invoice Mapping, Output Mapping, and Parts Import moved to Configuration menu
             # Customs Config and Section 232 Actions moved to References menu
         }
@@ -2199,6 +2535,15 @@ class TariffMill(QMainWindow):
         self.mid_combo.currentTextChanged.connect(self.on_mid_changed)
         values_layout.addRow(self.mid_label, self.mid_combo)
 
+        # TODO: Customer Reference - To be implemented with XML export at a later date
+        # # Customer Reference Number (for XML export)
+        # self.customer_ref_input = ForceEditableLineEdit("")
+        # self.customer_ref_input.setObjectName("customer_ref_input")
+        # self.customer_ref_input.setPlaceholderText("Optional - for XML export")
+        # self.customer_ref_input.setToolTip("Customer reference number included in XML export header")
+        # values_layout.addRow("Customer Ref:", self.customer_ref_input)
+        self.customer_ref_input = None  # Placeholder for XML export feature
+
         # Removed broken setTabOrder calls - they were causing Qt warnings and possibly blocking keyboard input
 
         # Invoice check label and Edit Values button
@@ -2235,6 +2580,21 @@ class TariffMill(QMainWindow):
         file_group.setObjectName("SavedProfilesGroup")
         file_layout = QFormLayout()
         file_layout.setLabelAlignment(Qt.AlignRight)
+
+        # Folder profile selector with manage button
+        folder_profile_row = QHBoxLayout()
+        self.folder_profile_combo = QComboBox()
+        self.folder_profile_combo.setMinimumWidth(150)
+        self.folder_profile_combo.currentTextChanged.connect(self.load_folder_profile)
+        folder_profile_row.addWidget(self.folder_profile_combo)
+        self.manage_folder_profiles_btn = QPushButton()
+        self.manage_folder_profiles_btn.setFixedWidth(30)
+        self.manage_folder_profiles_btn.setToolTip("Manage folder profiles")
+        self.manage_folder_profiles_btn.setIcon(self.style().standardIcon(QStyle.SP_FileDialogDetailedView))
+        self.manage_folder_profiles_btn.clicked.connect(self.show_folder_profile_dialog)
+        folder_profile_row.addWidget(self.manage_folder_profiles_btn)
+        file_layout.addRow("Folder Profile:", folder_profile_row)
+
         # Profile selector
         self.profile_combo = QComboBox()
         self.profile_combo.currentTextChanged.connect(self.load_selected_profile)
@@ -2338,9 +2698,9 @@ class TariffMill(QMainWindow):
         preview_layout = QVBoxLayout()
 
         self.table = QTableWidget()
-        self.table.setColumnCount(19)
+        self.table.setColumnCount(20)
         self.table.setHorizontalHeaderLabels([
-            "Product No","Value","HTS","MID","Qty1","Qty2","Qty Unit","Dec","Melt","Cast","Smelt","Flag","Steel%","Al%","Cu%","Wood%","Auto%","Non-232%","232 Status"
+            "Product No","Value","HTS","MID","Qty1","Qty2","Qty Unit","Dec","Melt","Cast","Smelt","Flag","Steel%","Al%","Cu%","Wood%","Auto%","Non-232%","232 Status","Cust Ref"
         ])
         # Make columns manually resizable instead of auto-stretch
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
@@ -2399,7 +2759,8 @@ class TariffMill(QMainWindow):
         self.setTabOrder(self.refresh_input_btn, self.ci_input)
         self.setTabOrder(self.ci_input, self.wt_input)
         self.setTabOrder(self.wt_input, self.mid_combo)
-        self.setTabOrder(self.mid_combo, self.process_btn)
+        self.setTabOrder(self.mid_combo, self.customer_ref_input)
+        self.setTabOrder(self.customer_ref_input, self.process_btn)
         self.setTabOrder(self.process_btn, self.edit_values_btn)
         self.setTabOrder(self.edit_values_btn, self.clear_btn)
         self.setTabOrder(self.clear_btn, self.exports_list)
@@ -2824,7 +3185,7 @@ class TariffMill(QMainWindow):
             self.mid_table_widget.setRowHidden(row, False)
 
     def show_configuration_dialog(self, initial_tab=0):
-        """Show the Configuration dialog with Invoice Mapping, Output Mapping, Parts Import, MID Management, and Tariff Details tabs"""
+        """Show the Configuration dialog with Invoice Mapping, Output Mapping, Parts Import, and MID Management tabs"""
         dialog = QDialog(self)
         dialog.setWindowTitle("Configuration")
         dialog.resize(1000, 700)
@@ -2838,7 +3199,6 @@ class TariffMill(QMainWindow):
         tab_output_map = QWidget()
         tab_import = QWidget()
         tab_mid_management = QWidget()
-        tab_tariff_details = QWidget()
 
         # Temporarily swap the instance variables so setup methods populate the new widgets
         original_tab_shipment_map = self.tab_shipment_map
@@ -2854,7 +3214,6 @@ class TariffMill(QMainWindow):
         self.setup_output_mapping_tab()
         self.setup_import_tab()
         self.setup_mid_management_tab(tab_mid_management)
-        self.setup_tariff_details_tab(tab_tariff_details)
 
         # Restore original references (though they may be deleted)
         self.tab_shipment_map = original_tab_shipment_map
@@ -2866,7 +3225,6 @@ class TariffMill(QMainWindow):
         tabs.addTab(tab_output_map, "Output Mapping")
         tabs.addTab(tab_import, "Parts Import")
         tabs.addTab(tab_mid_management, "MID Management")
-        tabs.addTab(tab_tariff_details, "Tariff Details")
 
         # Set initial tab if specified
         if initial_tab > 0 and initial_tab < tabs.count():
@@ -2994,355 +3352,6 @@ class TariffMill(QMainWindow):
 
         # Load current MID data
         self.load_mid_table_data()
-
-    def setup_tariff_details_tab(self, tab_widget):
-        """Setup the Tariff Details tab for managing HTS quantity units"""
-        layout = QVBoxLayout(tab_widget)
-
-        # Title
-        title = QLabel("<h2>Tariff Details</h2><p>Manage HTS quantity units for CBP reporting</p>")
-        title.setAlignment(Qt.AlignCenter)
-        layout.addWidget(title)
-
-        # HTS Lookup group
-        lookup_group = QGroupBox("HTS Unit Lookup")
-        lookup_layout = QVBoxLayout(lookup_group)
-
-        lookup_row1 = QHBoxLayout()
-        lookup_row1.addWidget(QLabel("HTS Code:"))
-        self.hts_lookup_input = QLineEdit()
-        self.hts_lookup_input.setPlaceholderText("Enter HTS code (e.g., 8535.90.8020)")
-        self.hts_lookup_input.setMaximumWidth(200)
-        lookup_row1.addWidget(self.hts_lookup_input)
-
-        btn_lookup = QPushButton("Lookup Unit")
-        btn_lookup.setStyleSheet(self.get_button_style("primary"))
-        btn_lookup.clicked.connect(self.lookup_hts_unit)
-        lookup_row1.addWidget(btn_lookup)
-
-        self.hts_lookup_result = QLabel("")
-        lookup_row1.addWidget(self.hts_lookup_result)
-
-        lookup_row1.addStretch()
-        lookup_layout.addLayout(lookup_row1)
-
-        lookup_row2 = QHBoxLayout()
-        btn_update_parts = QPushButton("Update Parts Master Qty Units")
-        btn_update_parts.setStyleSheet(self.get_button_style("primary"))
-        btn_update_parts.clicked.connect(self.update_parts_master_qty_units)
-        btn_update_parts.setToolTip("Update qty_unit in parts_master table based on HTS codes from hts.db")
-        lookup_row2.addWidget(btn_update_parts)
-
-        btn_identify_missing = QPushButton("Identify Missing HTS Units")
-        btn_identify_missing.setStyleSheet(self.get_button_style("secondary"))
-        btn_identify_missing.clicked.connect(self.identify_missing_hts_units)
-        btn_identify_missing.setToolTip("Show HTS codes in parts_master that don't have unit data in hts.db")
-        lookup_row2.addWidget(btn_identify_missing)
-
-        self.hts_update_status = QLabel("")
-        lookup_row2.addWidget(self.hts_update_status)
-
-        lookup_row2.addStretch()
-        lookup_layout.addLayout(lookup_row2)
-
-        layout.addWidget(lookup_group)
-
-        # HTS Units table
-        table_group = QGroupBox("HTS Units Table")
-        table_layout = QVBoxLayout(table_group)
-
-        # Filter row
-        filter_layout = QHBoxLayout()
-        filter_layout.addWidget(QLabel("Filter:"))
-        self.hts_units_filter = QLineEdit()
-        self.hts_units_filter.setPlaceholderText("Search HTS codes or units...")
-        self.hts_units_filter.textChanged.connect(self.filter_hts_units_table)
-        filter_layout.addWidget(self.hts_units_filter)
-        table_layout.addLayout(filter_layout)
-
-        self.hts_units_table = QTableWidget()
-        self.hts_units_table.setColumnCount(2)
-        self.hts_units_table.setHorizontalHeaderLabels(["HTS Code", "Qty Unit"])
-        self.hts_units_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.hts_units_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.hts_units_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.hts_units_table.setAlternatingRowColors(True)
-        table_layout.addWidget(self.hts_units_table)
-
-        layout.addWidget(table_group)
-
-        # Load HTS units data
-        self.load_hts_units_table_data()
-
-    def lookup_hts_unit(self):
-        """Lookup unit of quantity for an HTS code"""
-        hts_code = self.hts_lookup_input.text().strip()
-        if not hts_code:
-            self.hts_lookup_result.setText("Enter an HTS code")
-            self.hts_lookup_result.setStyleSheet("color: orange;")
-            return
-
-        # Load HTS cache if not loaded
-        if not hasattr(self, '_usitc_hts_cache') or not self._usitc_hts_cache:
-            self._load_usitc_hts_cache()
-
-        # Normalize HTS code
-        hts_clean = hts_code.replace('.', '').strip()
-
-        # Try exact match first, then progressively shorter matches
-        unit = None
-        for length in [len(hts_clean), 10, 8, 6, 4]:
-            if length <= len(hts_clean) and hasattr(self, '_usitc_hts_cache'):
-                unit = self._usitc_hts_cache.get(hts_clean[:length])
-                if unit:
-                    break
-
-        if unit:
-            self.hts_lookup_result.setText(f"Unit: {unit}")
-            self.hts_lookup_result.setStyleSheet("color: green; font-weight: bold;")
-        else:
-            self.hts_lookup_result.setText("Not found in hts.db")
-            self.hts_lookup_result.setStyleSheet("color: red;")
-
-    def _load_usitc_hts_cache(self):
-        """Load and cache HTS data from hts.db database"""
-        # Primary source: load from hts_codes table in hts.db
-        hts_db_path = BASE_DIR / "Resources" / "References" / "hts.db"
-
-        if hts_db_path.exists():
-            try:
-                if hasattr(self, 'hts_lookup_result'):
-                    self.hts_lookup_result.setText("Loading HTS database...")
-                    QApplication.processEvents()
-
-                conn = sqlite3.connect(str(hts_db_path))
-                c = conn.cursor()
-                c.execute("SELECT full_code, unit_of_quantity FROM hts_codes WHERE length(unit_of_quantity) > 0")
-                rows = c.fetchall()
-                conn.close()
-
-                self._usitc_hts_cache = {}
-                for full_code, unit in rows:
-                    # Normalize HTS code (remove dots)
-                    hts_clean = str(full_code).replace('.', '').strip()
-                    unit_clean = str(unit).strip().upper().replace('.', '')
-                    if hts_clean and unit_clean:
-                        self._usitc_hts_cache[hts_clean] = unit_clean
-
-                logger.info(f"Loaded {len(self._usitc_hts_cache)} HTS codes from hts.db")
-                return
-            except Exception as e:
-                logger.warning(f"Failed to load from hts.db: {e}")
-
-        self._usitc_hts_cache = {}
-        logger.warning("hts.db not found or empty")
-
-    def update_parts_master_qty_units(self):
-        """Update qty_unit in parts_master table based on HTS codes from hts.db"""
-        reply = QMessageBox.question(
-            self, "Update Parts Master",
-            "This will update the qty_unit field in the parts_master table\n"
-            "based on HTS codes found in the hts.db reference database.\n\n"
-            "Only parts with missing or empty qty_unit will be updated.\n\n"
-            "Continue?",
-            QMessageBox.Yes | QMessageBox.No
-        )
-        if reply != QMessageBox.Yes:
-            return
-
-        if hasattr(self, 'hts_update_status'):
-            self.hts_update_status.setText("Loading HTS data...")
-            self.hts_update_status.setStyleSheet("color: blue;")
-        QApplication.processEvents()
-
-        try:
-            # Load HTS data from hts.db
-            hts_db_path = BASE_DIR / "Resources" / "References" / "hts.db"
-            if not hts_db_path.exists():
-                QMessageBox.critical(self, "Error", "hts.db not found in Resources/References/")
-                return
-
-            # Build lookup dictionary from hts.db
-            conn_hts = sqlite3.connect(str(hts_db_path))
-            c_hts = conn_hts.cursor()
-            c_hts.execute("SELECT full_code, unit_of_quantity FROM hts_codes WHERE length(unit_of_quantity) > 0")
-            hts_rows = c_hts.fetchall()
-            conn_hts.close()
-
-            hts_lookup = {}
-            for full_code, unit in hts_rows:
-                hts_clean = str(full_code).replace('.', '').strip()
-                unit_clean = str(unit).strip().upper().replace('.', '')
-                if hts_clean and unit_clean:
-                    hts_lookup[hts_clean] = unit_clean
-
-            if hasattr(self, 'hts_update_status'):
-                self.hts_update_status.setText(f"Loaded {len(hts_lookup)} HTS codes, updating parts...")
-            QApplication.processEvents()
-
-            # Update parts_master
-            conn = sqlite3.connect(str(DB_PATH))
-            c = conn.cursor()
-
-            # Get parts that need updating (missing or empty qty_unit)
-            c.execute("SELECT part_number, hts_code FROM parts_master WHERE (qty_unit IS NULL OR qty_unit = '') AND hts_code IS NOT NULL AND hts_code != ''")
-            parts_to_update = c.fetchall()
-
-            updated = 0
-            not_found = 0
-            for part_number, hts_code in parts_to_update:
-                # Normalize HTS code
-                hts_clean = str(hts_code).replace('.', '').strip()
-
-                # Try exact match first, then progressively shorter matches
-                unit = None
-                for length in [len(hts_clean), 10, 8, 6, 4]:
-                    if length <= len(hts_clean):
-                        unit = hts_lookup.get(hts_clean[:length])
-                        if unit:
-                            break
-
-                if unit:
-                    c.execute("UPDATE parts_master SET qty_unit = ? WHERE part_number = ?", (unit, part_number))
-                    updated += 1
-                else:
-                    not_found += 1
-
-                # Update progress
-                if (updated + not_found) % 100 == 0:
-                    if hasattr(self, 'hts_update_status'):
-                        self.hts_update_status.setText(f"Updated {updated} parts...")
-                    QApplication.processEvents()
-
-            conn.commit()
-            conn.close()
-
-            if hasattr(self, 'hts_update_status'):
-                self.hts_update_status.setText(f"Updated {updated} parts")
-                self.hts_update_status.setStyleSheet("color: green;")
-
-            QMessageBox.information(
-                self, "Update Complete",
-                f"Successfully updated {updated} parts with qty_unit.\n\n"
-                f"Parts with HTS codes not found in hts.db: {not_found}"
-            )
-
-            logger.info(f"Updated {updated} parts with qty_unit, {not_found} HTS codes not found")
-
-        except Exception as e:
-            logger.error(f"Update parts qty_unit error: {e}")
-            if hasattr(self, 'hts_update_status'):
-                self.hts_update_status.setText("Update failed")
-                self.hts_update_status.setStyleSheet("color: red;")
-            QMessageBox.critical(self, "Update Error", f"Failed to update parts:\n{str(e)}")
-
-    def identify_missing_hts_units(self):
-        """Show a dialog with HTS codes that are missing unit data in hts.db"""
-        try:
-            # Load HTS cache if not loaded
-            if not hasattr(self, '_usitc_hts_cache') or not self._usitc_hts_cache:
-                self._load_usitc_hts_cache()
-
-            # Get unique HTS codes from parts_master that don't have units
-            conn = sqlite3.connect(str(DB_PATH))
-            c = conn.cursor()
-            c.execute("""
-                SELECT DISTINCT hts_code
-                FROM parts_master
-                WHERE hts_code IS NOT NULL AND hts_code != ''
-                  AND (qty_unit IS NULL OR qty_unit = '')
-                ORDER BY hts_code
-            """)
-            parts_hts_codes = c.fetchall()
-            conn.close()
-
-            missing_codes = []
-            for (hts_code,) in parts_hts_codes:
-                hts_clean = str(hts_code).replace('.', '').strip()
-                # Check if any length match exists
-                found = False
-                for length in [len(hts_clean), 10, 8, 6, 4]:
-                    if length <= len(hts_clean) and hasattr(self, '_usitc_hts_cache'):
-                        if self._usitc_hts_cache.get(hts_clean[:length]):
-                            found = True
-                            break
-                if not found:
-                    missing_codes.append(hts_code)
-
-            # Show dialog with results
-            dialog = QDialog(self)
-            dialog.setWindowTitle("Missing HTS Units")
-            dialog.resize(500, 400)
-            layout = QVBoxLayout(dialog)
-
-            if missing_codes:
-                label = QLabel(f"<b>{len(missing_codes)} HTS codes</b> in parts_master have no unit data in hts.db:")
-                layout.addWidget(label)
-
-                text_edit = QPlainTextEdit()
-                text_edit.setReadOnly(True)
-                text_edit.setPlainText("\n".join(missing_codes))
-                layout.addWidget(text_edit)
-
-                # Copy button
-                btn_copy = QPushButton("Copy to Clipboard")
-                btn_copy.clicked.connect(lambda: QApplication.clipboard().setText("\n".join(missing_codes)))
-                layout.addWidget(btn_copy)
-            else:
-                label = QLabel("All HTS codes in parts_master have matching unit data in hts.db!")
-                label.setStyleSheet("color: green; font-weight: bold;")
-                layout.addWidget(label)
-
-            btn_close = QPushButton("Close")
-            btn_close.clicked.connect(dialog.accept)
-            layout.addWidget(btn_close)
-
-            dialog.exec_()
-
-        except Exception as e:
-            logger.error(f"Identify missing HTS units error: {e}")
-            QMessageBox.critical(self, "Error", f"Failed to identify missing HTS units:\n{str(e)}")
-
-    def load_hts_units_table_data(self):
-        """Load HTS units from hts.db into the table"""
-        if not hasattr(self, 'hts_units_table'):
-            return
-
-        try:
-            hts_db_path = BASE_DIR / "Resources" / "References" / "hts.db"
-            if not hts_db_path.exists():
-                return
-
-            conn = sqlite3.connect(str(hts_db_path))
-            c = conn.cursor()
-            c.execute("SELECT full_code, unit_of_quantity FROM hts_codes WHERE length(unit_of_quantity) > 0 ORDER BY full_code LIMIT 1000")
-            rows = c.fetchall()
-            conn.close()
-
-            self.hts_units_table.setRowCount(len(rows))
-            for i, (hts_code, qty_unit) in enumerate(rows):
-                self.hts_units_table.setItem(i, 0, QTableWidgetItem(str(hts_code)))
-                self.hts_units_table.setItem(i, 1, QTableWidgetItem(str(qty_unit)))
-
-        except Exception as e:
-            logger.error(f"Load HTS units table error: {e}")
-
-    def filter_hts_units_table(self):
-        """Filter HTS units table based on search text"""
-        if not hasattr(self, 'hts_units_table') or not hasattr(self, 'hts_units_filter'):
-            return
-
-        filter_text = self.hts_units_filter.text().strip().lower()
-
-        for row in range(self.hts_units_table.rowCount()):
-            show_row = True
-            if filter_text:
-                hts_code = self.hts_units_table.item(row, 0)
-                qty_unit = self.hts_units_table.item(row, 1)
-                hts_text = hts_code.text().lower() if hts_code else ""
-                unit_text = qty_unit.text().lower() if qty_unit else ""
-                show_row = filter_text in hts_text or filter_text in unit_text
-            self.hts_units_table.setRowHidden(row, not show_row)
 
     def show_preview_context_menu(self, pos):
         """Show context menu for the preview table"""
@@ -3664,7 +3673,7 @@ class TariffMill(QMainWindow):
         # Column names and their default visibility
         column_names = [
             "Product No", "Value", "HTS", "MID", "Qty1", "Qty2", "Qty Unit", "Dec",
-            "Melt", "Cast", "Smelt", "Flag", "Steel%", "Al%", "Cu%", "Wood%", "Auto%", "Non-232%", "232 Status"
+            "Melt", "Cast", "Smelt", "Flag", "Steel%", "Al%", "Cu%", "Wood%", "Auto%", "Non-232%", "232 Status", "Cust Ref"
         ]
         
         # Create checkboxes in a grid layout
@@ -3799,7 +3808,12 @@ class TariffMill(QMainWindow):
 
         # Check if using shared or local database
         config = load_shared_config()
-        if config.has_option('Database', 'path'):
+        is_windows_platform = sys.platform == 'win32'
+        platform_key = 'windows_path' if is_windows_platform else 'linux_path'
+        if config.has_option('Database', platform_key):
+            platform_name = "Windows" if is_windows_platform else "Linux"
+            db_type_text = f"Shared ({platform_name})"
+        elif config.has_option('Database', 'path'):
             db_type_text = "Shared (Network)"
         else:
             db_type_text = "Local"
@@ -3815,86 +3829,140 @@ class TariffMill(QMainWindow):
         shared_group = QGroupBox("Shared Database (Multi-User)")
         shared_layout = QVBoxLayout()
 
+        # Get current platform paths
+        platform_paths = get_platform_database_paths()
+        is_windows = sys.platform == 'win32'
+        current_platform = "Windows" if is_windows else "Linux"
+
         shared_info = QLabel(
-            "Configure a shared database location for multiple users.\n"
-            "This setting is stored in config.ini next to the application and applies to all users.\n\n"
-            "User-specific settings (window size, theme, etc.) remain personal."
+            "Configure platform-specific database paths for cross-platform use.\n"
+            f"Current platform: {current_platform}\n\n"
+            "When running on Linux, the Linux path is used. When running on Windows, the Windows path is used.\n"
+            "This allows the same config.ini to work on both platforms."
         )
         shared_info.setWordWrap(True)
         shared_layout.addWidget(shared_info)
 
-        # Path input row
-        path_row = QHBoxLayout()
-        shared_path_input = QLineEdit()
-        shared_path_input.setPlaceholderText("e.g., \\\\server\\share\\tariffmill.db")
-        if config.has_option('Database', 'path'):
-            shared_path_input.setText(config.get('Database', 'path'))
-        path_row.addWidget(shared_path_input)
+        # Linux path input row
+        linux_row = QHBoxLayout()
+        linux_label = QLabel("Linux Path:")
+        linux_label.setFixedWidth(85)
+        if not is_windows:
+            linux_label.setStyleSheet("font-weight: bold;")
+        linux_row.addWidget(linux_label)
 
-        browse_btn = QPushButton("Browse...")
-        def browse_database():
+        linux_path_input = QLineEdit()
+        linux_path_input.setPlaceholderText("e.g., /home/shared/tariffmill.db")
+        linux_path_input.setText(platform_paths.get('linux_path', ''))
+        linux_row.addWidget(linux_path_input)
+
+        linux_browse_btn = QPushButton("Browse...")
+        def browse_linux_database():
             path, _ = QFileDialog.getOpenFileName(
-                dialog, "Select Database File", 
+                dialog, "Select Linux Database File",
                 str(Path.home()),
                 "SQLite Database (*.db);;All Files (*.*)"
             )
             if path:
-                shared_path_input.setText(path)
-        browse_btn.clicked.connect(browse_database)
-        path_row.addWidget(browse_btn)
-        shared_layout.addLayout(path_row)
+                linux_path_input.setText(path)
+        linux_browse_btn.clicked.connect(browse_linux_database)
+        linux_row.addWidget(linux_browse_btn)
+        shared_layout.addLayout(linux_row)
+
+        # Windows path input row
+        windows_row = QHBoxLayout()
+        windows_label = QLabel("Windows Path:")
+        windows_label.setFixedWidth(85)
+        if is_windows:
+            windows_label.setStyleSheet("font-weight: bold;")
+        windows_row.addWidget(windows_label)
+
+        windows_path_input = QLineEdit()
+        windows_path_input.setPlaceholderText("e.g., \\\\server\\share\\tariffmill.db or Z:\\shared\\tariffmill.db")
+        windows_path_input.setText(platform_paths.get('windows_path', ''))
+        windows_row.addWidget(windows_path_input)
+
+        windows_browse_btn = QPushButton("Browse...")
+        def browse_windows_database():
+            path, _ = QFileDialog.getOpenFileName(
+                dialog, "Select Windows Database File",
+                str(Path.home()),
+                "SQLite Database (*.db);;All Files (*.*)"
+            )
+            if path:
+                windows_path_input.setText(path)
+        windows_browse_btn.clicked.connect(browse_windows_database)
+        windows_row.addWidget(windows_browse_btn)
+        shared_layout.addLayout(windows_row)
 
         # Action buttons
         btn_row = QHBoxLayout()
 
-        apply_btn = QPushButton("Apply Shared Path")
+        apply_btn = QPushButton("Apply Platform Paths")
         apply_btn.setStyleSheet(self.get_button_style("success"))
-        def apply_shared_path():
-            new_path = shared_path_input.text().strip()
-            if not new_path:
-                QMessageBox.warning(dialog, "No Path", "Please enter a database path.")
+        def apply_platform_paths():
+            linux_path = linux_path_input.text().strip()
+            windows_path = windows_path_input.text().strip()
+
+            if not linux_path and not windows_path:
+                QMessageBox.warning(dialog, "No Paths", "Please enter at least one database path.")
                 return
-            
-            path_obj = Path(new_path)
-            if not path_obj.exists():
-                reply = QMessageBox.question(dialog, "Database Not Found",
-                    f"The file does not exist:\n{new_path}\n\n"
-                    "Would you like to create a new database at this location?\n"
-                    "(A copy of your current database will be created)",
-                    QMessageBox.Yes | QMessageBox.No)
-                if reply == QMessageBox.Yes:
-                    try:
-                        # Copy current database to new location
-                        path_obj.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(str(DB_PATH), str(path_obj))
-                    except Exception as e:
-                        QMessageBox.critical(dialog, "Error", f"Failed to create database:\n{e}")
+
+            # Validate current platform's path exists
+            current_path = linux_path if not is_windows else windows_path
+            if current_path:
+                path_obj = Path(current_path)
+                if not path_obj.exists():
+                    reply = QMessageBox.question(dialog, "Database Not Found",
+                        f"The file for your current platform does not exist:\n{current_path}\n\n"
+                        "Would you like to create a new database at this location?\n"
+                        "(A copy of your current database will be created)",
+                        QMessageBox.Yes | QMessageBox.No)
+                    if reply == QMessageBox.Yes:
+                        try:
+                            path_obj.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.copy2(str(DB_PATH), str(path_obj))
+                        except Exception as e:
+                            QMessageBox.critical(dialog, "Error", f"Failed to create database:\n{e}")
+                            return
+                    else:
                         return
-                else:
-                    return
-            
-            # Save to config.ini
-            set_database_path(new_path)
-            db_path_label.setText(new_path)
-            db_type_label.setText("Shared (Network)")
-            QMessageBox.information(dialog, "Success", 
-                f"Database path updated to:\n{new_path}\n\n"
+
+            # Save both paths to config.ini
+            if linux_path:
+                set_database_path(linux_path, platform='linux')
+            if windows_path:
+                set_database_path(windows_path, platform='windows')
+
+            # Update display
+            active_path = linux_path if not is_windows else windows_path
+            if active_path:
+                db_path_label.setText(active_path)
+                db_type_label.setText(f"Shared ({current_platform})")
+
+            QMessageBox.information(dialog, "Success",
+                f"Platform-specific database paths saved.\n\n"
+                f"Linux: {linux_path or '(not set)'}\n"
+                f"Windows: {windows_path or '(not set)'}\n\n"
                 "Restart the application to use the new database.")
-        apply_btn.clicked.connect(apply_shared_path)
+        apply_btn.clicked.connect(apply_platform_paths)
         btn_row.addWidget(apply_btn)
 
         reset_btn = QPushButton("Use Local Database")
         reset_btn.setStyleSheet(self.get_button_style("warning"))
         def reset_to_local():
             config = load_shared_config()
-            if config.has_option('Database', 'path'):
-                config.remove_option('Database', 'path')
-                save_shared_config(config)
-            shared_path_input.clear()
+            # Remove all database path options
+            for opt in ['path', 'linux_path', 'windows_path']:
+                if config.has_option('Database', opt):
+                    config.remove_option('Database', opt)
+            save_shared_config(config)
+            linux_path_input.clear()
+            windows_path_input.clear()
             local_path = RESOURCES_DIR / DB_NAME
             db_path_label.setText(str(local_path))
             db_type_label.setText("Local")
-            QMessageBox.information(dialog, "Reset", 
+            QMessageBox.information(dialog, "Reset",
                 "Database reset to local.\n\nRestart the application to apply changes.")
         reset_btn.clicked.connect(reset_to_local)
         btn_row.addWidget(reset_btn)
@@ -3971,6 +4039,8 @@ class TariffMill(QMainWindow):
         updates_layout.addStretch()
         tabs.addTab(updates_widget, "Updates")
 
+        # OCRMill settings moved to OCRMill tab's Settings sub-tab
+
         # Add tabs to main dialog layout
         layout.addWidget(tabs)
         self.center_dialog(dialog)
@@ -4007,42 +4077,426 @@ class TariffMill(QMainWindow):
         
         # Apply global stylesheet for QGroupBox and other widgets that don't fully respect QPalette
         is_dark = theme_name in ["Fusion (Dark)", "Ocean"]
-        if is_dark:
+        if theme_name == "Ocean":
+            # Ocean theme - professional deep blue with gradients and depth
             app.setStyleSheet("""
                 QGroupBox {
-                    font-weight: bold;
-                    border: 1px solid #555;
-                    border-radius: 4px;
-                    margin-top: 8px;
-                    padding-top: 8px;
-                    background-color: #4a4a4a;
+                    font-weight: normal;
+                    border: 1px solid #3a6a9a;
+                    border-radius: 6px;
+                    margin-top: 12px;
+                    padding-top: 10px;
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #243d5c, stop:1 #1a3050);
                 }
                 QGroupBox::title {
                     subcontrol-origin: margin;
                     subcontrol-position: top left;
-                    left: 10px;
-                    padding: 0 5px;
-                    color: #ddd;
+                    left: 12px;
+                    padding: 2px 8px;
+                    color: #7ec8e3;
+                    background: #1a3050;
+                    border-radius: 3px;
                 }
                 QTabWidget::pane {
-                    border: 1px solid #555;
-                    border-radius: 4px;
+                    border: 1px solid #3a6a9a;
+                    border-radius: 6px;
+                    background: #1e3a55;
                 }
                 QTabBar::tab {
-                    background: #3a3a3a;
-                    color: #ccc;
-                    padding: 6px 12px;
-                    border: 1px solid #555;
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #2a4a6a, stop:1 #1e3a55);
+                    color: #8ac4e0;
+                    padding: 8px 16px;
+                    border: 1px solid #3a6a9a;
                     border-bottom: none;
-                    border-top-left-radius: 4px;
-                    border-top-right-radius: 4px;
+                    border-top-left-radius: 6px;
+                    border-top-right-radius: 6px;
+                    margin-right: 2px;
                 }
                 QTabBar::tab:selected {
-                    background: #4a4a4a;
-                    color: #fff;
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #3a6a9a, stop:1 #2a5070);
+                    color: #ffffff;
+                    border-bottom: 2px solid #00a8cc;
                 }
                 QTabBar::tab:hover:!selected {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #325878, stop:1 #264560);
+                    color: #c0e0f0;
+                }
+                QLineEdit, QSpinBox, QDoubleSpinBox {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #1a3550, stop:1 #152a42);
+                    color: #e0f0ff;
+                    border: 1px solid #3a6a9a;
+                    border-radius: 4px;
+                    padding: 5px 8px;
+                    selection-background-color: #0096b4;
+                }
+                QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {
+                    border: 1px solid #00a8cc;
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #1e3a55, stop:1 #183048);
+                }
+                QComboBox {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #1a3550, stop:1 #152a42);
+                    color: #e0f0ff;
+                    border: 1px solid #3a6a9a;
+                    border-radius: 4px;
+                    padding: 5px 8px;
+                }
+                QComboBox::drop-down {
+                    border: none;
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #3a6a9a, stop:1 #2a5070);
+                    border-top-right-radius: 4px;
+                    border-bottom-right-radius: 4px;
+                    width: 20px;
+                }
+                QComboBox::down-arrow {
+                    image: none;
+                    border-left: 5px solid transparent;
+                    border-right: 5px solid transparent;
+                    border-top: 6px solid #a0d0f0;
+                    margin-right: 5px;
+                }
+                QComboBox QAbstractItemView {
+                    background-color: #1a3550;
+                    color: #e0f0ff;
+                    selection-background-color: #00a8cc;
+                    border: 1px solid #3a6a9a;
+                    border-radius: 4px;
+                }
+                QListWidget {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #1a3550, stop:1 #152a42);
+                    color: #e0f0ff;
+                    border: 1px solid #3a6a9a;
+                    border-radius: 4px;
+                    alternate-background-color: #1e3a55;
+                }
+                QListWidget::item {
+                    padding: 4px;
+                    border-radius: 3px;
+                }
+                QListWidget::item:selected {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #00b8d4, stop:1 #0096b4);
+                    color: #ffffff;
+                }
+                QListWidget::item:hover:!selected {
+                    background: #2a4a6a;
+                }
+                QPushButton {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #3a7ca5, stop:1 #2a5a80);
+                    color: #ffffff;
+                    border: 1px solid #4a8cb5;
+                    border-radius: 5px;
+                    padding: 6px 14px;
+                    font-weight: normal;
+                }
+                QPushButton:hover {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #4a8cb5, stop:1 #3a7095);
+                    border: 1px solid #5a9cc5;
+                }
+                QPushButton:pressed {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #2a5a80, stop:1 #1a4a70);
+                }
+                QScrollBar:vertical {
+                    background: #1a3050;
+                    width: 12px;
+                    border-radius: 6px;
+                }
+                QScrollBar::handle:vertical {
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                        stop:0 #3a6a9a, stop:1 #4a7aaa);
+                    border-radius: 5px;
+                    min-height: 30px;
+                    margin: 2px;
+                }
+                QScrollBar::handle:vertical:hover {
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                        stop:0 #4a7aaa, stop:1 #5a8aba);
+                }
+                QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                    height: 0px;
+                }
+                QScrollBar:horizontal {
+                    background: #1a3050;
+                    height: 12px;
+                    border-radius: 6px;
+                }
+                QScrollBar::handle:horizontal {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #3a6a9a, stop:1 #4a7aaa);
+                    border-radius: 5px;
+                    min-width: 30px;
+                    margin: 2px;
+                }
+                QScrollBar::handle:horizontal:hover {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #4a7aaa, stop:1 #5a8aba);
+                }
+                QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+                    width: 0px;
+                }
+                QHeaderView::section {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #2a5070, stop:1 #1e3a55);
+                    color: #a0d0f0;
+                    padding: 6px;
+                    border: none;
+                    border-right: 1px solid #3a6a9a;
+                    border-bottom: 2px solid #00a8cc;
+                    font-weight: normal;
+                }
+                QTableWidget {
+                    background-color: #152a42;
+                    alternate-background-color: #1a3050;
+                    gridline-color: #2a4a6a;
+                    color: #e0f0ff;
+                    border: 1px solid #3a6a9a;
+                    border-radius: 4px;
+                }
+                QTableWidget::item:selected {
+                    background-color: #0096b4;
+                }
+                QLabel {
+                    color: #c0e0f0;
+                }
+                QMenu {
+                    background-color: #1e3a55;
+                    color: #e0f0ff;
+                    border: 1px solid #3a6a9a;
+                    border-radius: 4px;
+                }
+                QMenu::item:selected {
+                    background-color: #0096b4;
+                }
+                QMenuBar {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #243d5c, stop:1 #1a3050);
+                    color: #c0e0f0;
+                }
+                QMenuBar::item:selected {
+                    background: #3a6a9a;
+                    border-radius: 4px;
+                }
+            """)
+        elif is_dark:
+            # Fusion Dark theme - professional dark gray with gradients and depth
+            app.setStyleSheet("""
+                QGroupBox {
+                    font-weight: normal;
+                    border: 1px solid #4a4a4a;
+                    border-radius: 6px;
+                    margin-top: 12px;
+                    padding-top: 10px;
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #3d3d3d, stop:1 #2d2d2d);
+                }
+                QGroupBox::title {
+                    subcontrol-origin: margin;
+                    subcontrol-position: top left;
+                    left: 12px;
+                    padding: 2px 8px;
+                    color: #b0b0b0;
+                    background: #2d2d2d;
+                    border-radius: 3px;
+                }
+                QTabWidget::pane {
+                    border: 1px solid #4a4a4a;
+                    border-radius: 6px;
+                    background: #353535;
+                }
+                QTabBar::tab {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #454545, stop:1 #353535);
+                    color: #a0a0a0;
+                    padding: 8px 16px;
+                    border: 1px solid #4a4a4a;
+                    border-bottom: none;
+                    border-top-left-radius: 6px;
+                    border-top-right-radius: 6px;
+                    margin-right: 2px;
+                }
+                QTabBar::tab:selected {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #505050, stop:1 #404040);
+                    color: #ffffff;
+                    border-bottom: 2px solid #5a6a7a;
+                }
+                QTabBar::tab:hover:!selected {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #4a4a4a, stop:1 #3a3a3a);
+                    color: #d0d0d0;
+                }
+                QLineEdit, QSpinBox, QDoubleSpinBox {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #353535, stop:1 #2a2a2a);
+                    color: #e0e0e0;
+                    border: 1px solid #4a4a4a;
+                    border-radius: 4px;
+                    padding: 5px 8px;
+                    selection-background-color: #4a5a6a;
+                }
+                QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {
+                    border: 1px solid #5a6a7a;
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #3a3a3a, stop:1 #2f2f2f);
+                }
+                QComboBox {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #353535, stop:1 #2a2a2a);
+                    color: #e0e0e0;
+                    border: 1px solid #4a4a4a;
+                    border-radius: 4px;
+                    padding: 5px 8px;
+                }
+                QComboBox::drop-down {
+                    border: none;
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #505050, stop:1 #404040);
+                    border-top-right-radius: 4px;
+                    border-bottom-right-radius: 4px;
+                    width: 20px;
+                }
+                QComboBox::down-arrow {
+                    image: none;
+                    border-left: 5px solid transparent;
+                    border-right: 5px solid transparent;
+                    border-top: 6px solid #a0a0a0;
+                    margin-right: 5px;
+                }
+                QComboBox QAbstractItemView {
+                    background-color: #353535;
+                    color: #e0e0e0;
+                    selection-background-color: #4a5a6a;
+                    border: 1px solid #4a4a4a;
+                    border-radius: 4px;
+                }
+                QListWidget {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #353535, stop:1 #2a2a2a);
+                    color: #e0e0e0;
+                    border: 1px solid #4a4a4a;
+                    border-radius: 4px;
+                    alternate-background-color: #3a3a3a;
+                }
+                QListWidget::item {
+                    padding: 4px;
+                    border-radius: 3px;
+                }
+                QListWidget::item:selected {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #5a6a7a, stop:1 #4a5a6a);
+                    color: #ffffff;
+                }
+                QListWidget::item:hover:!selected {
                     background: #454545;
+                }
+                QPushButton {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #505050, stop:1 #3a3a3a);
+                    color: #e0e0e0;
+                    border: 1px solid #555555;
+                    border-radius: 5px;
+                    padding: 6px 14px;
+                    font-weight: normal;
+                }
+                QPushButton:hover {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #5a5a5a, stop:1 #454545);
+                    border: 1px solid #666666;
+                }
+                QPushButton:pressed {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #3a3a3a, stop:1 #2d2d2d);
+                }
+                QScrollBar:vertical {
+                    background: #2d2d2d;
+                    width: 12px;
+                    border-radius: 6px;
+                }
+                QScrollBar::handle:vertical {
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                        stop:0 #505050, stop:1 #5a5a5a);
+                    border-radius: 5px;
+                    min-height: 30px;
+                    margin: 2px;
+                }
+                QScrollBar::handle:vertical:hover {
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                        stop:0 #5a5a5a, stop:1 #666666);
+                }
+                QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                    height: 0px;
+                }
+                QScrollBar:horizontal {
+                    background: #2d2d2d;
+                    height: 12px;
+                    border-radius: 6px;
+                }
+                QScrollBar::handle:horizontal {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #505050, stop:1 #5a5a5a);
+                    border-radius: 5px;
+                    min-width: 30px;
+                    margin: 2px;
+                }
+                QScrollBar::handle:horizontal:hover {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #5a5a5a, stop:1 #666666);
+                }
+                QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+                    width: 0px;
+                }
+                QHeaderView::section {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #454545, stop:1 #353535);
+                    color: #c0c0c0;
+                    padding: 6px;
+                    border: none;
+                    border-right: 1px solid #4a4a4a;
+                    border-bottom: 2px solid #5a6a7a;
+                    font-weight: normal;
+                }
+                QTableWidget {
+                    background-color: #383838;
+                    alternate-background-color: #424242;
+                    gridline-color: #4a4a4a;
+                    color: #e0e0e0;
+                    border: 1px solid #505050;
+                    border-radius: 4px;
+                }
+                QTableWidget::item:selected {
+                    background-color: #4a5a6a;
+                }
+                QLabel {
+                    color: #c0c0c0;
+                }
+                QMenu {
+                    background-color: #353535;
+                    color: #e0e0e0;
+                    border: 1px solid #4a4a4a;
+                    border-radius: 4px;
+                }
+                QMenu::item:selected {
+                    background-color: #4a5a6a;
+                }
+                QMenuBar {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #3d3d3d, stop:1 #2d2d2d);
+                    color: #c0c0c0;
+                }
+                QMenuBar::item:selected {
+                    background: #505050;
+                    border-radius: 4px;
                 }
             """)
         else:
@@ -4076,6 +4530,34 @@ class TariffMill(QMainWindow):
         # Refresh preview colors for the new theme (colors are stored per-theme)
         if hasattr(self, 'table') and self.table.rowCount() > 0:
             self.refresh_preview_colors()
+
+        # Update logo for theme
+        self.update_logo_for_theme(is_dark)
+
+    def update_logo_for_theme(self, is_dark):
+        """Update the header logo based on current theme (dark/light)"""
+        if not hasattr(self, 'header_logo_label'):
+            return
+
+        if is_dark:
+            logo_path = TEMP_RESOURCES_DIR / "tariffmill_logo_small_dark.svg"
+        else:
+            logo_path = TEMP_RESOURCES_DIR / "tariffmill_logo_small.svg"
+
+        if logo_path.exists():
+            pixmap = QPixmap(str(logo_path))
+            scaled_pixmap = pixmap.scaledToHeight(60, Qt.SmoothTransformation)
+            self.header_logo_label.setPixmap(scaled_pixmap)
+        else:
+            # Fallback to text with appropriate color
+            text_color = "#e0e0e0" if is_dark else "#555555"
+            self.header_logo_label.setText(f"{APP_NAME}")
+            self.header_logo_label.setStyleSheet(f"""
+                font-size: 22px;
+                font-weight: bold;
+                color: {text_color};
+                font-family: 'Impact', 'Arial Black', sans-serif;
+            """)
 
     def apply_font_size_without_save(self, size):
         """Apply font size to application without saving (used internally)"""
@@ -4551,6 +5033,20 @@ class TariffMill(QMainWindow):
         github_label.setOpenExternalLinks(True)
         layout.addWidget(github_label)
 
+        layout.addSpacing(10)
+
+        # Copyright notice
+        copyright_label = QLabel(
+            "<p style='color: #888; font-size: 10px;'>"
+            f"Copyright (c) {COPYRIGHT_YEAR} {COPYRIGHT_HOLDER}. All Rights Reserved.<br>"
+            "This software is proprietary and confidential.<br>"
+            "Unauthorized copying or distribution is prohibited."
+            "</p>"
+        )
+        copyright_label.setWordWrap(True)
+        copyright_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(copyright_label)
+
         layout.addStretch()
 
         # Close button
@@ -4583,24 +5079,33 @@ class TariffMill(QMainWindow):
         """Update status bar backgrounds based on current theme"""
         if not hasattr(self, 'current_theme'):
             self.current_theme = "System Default"
-        
-        is_dark = self.current_theme in ["Fusion (Dark)", "Ocean"]
-        
-        if is_dark:
-            # Dark theme status bars
-            self.status.setStyleSheet("font-size:14pt; padding:8px; background:#2d2d2d; color:#e0e0e0;")
-            self.bottom_status.setStyleSheet("font-size:9pt; color:#b0b0b0;")
+
+        if self.current_theme == "Ocean":
+            # Ocean theme status bars - professional deep blue with gradient
+            self.status.setStyleSheet("font-size:14pt; padding:8px; background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #243d5c, stop:1 #1a3050); color:#c0e0f0;")
+            self.bottom_status.setStyleSheet("font-size:9px; color:#8ac4e0;")
             if hasattr(self, 'bottom_bar'):
                 self.bottom_bar.setStyleSheet("""
                     QWidget {
-                        background: #2d2d2d;
-                        border-top: 1px solid #404040;
+                        background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #1e3a55, stop:1 #152a42);
+                        border-top: 2px solid #00a8cc;
+                    }
+                """)
+        elif self.current_theme == "Fusion (Dark)":
+            # Fusion Dark theme status bars - professional with gradient
+            self.status.setStyleSheet("font-size:14pt; padding:8px; background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3d3d3d, stop:1 #2d2d2d); color:#e0e0e0;")
+            self.bottom_status.setStyleSheet("font-size:9px; color:#a0a0a0;")
+            if hasattr(self, 'bottom_bar'):
+                self.bottom_bar.setStyleSheet("""
+                    QWidget {
+                        background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #353535, stop:1 #2a2a2a);
+                        border-top: 2px solid #5a6a7a;
                     }
                 """)
         else:
             # Light theme status bars
             self.status.setStyleSheet("font-size:14pt; padding:8px; background:#f0f0f0; color:#000000;")
-            self.bottom_status.setStyleSheet("font-size:9pt; color:#555555;")
+            self.bottom_status.setStyleSheet("font-size:9px; color:#555555;")
             if hasattr(self, 'bottom_bar'):
                 self.bottom_bar.setStyleSheet("""
                     QWidget {
@@ -4608,18 +5113,18 @@ class TariffMill(QMainWindow):
                         border-top: 1px solid #d0d0d0;
                     }
                 """)
-    
+
     def update_status_bar_styles(self):
         """Update status bar backgrounds based on current theme"""
         if not hasattr(self, 'current_theme'):
             self.current_theme = "System Default"
-        
+
         is_dark = self.current_theme in ["Fusion (Dark)", "Ocean"]
-        
+
         if is_dark:
             # Dark theme status bars
             self.status.setStyleSheet("font-size:14pt; padding:8px; background:#2d2d2d; color:#e0e0e0;")
-            self.bottom_status.setStyleSheet("font-size:9pt; color:#b0b0b0;")
+            self.bottom_status.setStyleSheet("font-size:9px; color:#b0b0b0;")
             if hasattr(self, 'bottom_bar'):
                 self.bottom_bar.setStyleSheet("""
                     QWidget {
@@ -4630,7 +5135,7 @@ class TariffMill(QMainWindow):
         else:
             # Light theme status bars
             self.status.setStyleSheet("font-size:14pt; padding:8px; background:#f0f0f0; color:#000000;")
-            self.bottom_status.setStyleSheet("font-size:9pt; color:#555555;")
+            self.bottom_status.setStyleSheet("font-size:9px; color:#555555;")
             if hasattr(self, 'bottom_bar'):
                 self.bottom_bar.setStyleSheet("""
                     QWidget {
@@ -4880,24 +5385,29 @@ class TariffMill(QMainWindow):
         return palette
 
     def get_ocean_palette(self):
-        """Create an ocean-themed color palette with deep blues and teals"""
+        """Create an ocean-themed color palette with deep blues and teals - professional look"""
         from PyQt5.QtGui import QPalette, QColor
 
         palette = QPalette()
-        # Deep ocean blue backgrounds
-        palette.setColor(QPalette.Window, QColor(28, 57, 87))  # Deep ocean blue
-        palette.setColor(QPalette.WindowText, QColor(230, 245, 255))  # Light blue-white text
-        palette.setColor(QPalette.Base, QColor(28, 56, 86))  # Result preview background (#1C3856)
-        palette.setColor(QPalette.AlternateBase, QColor(35, 65, 95))  # Lighter ocean blue
-        palette.setColor(QPalette.ToolTipBase, QColor(200, 230, 255))  # Light blue
-        palette.setColor(QPalette.ToolTipText, QColor(15, 35, 55))  # Dark blue
-        palette.setColor(QPalette.Text, QColor(230, 245, 255))  # Light blue-white text
-        palette.setColor(QPalette.Button, QColor(40, 75, 110))  # Medium ocean blue
-        palette.setColor(QPalette.ButtonText, QColor(230, 245, 255))  # Light text
-        palette.setColor(QPalette.BrightText, QColor(0, 255, 200))  # Bright teal
-        palette.setColor(QPalette.Link, QColor(100, 200, 255))  # Bright cyan
-        palette.setColor(QPalette.Highlight, QColor(0, 150, 180))  # Teal highlight
-        palette.setColor(QPalette.HighlightedText, QColor(255, 255, 255))  # White text
+        # Deep ocean blue backgrounds with more contrast
+        palette.setColor(QPalette.Window, QColor(26, 48, 80))  # Main window background
+        palette.setColor(QPalette.WindowText, QColor(192, 224, 240))  # Soft blue-white text
+        palette.setColor(QPalette.Base, QColor(21, 42, 66))  # Input/table background (darker)
+        palette.setColor(QPalette.AlternateBase, QColor(26, 48, 80))  # Alternating rows
+        palette.setColor(QPalette.ToolTipBase, QColor(30, 58, 85))  # Tooltip background
+        palette.setColor(QPalette.ToolTipText, QColor(224, 240, 255))  # Tooltip text
+        palette.setColor(QPalette.Text, QColor(224, 240, 255))  # Input text color
+        palette.setColor(QPalette.Button, QColor(58, 106, 154))  # Button background
+        palette.setColor(QPalette.ButtonText, QColor(255, 255, 255))  # Button text
+        palette.setColor(QPalette.BrightText, QColor(0, 200, 220))  # Bright accent
+        palette.setColor(QPalette.Link, QColor(0, 168, 204))  # Link color (teal)
+        palette.setColor(QPalette.Highlight, QColor(0, 150, 180))  # Selection highlight
+        palette.setColor(QPalette.HighlightedText, QColor(255, 255, 255))  # Selected text
+        palette.setColor(QPalette.Light, QColor(58, 106, 154))  # Light shade
+        palette.setColor(QPalette.Midlight, QColor(42, 80, 112))  # Mid-light shade
+        palette.setColor(QPalette.Mid, QColor(58, 106, 154))  # Mid shade (for headers)
+        palette.setColor(QPalette.Dark, QColor(18, 36, 56))  # Dark shade
+        palette.setColor(QPalette.Shadow, QColor(12, 24, 40))  # Shadow
         return palette
     
     def get_teal_professional_palette(self):
@@ -4951,7 +5461,7 @@ class TariffMill(QMainWindow):
             QPushButton {{
                 background-color: rgb({bg.red()}, {bg.green()}, {bg.blue()});
                 color: rgb({text_color.red()}, {text_color.green()}, {text_color.blue()});
-                font-weight: bold;
+                font-weight: normal;
             }}
             QPushButton:hover {{
                 background-color: rgb({hover_bg.red()}, {hover_bg.green()}, {hover_bg.blue()});
@@ -4968,14 +5478,17 @@ class TariffMill(QMainWindow):
         Returns:
             CSS stylesheet string that adapts background color to current theme
         """
-        # Check if we're in a dark theme
-        is_dark_theme = hasattr(self, 'current_theme') and self.current_theme in ["Fusion (Dark)", "Ocean"]
+        # Check current theme
+        current_theme = getattr(self, 'current_theme', 'Fusion (Light)')
 
-        if is_dark_theme:
-            # Dark theme: dark background with light text
+        if current_theme == "Ocean":
+            # Ocean theme: deep blue background with light text
+            return "QLineEdit { color: #e6f5ff; background-color: #1c3856; padding: 5px; border: 1px solid #2a5a8a; }"
+        elif current_theme == "Fusion (Dark)":
+            # Fusion Dark theme: dark gray background with light text
             return "QLineEdit { color: #e0e0e0; background-color: #2d2d2d; padding: 5px; border: 1px solid #555; }"
         else:
-            # Light theme: light background with dark text
+            # Light themes: light background with dark text
             return "QLineEdit { color: #000000; background-color: #f5f5f5; padding: 5px; border: 1px solid #ccc; }"
 
     def clear_all(self):
@@ -4983,6 +5496,8 @@ class TariffMill(QMainWindow):
         self.file_label.setText("No file selected")
         self.ci_input.clear()
         self.wt_input.clear()
+        if hasattr(self, 'customer_ref_input'):
+            self.customer_ref_input.clear()
         self.mid_combo.setCurrentIndex(-1)
         self.selected_mid = ""
         self.table.setRowCount(0)
@@ -5374,21 +5889,33 @@ class TariffMill(QMainWindow):
             conn = sqlite3.connect(str(DB_PATH))
             parts = pd.read_sql("SELECT part_number, hts_code, steel_ratio, aluminum_ratio, copper_ratio, wood_ratio, auto_ratio, non_steel_ratio, qty_unit, country_of_melt, country_of_cast, country_of_smelt, Sec301_Exclusion_Tariff FROM parts_master", conn)
             conn.close()
+            # Normalize part numbers for matching (strip whitespace, uppercase)
+            df['part_number'] = df['part_number'].astype(str).str.strip().str.upper()
+            parts['part_number'] = parts['part_number'].astype(str).str.strip().str.upper()
             df = df.merge(parts, on='part_number', how='left', suffixes=('', '_master'), indicator=True)
             # Track parts not found in the database
             df['_not_in_db'] = df['_merge'] == 'left_only'
             df = df.drop(columns=['_merge'])
 
             # Merge strategy: Prefer database (master) values over invoice values
-            # Database values take precedence; invoice values are only used as fallback when not in DB
+            # Database values ALWAYS take precedence; invoice values are only used as fallback when DB is empty
             merge_fields = ['hts_code', 'steel_ratio', 'aluminum_ratio', 'copper_ratio', 'wood_ratio', 'auto_ratio', 'non_steel_ratio', 'qty_unit']
             for field in merge_fields:
                 master_col = f'{field}_master'
                 if master_col in df.columns:
-                    # Database has this field - prefer database value, fall back to invoice if DB is empty
-                    df[field] = df[master_col].replace('', pd.NA).combine_first(
-                        df[field].replace('', pd.NA) if field in df.columns else pd.Series([pd.NA] * len(df))
-                    )
+                    # Database has this field - database value ALWAYS takes precedence
+                    # Only fall back to invoice value if database value is empty/NA
+                    if field in ['steel_ratio', 'aluminum_ratio', 'copper_ratio', 'wood_ratio', 'auto_ratio', 'non_steel_ratio']:
+                        master_vals = pd.to_numeric(df[master_col], errors='coerce')
+                        invoice_vals = pd.to_numeric(df[field], errors='coerce') if field in df.columns else pd.Series([pd.NA] * len(df))
+                        # Use master value if available and not NaN, otherwise invoice value
+                        df[field] = master_vals.combine_first(invoice_vals)
+                    else:
+                        # For text fields like hts_code: database value takes precedence
+                        master_series = df[master_col].replace('', pd.NA)
+                        invoice_series = df[field].replace('', pd.NA) if field in df.columns else pd.Series([pd.NA] * len(df))
+                        # combine_first: use master, fill gaps with invoice
+                        df[field] = master_series.combine_first(invoice_series)
                 elif field not in df.columns:
                     # Neither invoice nor database has it - set default
                     if field in ['steel_ratio', 'aluminum_ratio', 'copper_ratio', 'wood_ratio', 'auto_ratio', 'non_steel_ratio']:
@@ -5397,7 +5924,9 @@ class TariffMill(QMainWindow):
                         df[field] = ''
 
             # Convert ratio fields to numeric (values are percentages 0-100)
-            df['steel_ratio'] = pd.to_numeric(df['steel_ratio'], errors='coerce').fillna(100.0)
+            # Note: fillna(0.0) for all ratios - the later processing will determine
+            # material type from HTS code if no ratios are set
+            df['steel_ratio'] = pd.to_numeric(df['steel_ratio'], errors='coerce').fillna(0.0)
             df['aluminum_ratio'] = pd.to_numeric(df['aluminum_ratio'], errors='coerce').fillna(0.0)
             df['copper_ratio'] = pd.to_numeric(df['copper_ratio'], errors='coerce').fillna(0.0)
             df['wood_ratio'] = pd.to_numeric(df['wood_ratio'], errors='coerce').fillna(0.0)
@@ -5465,13 +5994,52 @@ class TariffMill(QMainWindow):
                     # Default to 100% steel for backward compatibility if no material found
                     steel_pct = 100.0
 
-            # Create derivative rows in order: Steel first, then Aluminum, Copper, Wood, Auto, Non-232 last
-            # This ensures derivatives appear BELOW the primary row in the preview
+            # Validate that percentages sum to 100% - recalculate non_steel_pct if needed
+            # This fixes database entries where non_steel_ratio was incorrectly set to 100%
+            total_232_pct = steel_pct + aluminum_pct + copper_pct + wood_pct + auto_pct
+            if total_232_pct > 0:
+                # If we have any 232 materials, non_steel should be the remainder
+                non_steel_pct = max(0.0, 100.0 - total_232_pct)
+
+            # Final validation: ensure total is 100%
+            total_pct = steel_pct + aluminum_pct + copper_pct + wood_pct + auto_pct + non_steel_pct
+            if total_pct > 100.01:  # Allow small floating point tolerance
+                # Normalize all percentages to sum to 100%
+                scale = 100.0 / total_pct
+                steel_pct *= scale
+                aluminum_pct *= scale
+                copper_pct *= scale
+                wood_pct *= scale
+                auto_pct *= scale
+                non_steel_pct *= scale
+
+            # Create derivative rows in order: Non-232 first, then Steel, Aluminum, Copper, Wood, Auto
+            # This ensures 232 materials appear BELOW their non-232 counterparts in the preview
+            # Track allocated value to ensure total equals original (avoid rounding errors)
+            allocated_value = 0.0
+            row_start_idx = len(expanded_rows)
+
+            # Create non-232 portion row first (if non_steel_pct > 0)
+            if non_steel_pct > 0:
+                non_232_row = row.copy()
+                portion_value = round(original_value * non_steel_pct / 100.0, 2)
+                non_232_row['value_usd'] = portion_value
+                allocated_value += portion_value
+                non_232_row['SteelRatio'] = 0.0
+                non_232_row['AluminumRatio'] = 0.0
+                non_232_row['CopperRatio'] = 0.0
+                non_232_row['WoodRatio'] = 0.0
+                non_232_row['AutoRatio'] = 0.0
+                non_232_row['NonSteelRatio'] = non_steel_pct
+                non_232_row['_content_type'] = 'non_232'
+                expanded_rows.append(non_232_row)
 
             # Create steel portion row (if steel_pct > 0)
             if steel_pct > 0:
                 steel_row = row.copy()
-                steel_row['value_usd'] = original_value * steel_pct / 100.0
+                portion_value = round(original_value * steel_pct / 100.0, 2)
+                steel_row['value_usd'] = portion_value
+                allocated_value += portion_value
                 steel_row['SteelRatio'] = steel_pct
                 steel_row['AluminumRatio'] = 0.0
                 steel_row['CopperRatio'] = 0.0
@@ -5484,7 +6052,9 @@ class TariffMill(QMainWindow):
             # Create aluminum portion row (if aluminum_pct > 0)
             if aluminum_pct > 0:
                 aluminum_row = row.copy()
-                aluminum_row['value_usd'] = original_value * aluminum_pct / 100.0
+                portion_value = round(original_value * aluminum_pct / 100.0, 2)
+                aluminum_row['value_usd'] = portion_value
+                allocated_value += portion_value
                 aluminum_row['SteelRatio'] = 0.0
                 aluminum_row['AluminumRatio'] = aluminum_pct
                 aluminum_row['CopperRatio'] = 0.0
@@ -5497,7 +6067,9 @@ class TariffMill(QMainWindow):
             # Create copper portion row (if copper_pct > 0)
             if copper_pct > 0:
                 copper_row = row.copy()
-                copper_row['value_usd'] = original_value * copper_pct / 100.0
+                portion_value = round(original_value * copper_pct / 100.0, 2)
+                copper_row['value_usd'] = portion_value
+                allocated_value += portion_value
                 copper_row['SteelRatio'] = 0.0
                 copper_row['AluminumRatio'] = 0.0
                 copper_row['CopperRatio'] = copper_pct
@@ -5510,7 +6082,9 @@ class TariffMill(QMainWindow):
             # Create wood portion row (if wood_pct > 0)
             if wood_pct > 0:
                 wood_row = row.copy()
-                wood_row['value_usd'] = original_value * wood_pct / 100.0
+                portion_value = round(original_value * wood_pct / 100.0, 2)
+                wood_row['value_usd'] = portion_value
+                allocated_value += portion_value
                 wood_row['SteelRatio'] = 0.0
                 wood_row['AluminumRatio'] = 0.0
                 wood_row['CopperRatio'] = 0.0
@@ -5523,7 +6097,9 @@ class TariffMill(QMainWindow):
             # Create auto portion row (if auto_pct > 0)
             if auto_pct > 0:
                 auto_row = row.copy()
-                auto_row['value_usd'] = original_value * auto_pct / 100.0
+                portion_value = round(original_value * auto_pct / 100.0, 2)
+                auto_row['value_usd'] = portion_value
+                allocated_value += portion_value
                 auto_row['SteelRatio'] = 0.0
                 auto_row['AluminumRatio'] = 0.0
                 auto_row['CopperRatio'] = 0.0
@@ -5533,18 +6109,12 @@ class TariffMill(QMainWindow):
                 auto_row['_content_type'] = 'auto'
                 expanded_rows.append(auto_row)
 
-            # Create non-232 portion row (if non_steel_pct > 0)
-            if non_steel_pct > 0:
-                non_232_row = row.copy()
-                non_232_row['value_usd'] = original_value * non_steel_pct / 100.0
-                non_232_row['SteelRatio'] = 0.0
-                non_232_row['AluminumRatio'] = 0.0
-                non_232_row['CopperRatio'] = 0.0
-                non_232_row['WoodRatio'] = 0.0
-                non_232_row['AutoRatio'] = 0.0
-                non_232_row['NonSteelRatio'] = non_steel_pct
-                non_232_row['_content_type'] = 'non_232'
-                expanded_rows.append(non_232_row)
+            # Fix rounding errors: adjust the last created row to ensure total matches original
+            if len(expanded_rows) > row_start_idx:
+                remainder = round(original_value - allocated_value, 2)
+                if abs(remainder) > 0.001:
+                    # Add remainder to the last row created for this item
+                    expanded_rows[-1]['value_usd'] = round(expanded_rows[-1]['value_usd'] + remainder, 2)
 
         # Rebuild dataframe from expanded rows
         df = pd.DataFrame(expanded_rows).reset_index(drop=True)
@@ -5557,19 +6127,48 @@ class TariffMill(QMainWindow):
         else:
             df['CalcWtNet'] = (df['value_usd'] / total_value) * wt
 
-        # Calculate Qty1 and Qty2 based on qty_unit type
-        # KG = Qty1 is CalcWtNet, Qty2 empty
-        # NO = Qty1 is Pcs, Qty2 empty
-        # NO/KG = Qty1 is Pcs, Qty2 is CalcWtNet
+        # Calculate Qty1 and Qty2 based on qty_unit type from HTS database
+        # Categories:
+        # - Weight-only: KG, G, T -> Qty1 = CalcWtNet, Qty2 = empty
+        # - Count-only: NO, PCS, DOZ, etc. -> Qty1 = quantity (pieces), Qty2 = empty
+        # - Dual (count + weight): NO. AND KG, XX KG, XX G -> Qty1 = quantity, Qty2 = CalcWtNet
+        # - Other units (volume, area, length): Use quantity if available, else empty
+
+        # Weight-only units (Qty1 = weight in KG)
+        WEIGHT_UNITS = {'KG', 'G', 'T', 'T ADW', 'T DWB'}
+
+        # Count-only units (Qty1 = piece count)
+        COUNT_UNITS = {'NO', 'PCS', 'DOZ', 'DOZ. PRS', 'DZ PCS', 'GROSS', 'HUNDREDS',
+                       'THOUSANDS', 'PRS', 'PACK', 'DOSES', 'CARAT'}
+
+        # Dual units: first quantity is count, second is weight (Qty1 = count, Qty2 = weight)
+        # Includes NO. AND KG and metal+weight combinations
+        DUAL_UNITS = {'NO. AND KG', 'NO/KG', 'NO\\KG',
+                      'CU KG', 'CY KG', 'NI KG', 'PB KG', 'ZN KG', 'KG AMC',
+                      'AG G', 'AU G', 'IR G', 'OS G', 'PD G', 'PT G', 'RH G', 'RU G'}
+
+        # Volume/Area/Length units (use quantity from invoice)
+        MEASURE_UNITS = {'LITERS', 'PF.LITERS', 'BBL', 'M', 'LIN. M', 'M2', 'CM2', 'M3',
+                         'SQUARE', 'FIBER M', 'GBQ', 'MWH', 'THOUSAND M', 'THOUSAND M3'}
+
+        # Units that should have BOTH Qty1 and Qty2 empty (measurement-only units per CBP requirements)
+        NO_QTY_UNITS = {'M', 'M2', 'M3', 'DOZ', 'DPR', 'PRS', 'DOZ. PRS'}
+
         def get_qty1(row):
             qty_unit = str(row.get('qty_unit', '')).strip().upper() if pd.notna(row.get('qty_unit')) else ''
             if qty_unit == '':
                 return ''
-            elif qty_unit == 'KG':
-                # KG: Qty1 is net weight
+
+            # If qty_unit is in NO_QTY_UNITS, leave Qty1 empty
+            if qty_unit in NO_QTY_UNITS:
+                return ''
+
+            # Weight-only units: Qty1 is net weight
+            if qty_unit in WEIGHT_UNITS:
                 return str(int(round(row['CalcWtNet']))) if row['CalcWtNet'] > 0 else ''
-            elif qty_unit in ['NO', 'NO/KG']:
-                # NO or NO/KG: Qty1 is piece count
+
+            # Count-only units: Qty1 is piece count from invoice
+            if qty_unit in COUNT_UNITS:
                 qty = row.get('quantity', '')
                 if pd.notna(qty) and str(qty).strip():
                     try:
@@ -5577,17 +6176,85 @@ class TariffMill(QMainWindow):
                     except (ValueError, TypeError):
                         return ''
                 return ''
-            else:
+
+            # Dual units: Qty1 is piece count
+            if qty_unit in DUAL_UNITS:
+                qty = row.get('quantity', '')
+                if pd.notna(qty) and str(qty).strip():
+                    try:
+                        return str(int(float(str(qty).replace(',', '').strip())))
+                    except (ValueError, TypeError):
+                        return ''
                 return ''
+
+            # Measure units: Use quantity from invoice if available
+            if qty_unit in MEASURE_UNITS:
+                qty = row.get('quantity', '')
+                if pd.notna(qty) and str(qty).strip():
+                    try:
+                        return str(int(float(str(qty).replace(',', '').strip())))
+                    except (ValueError, TypeError):
+                        return ''
+                return ''
+
+            # Unknown unit type - try quantity first, fall back to empty
+            qty = row.get('quantity', '')
+            if pd.notna(qty) and str(qty).strip():
+                try:
+                    return str(int(float(str(qty).replace(',', '').strip())))
+                except (ValueError, TypeError):
+                    return ''
+            return ''
 
         def get_qty2(row):
             qty_unit = str(row.get('qty_unit', '')).strip().upper() if pd.notna(row.get('qty_unit')) else ''
-            if qty_unit == 'NO/KG':
-                # NO/KG: Qty2 is net weight
-                return str(int(round(row['CalcWtNet']))) if row['CalcWtNet'] > 0 else ''
-            else:
-                # All other cases: Qty2 is empty
+
+            # If qty_unit is in NO_QTY_UNITS, leave Qty2 empty
+            if qty_unit in NO_QTY_UNITS:
                 return ''
+
+            # Get content_type safely - handle NaN, None, and various string formats
+            content_type_raw = row.get('_content_type', '')
+            if pd.notna(content_type_raw) and content_type_raw:
+                content_type = str(content_type_raw).strip().lower()
+            else:
+                content_type = ''
+
+            # Get HTS code to check material type by chapter
+            hts_raw = row.get('hts_code', '')
+            hts_code = str(hts_raw).replace('.', '').strip() if pd.notna(hts_raw) else ''
+            hts_chapter = hts_code[:2] if len(hts_code) >= 2 else ''
+
+            # Get CalcWtNet safely
+            calc_wt = row.get('CalcWtNet', 0)
+            if pd.isna(calc_wt):
+                calc_wt = 0
+
+            # CBP requires Qty2 (weight) for ALL derivative rows (including non_232)
+            # This includes steel, aluminum, copper, wood, auto, AND non_232 portions
+            # Also applies to items in specific HTS chapters:
+            # - Aluminum = HTS Chapter 76
+            # - Steel = HTS Chapters 72, 73
+            # - Copper = HTS Chapter 74
+            is_derivative_row = content_type in ['steel', 'aluminum', 'copper', 'wood', 'auto', 'non_232']
+            is_aluminum_hts = hts_chapter == '76'
+            is_steel_hts = hts_chapter in ['72', '73']
+            is_copper_hts = hts_chapter == '74'
+
+            # Include Qty2 for any derivative row OR specific HTS chapters
+            if is_derivative_row or is_aluminum_hts or is_steel_hts or is_copper_hts:
+                if calc_wt > 0:
+                    return str(int(round(calc_wt)))
+                return ''
+
+            # Dual units: Qty2 is net weight
+            if qty_unit in DUAL_UNITS:
+                if calc_wt > 0:
+                    return str(int(round(calc_wt)))
+                return ''
+
+            # All other cases: Qty2 is empty
+            return ''
 
         df['Qty1'] = df.apply(get_qty1, axis=1)
         df['Qty2'] = df.apply(get_qty2, axis=1)
@@ -5595,8 +6262,8 @@ class TariffMill(QMainWindow):
         # Keep cbp_qty for backward compatibility (uses Qty1 logic)
         df['cbp_qty'] = df['Qty1']
 
-        # Set HTSCode and MID
-        df['HTSCode'] = df.get('hts_code', '')
+        # Set HTSCode and MID (convert NaN to empty string)
+        df['HTSCode'] = df['hts_code'].fillna('').astype(str).replace('nan', '')
         mid = self.selected_mid if hasattr(self, 'selected_mid') else ''
         df['MID'] = mid
         melt = str(mid)[:2] if mid else ''
@@ -5616,36 +6283,26 @@ class TariffMill(QMainWindow):
             hts_10 = hts_clean[:10]
             material, dec_type, smelt_flag = get_232_info(hts)
 
-            # Set flag and declaration code based on content type
-            # Each derivative row gets its appropriate declaration code
+            # Set flag based on content type, but use consistent declaration code from HTS lookup
+            # All derivative rows with the same HTS code get the same declaration code
             if content_type == 'steel':
                 flag = '232_Steel'
-                # Steel derivatives always get declaration code 08
-                dec_type_list.append(dec_type if dec_type else '08')
             elif content_type == 'aluminum':
                 flag = '232_Aluminum'
-                # Aluminum derivatives always get declaration code 07
-                dec_type_list.append(dec_type if dec_type else '07')
             elif content_type == 'copper':
                 flag = '232_Copper'
-                # Copper derivatives get their declaration code
-                dec_type_list.append(dec_type if dec_type else '11')
             elif content_type == 'wood':
                 flag = '232_Wood'
-                # Wood derivatives get their declaration code
-                dec_type_list.append(dec_type if dec_type else '10')
             elif content_type == 'auto':
                 flag = '232_Auto'
-                # Auto derivatives get their declaration code
-                dec_type_list.append(dec_type if dec_type else '')
             elif content_type == 'non_232':
                 flag = 'Non_232'
-                # Non-232 rows still need the declaration code from HTS lookup
-                dec_type_list.append(dec_type)
             else:
                 # Fallback for backward compatibility
                 flag = f"232_{material}" if material else ''
-                dec_type_list.append(dec_type)
+
+            # All rows with the same HTS code use the same declaration code from tariff_232 lookup
+            dec_type_list.append(dec_type)
             
             # Use imported country codes if available, otherwise fall back to MID-based default
             country_of_melt = r.get('country_of_melt', '')
@@ -5667,8 +6324,73 @@ class TariffMill(QMainWindow):
         df['CountryofMelt'] = country_melt_list
         df['CountryOfCast'] = country_cast_list
         df['PrimCountryOfSmelt'] = prim_country_smelt_list
-        df['PrimSmeltFlag'] = prim_smelt_flag_list
+        df['DeclarationFlag'] = prim_smelt_flag_list
         df['_232_flag'] = flag_list
+
+        # TODO: Lacey Act Detection - To be implemented at a later date
+        # =====================================================================
+        # LACEY ACT DETECTION
+        # Check if HTS codes fall under Lacey Act requirements (Chapters 44, 47, 48, 94)
+        # =====================================================================
+        # lacey_flag_list = []
+        # lacey_species_list = []
+        # lacey_harvest_country_list = []
+        # lacey_recycled_list = []
+        #
+        # for _, r in df.iterrows():
+        #     hts = str(r.get('hts_code', '')).replace('.', '').strip()
+        #     part_no = r.get('part_number', '')
+        #     wood_ratio = float(r.get('WoodRatio', 0) or 0)
+        #
+        #     # Check if Lacey Act applies based on HTS chapter
+        #     lacey_required = False
+        #     if hts:
+        #         chapter = hts[:2]
+        #         # Chapters subject to Lacey Act: 44 (Wood), 47 (Pulp), 48 (Paper)
+        #         if chapter in ('44', '47', '48'):
+        #             lacey_required = True
+        #         # Chapter 94 furniture - check for wood furniture (9401, 9403)
+        #         elif hts[:4] in ('9401', '9403'):
+        #             lacey_required = True
+        #
+        #     # Also flag if wood_ratio > 0 (product contains wood content)
+        #     if wood_ratio > 0:
+        #         lacey_required = True
+        #
+        #     # Look up Lacey data from parts_master if available
+        #     species_name = ''
+        #     harvest_country = ''
+        #     recycled_pct = 0.0
+        #
+        #     if part_no:
+        #         try:
+        #             conn = sqlite3.connect(str(DB_PATH))
+        #             c = conn.cursor()
+        #             c.execute("""SELECT species_scientific_name, species_common_name, country_of_harvest, percent_recycled
+        #                          FROM parts_master WHERE part_number = ?""", (part_no,))
+        #             row = c.fetchone()
+        #             conn.close()
+        #             if row:
+        #                 species_name = row[0] or row[1] or ''  # Prefer scientific name
+        #                 harvest_country = row[2] or ''
+        #                 recycled_pct = float(row[3] or 0)
+        #         except:
+        #             pass
+        #
+        #     lacey_flag_list.append('Y' if lacey_required else 'N')
+        #     lacey_species_list.append(species_name)
+        #     lacey_harvest_country_list.append(harvest_country)
+        #     lacey_recycled_list.append(recycled_pct)
+        #
+        # df['_lacey_required'] = lacey_flag_list
+        # df['LaceySpecies'] = lacey_species_list
+        # df['LaceyHarvestCountry'] = lacey_harvest_country_list
+        # df['LaceyRecycledPct'] = lacey_recycled_list
+        #
+        # # Log Lacey Act summary
+        # lacey_count = sum(1 for f in lacey_flag_list if f == 'Y')
+        # if lacey_count > 0:
+        #     logger.info(f"Lacey Act: {lacey_count} items require PPQ Form 505 declaration")
 
         # Rename columns for preview
         df['Product No'] = df['part_number']
@@ -5681,8 +6403,10 @@ class TariffMill(QMainWindow):
         # Include invoice_number if mapped (for split by invoice export feature)
         base_preview_cols = [
             'Product No','ValueUSD','HTSCode','MID','CalcWtNet','quantity','qty_unit','Qty1','Qty2','cbp_qty','DecTypeCd',
-            'CountryofMelt','CountryOfCast','PrimCountryOfSmelt','PrimSmeltFlag',
+            'CountryofMelt','CountryOfCast','PrimCountryOfSmelt','DeclarationFlag',
             'SteelRatio','AluminumRatio','CopperRatio','WoodRatio','AutoRatio','NonSteelRatio','_232_flag','_not_in_db','Sec301_Exclusion_Tariff'
+            # TODO: Lacey columns - To be implemented at a later date
+            # '_lacey_required','LaceySpecies','LaceyHarvestCountry','LaceyRecycledPct'
         ]
         preview_cols = base_preview_cols.copy()
         if 'invoice_number' in df.columns:
@@ -5930,43 +6654,50 @@ class TariffMill(QMainWindow):
 
             product_no = str(r['Product No'])
 
-            # Get net weight (CalcWtNet) and quantity for display
-            calc_wt_net = r.get('CalcWtNet', 0.0)
-            net_wt_display = str(int(round(calc_wt_net))) if pd.notna(calc_wt_net) and calc_wt_net > 0 else ""
-            quantity = r.get('quantity', '')
-            try:
-                pcs_display = str(int(float(str(quantity).replace(',', '')))) if pd.notna(quantity) and str(quantity).strip() else ""
-            except (ValueError, TypeError):
-                pcs_display = ""
+            # Get Qty1 and Qty2 from calculated values (these were computed during processing)
+            qty1_val = r.get('Qty1', '')
+            qty1_display = str(qty1_val) if pd.notna(qty1_val) and str(qty1_val).strip() not in ['', 'nan', 'None'] else ""
+            qty2_val = r.get('Qty2', '')
+            qty2_display = str(qty2_val) if pd.notna(qty2_val) and str(qty2_val).strip() not in ['', 'nan', 'None'] else ""
 
             # Get qty_unit from database (KG, NO, etc.) for display
             qty_unit_display = str(r.get('qty_unit', '')).strip().upper() if pd.notna(r.get('qty_unit')) else ""
+
+            # Get customer reference from input field
+            customer_ref_display = self.customer_ref_input.text().strip() if hasattr(self, 'customer_ref_input') else ""
+
+            # TODO: Lacey Act status - To be implemented at a later date
+            # lacey_required = r.get('_lacey_required', 'N')
+            # lacey_display = "Y" if lacey_required == 'Y' else ""
 
             items = [
                 QTableWidgetItem(product_no),                        # 0: Product No
                 value_item,                                          # 1: Value
                 hts_item,                                            # 2: HTS
                 QTableWidgetItem(str(r.get('MID',''))),              # 3: MID
-                QTableWidgetItem(net_wt_display),                    # 4: Net Wt
-                QTableWidgetItem(pcs_display),                       # 5: Pcs
+                QTableWidgetItem(qty1_display),                      # 4: Qty1
+                QTableWidgetItem(qty2_display),                      # 5: Qty2
                 QTableWidgetItem(qty_unit_display),                  # 6: Qty Unit
                 QTableWidgetItem(str(r.get('DecTypeCd',''))),        # 7: Dec
                 QTableWidgetItem(str(r.get('CountryofMelt',''))),    # 8: Melt
                 QTableWidgetItem(str(r.get('CountryOfCast',''))),    # 9: Cast
                 QTableWidgetItem(str(r.get('PrimCountryOfSmelt',''))), # 10: Smelt
-                QTableWidgetItem(str(r.get('PrimSmeltFlag',''))),    # 11: Flag
+                QTableWidgetItem(str(r.get('DeclarationFlag',''))),    # 11: Flag
                 QTableWidgetItem(steel_display),                     # 12: Steel%
                 QTableWidgetItem(aluminum_display),                  # 13: Al%
                 QTableWidgetItem(copper_display),                    # 14: Cu%
                 QTableWidgetItem(wood_display),                      # 15: Wood%
                 QTableWidgetItem(auto_display),                      # 16: Auto%
                 QTableWidgetItem(non_steel_display),                 # 17: Non-232%
-                QTableWidgetItem(status_display)                     # 18: 232 Status
+                QTableWidgetItem(status_display),                    # 18: 232 Status
+                QTableWidgetItem(customer_ref_display)               # 19: Cust Ref
+                # TODO: Lacey column - To be implemented at a later date
+                # QTableWidgetItem(lacey_display)                      # 20: Lacey
             ]
 
-            # Make all items editable except Net Wt, Pcs, Steel%, Al%, Cu%, Wood%, Auto%, Non-232%, 232 Status
+            # Make all items editable except Qty1, Qty2, Steel%, Al%, Cu%, Wood%, Auto%, Non-232%, 232 Status
             for idx, item in enumerate(items):
-                if idx not in [4, 5, 12, 13, 14, 15, 16, 17, 18]:  # Not Net Wt, Pcs, Steel%, Al%, Cu%, Wood%, Auto%, Non-232%, 232 Status
+                if idx not in [4, 5, 12, 13, 14, 15, 16, 17, 18]:  # Not Qty1, Qty2, Steel%, Al%, Cu%, Wood%, Auto%, Non-232%, 232 Status
                     item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsEditable)
 
             # Set font colors based on Section 232 material type
@@ -6193,7 +6924,7 @@ class TariffMill(QMainWindow):
                         if column_name in cols and field_key in self.import_targets:
                             target = self.import_targets[field_key]
                             target.column_name = column_name
-                            target.setText(f"{field_key}\n<- {column_name}")
+                            target.setText(f"{field_key} <- {column_name}")
                             target.setProperty("occupied", True)
                             target.style().unpolish(target)
                             target.style().polish(target)
@@ -6273,7 +7004,7 @@ class TariffMill(QMainWindow):
         # Update the target that received the drop
         target = self.import_targets[field_key]
         target.column_name = column_name
-        target.setText(f"{field_key}\n<- {column_name}")
+        target.setText(f"{field_key} <- {column_name}")
         target.setProperty("occupied", True)
         target.style().unpolish(target); target.style().polish(target)
 
@@ -6744,22 +7475,41 @@ class TariffMill(QMainWindow):
         link_bar.addStretch()
         layout.addWidget(link_bar_widget)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll_widget = QWidget()
-        scroll_layout = QVBoxLayout(scroll_widget)
-
+        # Main container with three columns side by side
         self.shipment_widget = QWidget()
         self.shipment_layout = QHBoxLayout(self.shipment_widget)
+        self.shipment_layout.setSpacing(10)
 
+        # LEFT: CSV Columns - Drag (with independent scroll)
         left = QGroupBox("Your CSV Columns - Drag")
-        left_layout = QVBoxLayout()
-        self.shipment_drag_labels = []
-        left_layout.addStretch()
-        left.setLayout(left_layout)
+        left_main_layout = QVBoxLayout()
+        left_main_layout.setContentsMargins(5, 5, 5, 5)
 
+        # Scroll area for drag labels
+        self.left_scroll = QScrollArea()
+        self.left_scroll.setWidgetResizable(True)
+        self.left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.left_scroll.setMinimumHeight(200)
+        left_scroll_widget = QWidget()
+        self.left_scroll_layout = QVBoxLayout(left_scroll_widget)
+        self.left_scroll_layout.setSpacing(4)
+        self.shipment_drag_labels = []
+        self.left_scroll_layout.addStretch()
+        self.left_scroll.setWidget(left_scroll_widget)
+        left_main_layout.addWidget(self.left_scroll)
+        left.setLayout(left_main_layout)
+
+        # CENTER: Required Fields - Drop (with independent scroll)
         right = QGroupBox("Required Fields - Drop")
-        right_layout = QFormLayout()
+        right_main_layout = QVBoxLayout()
+        right_main_layout.setContentsMargins(5, 5, 5, 5)
+
+        right_scroll = QScrollArea()
+        right_scroll.setWidgetResizable(True)
+        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        right_scroll.setMinimumHeight(200)
+        right_scroll_widget = QWidget()
+        right_layout = QFormLayout(right_scroll_widget)
         right_layout.setLabelAlignment(Qt.AlignRight)
         self.shipment_targets = {}
         required_fields = {
@@ -6771,10 +7521,21 @@ class TariffMill(QMainWindow):
             target.dropped.connect(self.on_shipment_drop)
             right_layout.addRow(f"{name}:", target)
             self.shipment_targets[key] = target
-        right.setLayout(right_layout)
+        right_scroll.setWidget(right_scroll_widget)
+        right_main_layout.addWidget(right_scroll)
+        right.setLayout(right_main_layout)
 
+        # RIGHT: Optional Fields - Drop (with independent scroll)
         optional = QGroupBox("Optional Fields - Drop")
-        optional_layout = QFormLayout()
+        optional_main_layout = QVBoxLayout()
+        optional_main_layout.setContentsMargins(5, 5, 5, 5)
+
+        optional_scroll = QScrollArea()
+        optional_scroll.setWidgetResizable(True)
+        optional_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        optional_scroll.setMinimumHeight(200)
+        optional_scroll_widget = QWidget()
+        optional_layout = QFormLayout(optional_scroll_widget)
         optional_layout.setLabelAlignment(Qt.AlignRight)
         optional_fields = {
             "invoice_number": "Invoice Number",
@@ -6787,13 +7548,14 @@ class TariffMill(QMainWindow):
             target.dropped.connect(self.on_shipment_drop)
             optional_layout.addRow(f"{name}:", target)
             self.shipment_targets[key] = target
-        optional.setLayout(optional_layout)
+        optional_scroll.setWidget(optional_scroll_widget)
+        optional_main_layout.addWidget(optional_scroll)
+        optional.setLayout(optional_main_layout)
 
-        self.shipment_layout.addWidget(left,1); self.shipment_layout.addWidget(right,1); self.shipment_layout.addWidget(optional,1)
-        scroll_layout.addWidget(self.shipment_widget)
-
-        scroll.setWidget(scroll_widget)
-        layout.addWidget(scroll, 1)
+        self.shipment_layout.addWidget(left, 1)
+        self.shipment_layout.addWidget(right, 1)
+        self.shipment_layout.addWidget(optional, 1)
+        layout.addWidget(self.shipment_widget, 1)
         self.tab_shipment_map.setLayout(layout)
 
     def setup_output_mapping_tab(self):
@@ -7043,8 +7805,8 @@ class TariffMill(QMainWindow):
         self.default_output_column_order = [
             'Product No', 'ValueUSD', 'HTSCode', 'MID', 'Qty1', 'Qty2',
             'DecTypeCd', 'CountryofMelt', 'CountryOfCast', 'PrimCountryOfSmelt',
-            'PrimSmeltFlag', 'SteelRatio', 'AluminumRatio', 'CopperRatio',
-            'WoodRatio', 'AutoRatio', 'NonSteelRatio', '232_Status'
+            'DeclarationFlag', 'SteelRatio', 'AluminumRatio', 'CopperRatio',
+            'WoodRatio', 'AutoRatio', 'NonSteelRatio', '232_Status', 'CustomerRef'
         ]
 
         # Default column mappings (internal_name: display_name)
@@ -7358,6 +8120,8 @@ class TariffMill(QMainWindow):
             self.load_output_mapping_profiles()
             if is_widget_valid(self.output_profile_combo):
                 self.output_profile_combo.setCurrentText(name)
+            # Also refresh the linked export combo in Invoice Mapping tab
+            self.refresh_linked_export_combo()
             self.bottom_status.setText(f"Saved output mapping profile: {name}")
             logger.info(f"Saved output mapping profile: {name}")
 
@@ -7441,6 +8205,8 @@ class TariffMill(QMainWindow):
             conn.close()
 
             self.load_output_mapping_profiles()
+            # Also refresh the linked export combo in Invoice Mapping tab
+            self.refresh_linked_export_combo()
             self.bottom_status.setText(f"Deleted output mapping profile: {profile_name}")
             logger.info(f"Deleted output mapping profile: {profile_name}")
 
@@ -7488,11 +8254,11 @@ class TariffMill(QMainWindow):
                 label.setParent(None)
             self.shipment_drag_labels = []
 
-            # Add new labels from extracted columns
-            left_layout = self.shipment_widget.layout().itemAt(0).widget().layout()
+            # Add new labels from extracted columns to the scroll layout
             for col in cols:
                 lbl = DraggableLabel(str(col))
-                left_layout.insertWidget(left_layout.count()-1, lbl)
+                # Insert before the stretch at the end
+                self.left_scroll_layout.insertWidget(self.left_scroll_layout.count()-1, lbl)
                 self.shipment_drag_labels.append(lbl)
 
             # Determine file type for status message
@@ -7837,7 +8603,7 @@ class TariffMill(QMainWindow):
 
     def load_profile_link(self, input_profile_name):
         """Load the linked export profile for an input profile"""
-        if not hasattr(self, 'linked_export_combo'):
+        if not hasattr(self, 'linked_export_combo') or not is_widget_valid(self.linked_export_combo):
             return
 
         try:
@@ -7856,9 +8622,10 @@ class TariffMill(QMainWindow):
                     self.linked_export_combo.setCurrentIndex(0)
             else:
                 self.linked_export_combo.setCurrentIndex(0)
+        except (RuntimeError, AttributeError):
+            pass  # Widget has been deleted
         except Exception as e:
             logger.warning(f"Failed to load profile link: {e}")
-            self.linked_export_combo.setCurrentIndex(0)
 
     def apply_linked_export_profile(self, input_profile_name):
         """Apply the linked export profile settings when an input profile is loaded"""
@@ -7872,13 +8639,293 @@ class TariffMill(QMainWindow):
             if row and row[0]:
                 export_profile = row[0]
                 # Load the export profile settings
-                if hasattr(self, 'output_profile_combo'):
+                if hasattr(self, 'output_profile_combo') and is_widget_valid(self.output_profile_combo):
                     idx = self.output_profile_combo.findText(export_profile)
                     if idx >= 0:
                         self.output_profile_combo.setCurrentIndex(idx)
                         logger.info(f"Auto-loaded linked export profile: {export_profile}")
+        except (RuntimeError, AttributeError):
+            pass  # Widget has been deleted
         except Exception as e:
             logger.warning(f"Failed to apply linked export profile: {e}")
+
+    def refresh_linked_export_combo(self):
+        """Refresh the linked export profile dropdown with current output profiles"""
+        if not hasattr(self, 'linked_export_combo') or not is_widget_valid(self.linked_export_combo):
+            return
+
+        try:
+            # Remember current selection
+            current_text = self.linked_export_combo.currentText()
+
+            # Clear and repopulate
+            self.linked_export_combo.clear()
+            self.linked_export_combo.addItem("(None)")
+
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("SELECT DISTINCT profile_name FROM output_column_mappings ORDER BY profile_name")
+            for row in c.fetchall():
+                self.linked_export_combo.addItem(row[0])
+            conn.close()
+
+            # Restore selection if it still exists
+            idx = self.linked_export_combo.findText(current_text)
+            if idx >= 0:
+                self.linked_export_combo.setCurrentIndex(idx)
+        except (RuntimeError, AttributeError):
+            pass  # Widget has been deleted
+        except Exception as e:
+            logger.warning(f"Failed to refresh linked export combo: {e}")
+
+    # ========== FOLDER PROFILE FUNCTIONS ==========
+
+    def load_folder_profiles(self):
+        """Load folder profiles into the dropdown"""
+        if not hasattr(self, 'folder_profile_combo'):
+            return
+
+        try:
+            current_text = self.folder_profile_combo.currentText()
+            self.folder_profile_combo.blockSignals(True)
+            self.folder_profile_combo.clear()
+            self.folder_profile_combo.addItem("-- Select Folder Profile --")
+
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("SELECT profile_name FROM folder_profiles ORDER BY profile_name")
+            for row in c.fetchall():
+                self.folder_profile_combo.addItem(row[0])
+            conn.close()
+
+            # Restore selection if it exists
+            if current_text and current_text != "-- Select Folder Profile --":
+                idx = self.folder_profile_combo.findText(current_text)
+                if idx >= 0:
+                    self.folder_profile_combo.setCurrentIndex(idx)
+
+            self.folder_profile_combo.blockSignals(False)
+        except Exception as e:
+            logger.warning(f"Failed to load folder profiles: {e}")
+            self.folder_profile_combo.blockSignals(False)
+
+    def load_folder_profile(self, name):
+        """Load a folder profile and update INPUT_DIR and OUTPUT_DIR"""
+        global INPUT_DIR, OUTPUT_DIR
+
+        if not name or name == "-- Select Folder Profile --":
+            return
+
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("SELECT input_folder, output_folder FROM folder_profiles WHERE profile_name = ?", (name,))
+            row = c.fetchone()
+            conn.close()
+
+            if row:
+                input_folder, output_folder = row
+                if input_folder:
+                    input_folder = os.path.normpath(input_folder)
+                    INPUT_DIR = Path(input_folder)
+                    set_user_setting('input_folder', input_folder)
+                if output_folder:
+                    output_folder = os.path.normpath(output_folder)
+                    OUTPUT_DIR = Path(output_folder)
+                    set_user_setting('output_folder', output_folder)
+
+                # Refresh the input files list
+                self.refresh_input_files()
+                self.refresh_exported_files()
+
+                logger.info(f"Loaded folder profile: {name}")
+                self.bottom_status.setText(f"Folder profile loaded: {name}")
+        except Exception as e:
+            logger.error(f"Failed to load folder profile: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to load folder profile: {e}")
+
+    def show_folder_profile_dialog(self):
+        """Show dialog to manage folder profiles"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Manage Folder Profiles")
+        dialog.setMinimumSize(500, 400)
+
+        layout = QVBoxLayout(dialog)
+
+        # Profile list
+        list_group = QGroupBox("Saved Folder Profiles")
+        list_layout = QVBoxLayout()
+
+        self.folder_profile_list = QListWidget()
+        self.folder_profile_list.itemClicked.connect(self._folder_profile_selected)
+        list_layout.addWidget(self.folder_profile_list)
+
+        list_group.setLayout(list_layout)
+        layout.addWidget(list_group)
+
+        # Edit group
+        edit_group = QGroupBox("Profile Details")
+        edit_layout = QFormLayout()
+
+        self.folder_profile_name_edit = QLineEdit()
+        self.folder_profile_name_edit.setPlaceholderText("Enter profile name...")
+        edit_layout.addRow("Profile Name:", self.folder_profile_name_edit)
+
+        # Input folder
+        input_row = QHBoxLayout()
+        self.folder_profile_input_edit = QLineEdit()
+        self.folder_profile_input_edit.setPlaceholderText("Select input folder...")
+        input_browse_btn = QPushButton("Browse...")
+        input_browse_btn.clicked.connect(self._browse_folder_profile_input)
+        input_row.addWidget(self.folder_profile_input_edit)
+        input_row.addWidget(input_browse_btn)
+        edit_layout.addRow("Input Folder:", input_row)
+
+        # Output folder
+        output_row = QHBoxLayout()
+        self.folder_profile_output_edit = QLineEdit()
+        self.folder_profile_output_edit.setPlaceholderText("Select output folder...")
+        output_browse_btn = QPushButton("Browse...")
+        output_browse_btn.clicked.connect(self._browse_folder_profile_output)
+        output_row.addWidget(self.folder_profile_output_edit)
+        output_row.addWidget(output_browse_btn)
+        edit_layout.addRow("Output Folder:", output_row)
+
+        edit_group.setLayout(edit_layout)
+        layout.addWidget(edit_group)
+
+        # Buttons
+        btn_layout = QHBoxLayout()
+
+        save_btn = QPushButton("Save Profile")
+        save_btn.setStyleSheet(self.get_button_style("success"))
+        save_btn.clicked.connect(lambda: self._save_folder_profile(dialog))
+        btn_layout.addWidget(save_btn)
+
+        delete_btn = QPushButton("Delete Profile")
+        delete_btn.setStyleSheet(self.get_button_style("danger"))
+        delete_btn.clicked.connect(lambda: self._delete_folder_profile(dialog))
+        btn_layout.addWidget(delete_btn)
+
+        btn_layout.addStretch()
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dialog.accept)
+        btn_layout.addWidget(close_btn)
+
+        layout.addLayout(btn_layout)
+
+        # Load existing profiles
+        self._refresh_folder_profile_list()
+
+        # Pre-fill with current folders
+        self.folder_profile_input_edit.setText(str(INPUT_DIR))
+        self.folder_profile_output_edit.setText(str(OUTPUT_DIR))
+
+        dialog.exec_()
+
+        # Refresh dropdown after dialog closes
+        self.load_folder_profiles()
+
+    def _refresh_folder_profile_list(self):
+        """Refresh the folder profile list in the dialog"""
+        self.folder_profile_list.clear()
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("SELECT profile_name, input_folder, output_folder FROM folder_profiles ORDER BY profile_name")
+            for row in c.fetchall():
+                item = QListWidgetItem(row[0])
+                item.setData(Qt.UserRole, {'input': row[1], 'output': row[2]})
+                self.folder_profile_list.addItem(item)
+            conn.close()
+        except Exception as e:
+            logger.warning(f"Failed to refresh folder profile list: {e}")
+
+    def _folder_profile_selected(self, item):
+        """Handle folder profile selection in dialog"""
+        self.folder_profile_name_edit.setText(item.text())
+        data = item.data(Qt.UserRole)
+        if data:
+            self.folder_profile_input_edit.setText(self._normalize_path(data.get('input', '')))
+            self.folder_profile_output_edit.setText(self._normalize_path(data.get('output', '')))
+
+    def _normalize_path(self, path):
+        """Normalize path for the current operating system"""
+        if not path:
+            return path
+        # Use os.path.normpath to convert slashes appropriately for the OS
+        return os.path.normpath(path)
+
+    def _browse_folder_profile_input(self):
+        """Browse for input folder in profile dialog"""
+        folder = QFileDialog.getExistingDirectory(self, "Select Input Folder", self.folder_profile_input_edit.text())
+        if folder:
+            self.folder_profile_input_edit.setText(self._normalize_path(folder))
+
+    def _browse_folder_profile_output(self):
+        """Browse for output folder in profile dialog"""
+        folder = QFileDialog.getExistingDirectory(self, "Select Output Folder", self.folder_profile_output_edit.text())
+        if folder:
+            self.folder_profile_output_edit.setText(self._normalize_path(folder))
+
+    def _save_folder_profile(self, dialog):
+        """Save the folder profile"""
+        name = self.folder_profile_name_edit.text().strip()
+        if not name:
+            QMessageBox.warning(dialog, "Missing Name", "Please enter a profile name.")
+            return
+
+        input_folder = self._normalize_path(self.folder_profile_input_edit.text().strip())
+        output_folder = self._normalize_path(self.folder_profile_output_edit.text().strip())
+
+        if not input_folder or not output_folder:
+            QMessageBox.warning(dialog, "Missing Folders", "Please select both input and output folders.")
+            return
+
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("""INSERT OR REPLACE INTO folder_profiles
+                        (profile_name, input_folder, output_folder, created_date)
+                        VALUES (?, ?, ?, ?)""",
+                     (name, input_folder, output_folder, datetime.now().isoformat()))
+            conn.commit()
+            conn.close()
+
+            logger.success(f"Folder profile saved: {name}")
+            QMessageBox.information(dialog, "Saved", f"Folder profile '{name}' saved successfully.")
+            self._refresh_folder_profile_list()
+        except Exception as e:
+            logger.error(f"Failed to save folder profile: {e}")
+            QMessageBox.critical(dialog, "Error", f"Failed to save folder profile: {e}")
+
+    def _delete_folder_profile(self, dialog):
+        """Delete the selected folder profile"""
+        current_item = self.folder_profile_list.currentItem()
+        if not current_item:
+            QMessageBox.information(dialog, "No Selection", "Please select a profile to delete.")
+            return
+
+        name = current_item.text()
+        reply = QMessageBox.question(dialog, "Confirm Delete",
+                                    f"Are you sure you want to delete the folder profile '{name}'?",
+                                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+
+        if reply == QMessageBox.Yes:
+            try:
+                conn = sqlite3.connect(str(DB_PATH))
+                c = conn.cursor()
+                c.execute("DELETE FROM folder_profiles WHERE profile_name = ?", (name,))
+                conn.commit()
+                conn.close()
+
+                logger.info(f"Folder profile deleted: {name}")
+                self._refresh_folder_profile_list()
+                self.folder_profile_name_edit.clear()
+            except Exception as e:
+                logger.error(f"Failed to delete folder profile: {e}")
+                QMessageBox.critical(dialog, "Error", f"Failed to delete folder profile: {e}")
 
     def apply_current_mapping(self):
         # Check if shipment_targets is valid (not deleted after dialog close)
@@ -7912,7 +8959,7 @@ class TariffMill(QMainWindow):
                 col = self.shipment_mapping.get(key)
                 if col:
                     target.column_name = col
-                    target.setText(f"{key}\n<- {col}")
+                    target.setText(f"{key} <- {col}")
                     target.setProperty("occupied", True)
                 else:
                     target.column_name = None
@@ -8074,6 +9121,919 @@ class TariffMill(QMainWindow):
         self.refresh_parts_table()
         self.tab_master.setLayout(layout)
 
+    def setup_ocrmill_tab(self):
+        """Setup the OCRMill tab for OCR invoice processing"""
+        from ocrmill_database import OCRMillDatabase
+        from ocrmill_processor import ProcessorEngine, OCRMillConfig
+        from ocrmill_worker import OCRMillWorker, SingleFileWorker, MultiFileWorker, ParallelFolderWorker
+
+        layout = QVBoxLayout()
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
+
+        # Initialize OCRMill components
+        self.ocrmill_db = OCRMillDatabase(DB_PATH)
+        self.ocrmill_config = OCRMillConfig()
+
+        # Load saved settings (normalize paths to OS-native format)
+        input_setting = get_user_setting('ocrmill_input_folder', str(BASE_DIR / "Input" / "OCRMill"))
+        output_setting = get_user_setting('ocrmill_output_folder', str(BASE_DIR / "Output" / "OCRMill"))
+        self.ocrmill_config.input_folder = Path(input_setting)
+        self.ocrmill_config.output_folder = Path(output_setting)
+        # Update registry with normalized paths if they were stored with wrong separators
+        set_user_setting('ocrmill_input_folder', str(self.ocrmill_config.input_folder))
+        set_user_setting('ocrmill_output_folder', str(self.ocrmill_config.output_folder))
+        self.ocrmill_config.poll_interval = get_user_setting_int('ocrmill_poll_interval', 60)
+        self.ocrmill_config.consolidate_multi_invoice = get_user_setting_bool('ocrmill_consolidate', False)
+
+        self.ocrmill_processor = ProcessorEngine(self.ocrmill_db, self.ocrmill_config, log_callback=self.ocrmill_log)
+        self.ocrmill_worker = OCRMillWorker(self.ocrmill_processor)
+
+        # Connect worker signals
+        self.ocrmill_worker.log_message.connect(self.ocrmill_log)
+        self.ocrmill_worker.processing_finished.connect(self.ocrmill_on_processing_finished)
+        self.ocrmill_worker.error.connect(lambda e: self.ocrmill_log(f"Error: {e}"))
+        self.ocrmill_worker.items_extracted.connect(self.ocrmill_on_items_extracted)
+
+        # Create sub-tabs
+        self.ocrmill_tabs = QTabWidget()
+
+        # ===== TAB 1: INVOICE PROCESSING =====
+        processing_widget = QWidget()
+        processing_layout = QVBoxLayout(processing_widget)
+
+        # Folder configuration
+        folder_group = QGroupBox("Folder Configuration")
+        folder_layout = QFormLayout()
+
+        # Input folder
+        input_row = QHBoxLayout()
+        self.ocrmill_input_edit = QLineEdit(str(self.ocrmill_config.input_folder))
+        self.ocrmill_input_edit.setReadOnly(True)
+        input_browse_btn = QPushButton("Browse...")
+        input_browse_btn.clicked.connect(self.ocrmill_browse_input_folder)
+        input_row.addWidget(self.ocrmill_input_edit)
+        input_row.addWidget(input_browse_btn)
+        folder_layout.addRow("Input Folder:", input_row)
+
+        # Output folder
+        output_row = QHBoxLayout()
+        self.ocrmill_output_edit = QLineEdit(str(self.ocrmill_config.output_folder))
+        self.ocrmill_output_edit.setReadOnly(True)
+        output_browse_btn = QPushButton("Browse...")
+        output_browse_btn.clicked.connect(self.ocrmill_browse_output_folder)
+        output_row.addWidget(self.ocrmill_output_edit)
+        output_row.addWidget(output_browse_btn)
+        folder_layout.addRow("Output Folder:", output_row)
+
+        folder_group.setLayout(folder_layout)
+        processing_layout.addWidget(folder_group)
+
+        # Control buttons
+        btn_layout = QHBoxLayout()
+
+        self.ocrmill_monitor_btn = QPushButton("Start Monitoring")
+        self.ocrmill_monitor_btn.setCheckable(True)
+        self.ocrmill_monitor_btn.clicked.connect(self.ocrmill_toggle_monitoring)
+        btn_layout.addWidget(self.ocrmill_monitor_btn)
+
+        process_file_btn = QPushButton("Process PDF File...")
+        process_file_btn.clicked.connect(self.ocrmill_process_single_file)
+        btn_layout.addWidget(process_file_btn)
+
+        process_folder_btn = QPushButton("Process Folder Now")
+        process_folder_btn.clicked.connect(self.ocrmill_process_folder_now)
+        btn_layout.addWidget(process_folder_btn)
+
+        btn_layout.addStretch()
+
+        self.ocrmill_send_btn = QPushButton("Send to Process Shipment")
+        self.ocrmill_send_btn.setEnabled(False)
+        self.ocrmill_send_btn.clicked.connect(self.ocrmill_send_to_process_shipment)
+        btn_layout.addWidget(self.ocrmill_send_btn)
+
+        processing_layout.addLayout(btn_layout)
+
+        # PDF Drop Zone
+        self.ocrmill_drop_zone = PDFDropZone(str(self.ocrmill_config.input_folder))
+        self.ocrmill_drop_zone.files_dropped.connect(self.ocrmill_process_dropped_files)
+        processing_layout.addWidget(self.ocrmill_drop_zone)
+
+        # Activity log
+        log_group = QGroupBox("Activity Log")
+        log_layout = QVBoxLayout()
+        self.ocrmill_log_text = QPlainTextEdit()
+        self.ocrmill_log_text.setReadOnly(True)
+        self.ocrmill_log_text.setMaximumBlockCount(1000)
+        log_layout.addWidget(self.ocrmill_log_text)
+
+        log_btn_layout = QHBoxLayout()
+        clear_log_btn = QPushButton("Clear Log")
+        clear_log_btn.clicked.connect(self.ocrmill_log_text.clear)
+        log_btn_layout.addStretch()
+        log_btn_layout.addWidget(clear_log_btn)
+        log_layout.addLayout(log_btn_layout)
+
+        log_group.setLayout(log_layout)
+        processing_layout.addWidget(log_group, 1)
+
+        self.ocrmill_tabs.addTab(processing_widget, "Invoice Processing")
+
+        # ===== TAB 2: PARTS HISTORY =====
+        history_widget = QWidget()
+        history_layout = QVBoxLayout(history_widget)
+
+        # Search/filter bar
+        filter_layout = QHBoxLayout()
+        filter_layout.addWidget(QLabel("Search:"))
+        self.ocrmill_history_search = QLineEdit()
+        self.ocrmill_history_search.setPlaceholderText("Part number, invoice, or project...")
+        self.ocrmill_history_search.textChanged.connect(self.ocrmill_filter_history)
+        filter_layout.addWidget(self.ocrmill_history_search)
+
+        refresh_history_btn = QPushButton("Refresh")
+        refresh_history_btn.clicked.connect(self.ocrmill_refresh_history)
+        filter_layout.addWidget(refresh_history_btn)
+
+        history_layout.addLayout(filter_layout)
+
+        # History table
+        self.ocrmill_history_table = QTableWidget()
+        self.ocrmill_history_table.setColumnCount(10)
+        self.ocrmill_history_table.setHorizontalHeaderLabels([
+            "Part Number", "Invoice", "Project", "Quantity", "Total Price",
+            "HTS Code", "MID", "Country", "Processed Date", "Source File"
+        ])
+        self.ocrmill_history_table.horizontalHeader().setStretchLastSection(True)
+        self.ocrmill_history_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.ocrmill_history_table.setAlternatingRowColors(True)
+        history_layout.addWidget(self.ocrmill_history_table, 1)
+
+        # History buttons
+        history_btn_layout = QHBoxLayout()
+        export_history_btn = QPushButton("Export Selected to CSV")
+        export_history_btn.clicked.connect(self.ocrmill_export_history)
+        history_btn_layout.addWidget(export_history_btn)
+
+        load_to_process_btn = QPushButton("Load in Process Shipment")
+        load_to_process_btn.clicked.connect(self.ocrmill_load_invoice_to_process)
+        history_btn_layout.addWidget(load_to_process_btn)
+
+        history_btn_layout.addStretch()
+        history_layout.addLayout(history_btn_layout)
+
+        self.ocrmill_tabs.addTab(history_widget, "Parts History")
+
+        # ===== TAB 3: STATISTICS =====
+        stats_widget = QWidget()
+        stats_layout = QVBoxLayout(stats_widget)
+
+        self.ocrmill_stats_text = QPlainTextEdit()
+        self.ocrmill_stats_text.setReadOnly(True)
+        stats_layout.addWidget(self.ocrmill_stats_text, 1)
+
+        refresh_stats_btn = QPushButton("Refresh Statistics")
+        refresh_stats_btn.clicked.connect(self.ocrmill_refresh_stats)
+        stats_layout.addWidget(refresh_stats_btn)
+
+        self.ocrmill_tabs.addTab(stats_widget, "Statistics")
+
+        # ===== TAB 4: TEMPLATES =====
+        templates_widget = QWidget()
+        templates_layout = QVBoxLayout(templates_widget)
+
+        templates_layout.addWidget(QLabel("Available Invoice Templates:"))
+
+        self.ocrmill_templates_list = QListWidget()
+        templates_layout.addWidget(self.ocrmill_templates_list, 1)
+
+        # Template buttons
+        template_buttons_layout = QHBoxLayout()
+
+        btn_create_template = QPushButton("Create Template (AI)")
+        btn_create_template.setStyleSheet(self.get_button_style("success"))
+        btn_create_template.setToolTip("Create a new invoice template using AI (Claude, OpenAI, Ollama, or OpenRouter)")
+        btn_create_template.clicked.connect(self.ocrmill_open_template_builder)
+        template_buttons_layout.addWidget(btn_create_template)
+
+        btn_auto_builder = QPushButton("Quick Template (No AI)")
+        btn_auto_builder.setStyleSheet(self.get_button_style("info"))
+        btn_auto_builder.setToolTip("Create template using pattern detection - no AI or API key required")
+        btn_auto_builder.clicked.connect(self.ocrmill_open_auto_template_builder)
+        template_buttons_layout.addWidget(btn_auto_builder)
+
+        btn_edit_template = QPushButton("Edit Selected")
+        btn_edit_template.setStyleSheet(self.get_button_style("default"))
+        btn_edit_template.clicked.connect(self.ocrmill_edit_template)
+        template_buttons_layout.addWidget(btn_edit_template)
+
+        btn_delete_template = QPushButton("Delete Selected")
+        btn_delete_template.setStyleSheet(self.get_button_style("danger"))
+        btn_delete_template.clicked.connect(self.ocrmill_delete_template)
+        template_buttons_layout.addWidget(btn_delete_template)
+
+        btn_refresh_templates = QPushButton("Refresh")
+        btn_refresh_templates.setStyleSheet(self.get_button_style("default"))
+        btn_refresh_templates.clicked.connect(self.ocrmill_refresh_templates)
+        template_buttons_layout.addWidget(btn_refresh_templates)
+
+        template_buttons_layout.addStretch()
+        templates_layout.addLayout(template_buttons_layout)
+
+        # Populate templates
+        self.ocrmill_refresh_templates()
+
+        self.ocrmill_tabs.addTab(templates_widget, "Templates")
+
+        # ===== TAB 3: SETTINGS =====
+        settings_widget = QWidget()
+        settings_layout = QVBoxLayout(settings_widget)
+
+        # Folder Settings Group
+        folders_group = QGroupBox("Folder Settings")
+        folders_layout = QFormLayout()
+
+        # Input folder (uses same controls as Invoice Processing tab)
+        settings_input_row = QHBoxLayout()
+        self.ocrmill_settings_input_edit = QLineEdit(str(self.ocrmill_config.input_folder))
+        self.ocrmill_settings_input_edit.setReadOnly(True)
+        settings_input_browse = QPushButton("Browse...")
+        settings_input_browse.clicked.connect(self.ocrmill_settings_browse_input)
+        settings_input_row.addWidget(self.ocrmill_settings_input_edit)
+        settings_input_row.addWidget(settings_input_browse)
+        folders_layout.addRow("Input Folder:", settings_input_row)
+
+        # Output folder
+        settings_output_row = QHBoxLayout()
+        self.ocrmill_settings_output_edit = QLineEdit(str(self.ocrmill_config.output_folder))
+        self.ocrmill_settings_output_edit.setReadOnly(True)
+        settings_output_browse = QPushButton("Browse...")
+        settings_output_browse.clicked.connect(self.ocrmill_settings_browse_output)
+        settings_output_row.addWidget(self.ocrmill_settings_output_edit)
+        settings_output_row.addWidget(settings_output_browse)
+        folders_layout.addRow("Output Folder:", settings_output_row)
+
+        folders_group.setLayout(folders_layout)
+        settings_layout.addWidget(folders_group)
+
+        # Processing Options Group
+        options_group = QGroupBox("Processing Options")
+        options_layout = QFormLayout()
+
+        # Poll interval
+        self.ocrmill_poll_spin = QSpinBox()
+        self.ocrmill_poll_spin.setRange(10, 300)
+        self.ocrmill_poll_spin.setValue(self.ocrmill_config.poll_interval)
+        self.ocrmill_poll_spin.setSuffix(" seconds")
+        self.ocrmill_poll_spin.valueChanged.connect(self.ocrmill_poll_interval_changed)
+        options_layout.addRow("Monitoring Poll Interval:", self.ocrmill_poll_spin)
+
+        # Auto-start monitoring
+        self.ocrmill_autostart_check = QCheckBox("Auto-start monitoring on application launch")
+        self.ocrmill_autostart_check.setChecked(get_user_setting_bool('ocrmill_autostart', False))
+        self.ocrmill_autostart_check.stateChanged.connect(lambda s: set_user_setting('ocrmill_autostart', 'true' if s else 'false'))
+        options_layout.addRow("", self.ocrmill_autostart_check)
+
+        options_group.setLayout(options_layout)
+        settings_layout.addWidget(options_group)
+
+        # Output Mode Group
+        output_mode_group = QGroupBox("Output Mode")
+        output_mode_layout = QVBoxLayout()
+
+        output_mode_label = QLabel("When processing a PDF containing multiple invoices:")
+        output_mode_layout.addWidget(output_mode_label)
+
+        self.ocrmill_output_mode_group = QButtonGroup(self)
+
+        self.ocrmill_split_output_radio = QRadioButton("Split into separate CSV files (one per invoice)")
+        self.ocrmill_split_output_radio.setToolTip("Each invoice in the PDF will be saved as a separate CSV file")
+        self.ocrmill_output_mode_group.addButton(self.ocrmill_split_output_radio, 0)
+        output_mode_layout.addWidget(self.ocrmill_split_output_radio)
+
+        self.ocrmill_single_output_radio = QRadioButton("Combine into single CSV file (all invoices together)")
+        self.ocrmill_single_output_radio.setToolTip("All invoices in the PDF will be combined into one CSV file")
+        self.ocrmill_output_mode_group.addButton(self.ocrmill_single_output_radio, 1)
+        output_mode_layout.addWidget(self.ocrmill_single_output_radio)
+
+        # Set initial state from config
+        if get_user_setting_bool('ocrmill_consolidate', False):
+            self.ocrmill_single_output_radio.setChecked(True)
+        else:
+            self.ocrmill_split_output_radio.setChecked(True)
+
+        self.ocrmill_output_mode_group.buttonClicked.connect(self.ocrmill_output_mode_changed)
+
+        output_mode_group.setLayout(output_mode_layout)
+        settings_layout.addWidget(output_mode_group)
+
+        # Info label
+        info_label = QLabel(
+            "OCRMill processes PDF invoices and extracts line items with HTS codes.\n"
+            "Configure folders and processing options above."
+        )
+        info_label.setStyleSheet("color: #666666; font-style: italic;")
+        settings_layout.addWidget(info_label)
+
+        settings_layout.addStretch()
+        self.ocrmill_tabs.addTab(settings_widget, "Settings")
+
+        layout.addWidget(self.ocrmill_tabs, 1)
+
+        # Store extracted items for "Send to Process Shipment"
+        self.ocrmill_last_items = []
+
+        self.tab_ocrmill.setLayout(layout)
+
+        # Initial log message
+        self.ocrmill_log("OCRMill initialized. Ready to process PDF invoices.")
+
+    def ocrmill_log(self, message: str):
+        """Add a message to the OCRMill activity log."""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        self.ocrmill_log_text.appendPlainText(f"[{timestamp}] {message}")
+
+    def ocrmill_browse_input_folder(self):
+        """Browse for input folder."""
+        folder = QFileDialog.getExistingDirectory(self, "Select Input Folder", str(self.ocrmill_config.input_folder))
+        if folder:
+            # Normalize path to OS-native format
+            folder_path = Path(folder)
+            folder_str = str(folder_path)
+            self.ocrmill_config.input_folder = folder_path
+            self.ocrmill_input_edit.setText(folder_str)
+            self.ocrmill_drop_zone.set_browse_folder(folder_str)
+            set_user_setting('ocrmill_input_folder', folder_str)
+            self.ocrmill_log(f"Input folder set to: {folder_str}")
+
+    def ocrmill_browse_output_folder(self):
+        """Browse for output folder."""
+        folder = QFileDialog.getExistingDirectory(self, "Select Output Folder", str(self.ocrmill_config.output_folder))
+        if folder:
+            # Normalize path to OS-native format
+            folder_path = Path(folder)
+            folder_str = str(folder_path)
+            self.ocrmill_config.output_folder = folder_path
+            self.ocrmill_output_edit.setText(folder_str)
+            set_user_setting('ocrmill_output_folder', folder_str)
+            self.ocrmill_log(f"Output folder set to: {folder_str}")
+
+    def ocrmill_settings_browse_input(self):
+        """Browse for input folder from Settings tab."""
+        folder = QFileDialog.getExistingDirectory(self, "Select Input Folder", str(self.ocrmill_config.input_folder))
+        if folder:
+            folder_path = Path(folder)
+            folder_str = str(folder_path)
+            self.ocrmill_config.input_folder = folder_path
+            # Update both the Settings tab and Invoice Processing tab
+            self.ocrmill_settings_input_edit.setText(folder_str)
+            self.ocrmill_input_edit.setText(folder_str)
+            self.ocrmill_drop_zone.set_browse_folder(folder_str)
+            set_user_setting('ocrmill_input_folder', folder_str)
+            self.ocrmill_log(f"Input folder set to: {folder_str}")
+
+    def ocrmill_settings_browse_output(self):
+        """Browse for output folder from Settings tab."""
+        folder = QFileDialog.getExistingDirectory(self, "Select Output Folder", str(self.ocrmill_config.output_folder))
+        if folder:
+            folder_path = Path(folder)
+            folder_str = str(folder_path)
+            self.ocrmill_config.output_folder = folder_path
+            # Update both the Settings tab and Invoice Processing tab
+            self.ocrmill_settings_output_edit.setText(folder_str)
+            self.ocrmill_output_edit.setText(folder_str)
+            set_user_setting('ocrmill_output_folder', folder_str)
+            self.ocrmill_log(f"Output folder set to: {folder_str}")
+
+    def ocrmill_poll_interval_changed(self, value):
+        """Handle poll interval change."""
+        self.ocrmill_config.poll_interval = value
+        set_user_setting('ocrmill_poll_interval', str(value))
+
+    def ocrmill_output_mode_changed(self, button):
+        """Handle output mode radio button change."""
+        # Button ID 0 = split files, Button ID 1 = single file
+        consolidate = self.ocrmill_output_mode_group.id(button) == 1
+        self.ocrmill_config.consolidate_multi_invoice = consolidate
+        set_user_setting('ocrmill_consolidate', 'true' if consolidate else 'false')
+        mode_text = "single combined file" if consolidate else "separate files per invoice"
+        self.ocrmill_log(f"Output mode changed to: {mode_text}")
+
+    def ocrmill_toggle_monitoring(self):
+        """Toggle folder monitoring on/off."""
+        if self.ocrmill_monitor_btn.isChecked():
+            self.ocrmill_worker.start_monitoring()
+            self.ocrmill_monitor_btn.setText("Stop Monitoring")
+            self.ocrmill_log(f"Started monitoring: {self.ocrmill_config.input_folder}")
+        else:
+            self.ocrmill_worker.stop_monitoring()
+            self.ocrmill_monitor_btn.setText("Start Monitoring")
+            self.ocrmill_log("Stopped monitoring")
+
+    def ocrmill_process_single_file(self):
+        """Process a single PDF file."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Select PDF Invoice",
+            str(self.ocrmill_config.input_folder),
+            "PDF Files (*.pdf)"
+        )
+        if file_path:
+            self.ocrmill_log(f"Processing file: {file_path}")
+            from ocrmill_worker import SingleFileWorker
+            self.ocrmill_single_worker = SingleFileWorker(
+                self.ocrmill_processor,
+                Path(file_path),
+                self.ocrmill_config.output_folder
+            )
+            self.ocrmill_single_worker.log_message.connect(self.ocrmill_log)
+            self.ocrmill_single_worker.finished.connect(self.ocrmill_on_single_file_finished)
+            self.ocrmill_single_worker.error.connect(lambda e: self.ocrmill_log(f"Error: {e}"))
+            self.ocrmill_single_worker.start()
+
+    def ocrmill_on_single_file_finished(self, items: list):
+        """Handle completion of single file processing."""
+        if items:
+            self.ocrmill_last_items = items
+            self.ocrmill_send_btn.setEnabled(True)
+            self.ocrmill_log(f"Extracted {len(items)} items. Ready to send to Process Shipment.")
+        else:
+            self.ocrmill_log("No items extracted from file.")
+
+    def ocrmill_process_dropped_files(self, file_paths: list):
+        """Process PDF files dropped onto the drop zone using parallel processing."""
+        if not file_paths:
+            return
+
+        # Use parallel processing for multiple files
+        from ocrmill_worker import MultiFileWorker
+
+        self.ocrmill_log(f"Processing {len(file_paths)} dropped file(s) in parallel...")
+
+        # Create and start the parallel worker
+        self.ocrmill_multi_worker = MultiFileWorker(
+            self.ocrmill_processor,
+            file_paths,
+            self.ocrmill_config.output_folder
+        )
+
+        # Connect signals
+        self.ocrmill_multi_worker.log_message.connect(self.ocrmill_log)
+        self.ocrmill_multi_worker.progress.connect(self._ocrmill_on_multi_progress)
+        self.ocrmill_multi_worker.all_finished.connect(self._ocrmill_on_multi_finished)
+        self.ocrmill_multi_worker.error.connect(lambda e: self.ocrmill_log(f"Error: {e}"))
+
+        # Start processing
+        self.ocrmill_multi_worker.start()
+
+    def _ocrmill_on_multi_progress(self, completed: int, total: int):
+        """Handle progress updates from parallel processing."""
+        # Could update a progress bar here if desired
+        pass
+
+    def _ocrmill_on_multi_finished(self, all_items: list):
+        """Handle completion of parallel multi-file processing."""
+        if all_items:
+            self.ocrmill_last_items = all_items
+            self.ocrmill_send_btn.setEnabled(True)
+            self.ocrmill_refresh_history()
+            self.ocrmill_refresh_stats()
+
+    def ocrmill_process_folder_now(self):
+        """Process all PDFs in the input folder immediately using parallel processing."""
+        from ocrmill_worker import ParallelFolderWorker
+
+        self.ocrmill_log("Processing folder in parallel...")
+        input_folder = self.ocrmill_config.input_folder
+        output_folder = self.ocrmill_config.output_folder
+
+        # Create and start the parallel folder worker
+        self.ocrmill_folder_worker = ParallelFolderWorker(
+            self.ocrmill_processor,
+            input_folder,
+            output_folder
+        )
+
+        # Connect signals
+        self.ocrmill_folder_worker.log_message.connect(self.ocrmill_log)
+        self.ocrmill_folder_worker.progress.connect(self._ocrmill_on_folder_progress)
+        self.ocrmill_folder_worker.all_finished.connect(self._ocrmill_on_folder_finished)
+        self.ocrmill_folder_worker.error.connect(lambda e: self.ocrmill_log(f"Error: {e}"))
+
+        # Start processing
+        self.ocrmill_folder_worker.start()
+
+    def _ocrmill_on_folder_progress(self, completed: int, total: int):
+        """Handle progress updates from parallel folder processing."""
+        # Could update a progress bar here if desired
+        pass
+
+    def _ocrmill_on_folder_finished(self, total_items: int):
+        """Handle completion of parallel folder processing."""
+        self.ocrmill_log(f"Folder processing complete: {total_items} total items")
+        self.ocrmill_refresh_history()
+        self.ocrmill_refresh_stats()
+
+    def ocrmill_on_processing_finished(self, item_count: int):
+        """Handle completion of batch processing."""
+        self.ocrmill_log(f"Processing complete: {item_count} items extracted")
+        self.ocrmill_refresh_history()
+        self.ocrmill_refresh_stats()
+
+    def ocrmill_on_items_extracted(self, items: list):
+        """Handle extracted items from worker."""
+        if items:
+            self.ocrmill_last_items = items
+            self.ocrmill_send_btn.setEnabled(True)
+
+    def ocrmill_send_to_process_shipment(self):
+        """Send extracted items to the Process Shipment tab."""
+        if not self.ocrmill_last_items:
+            QMessageBox.information(self, "No Items", "No extracted items to send.")
+            return
+
+        # Switch to Process Shipment tab
+        self.tabs.setCurrentIndex(0)
+
+        # TODO: Populate the Process Shipment preview table with ocrmill_last_items
+        # This requires understanding the Process Shipment tab's data model
+        self.ocrmill_log(f"Sent {len(self.ocrmill_last_items)} items to Process Shipment tab")
+        QMessageBox.information(self, "Items Sent",
+            f"Sent {len(self.ocrmill_last_items)} items to Process Shipment.\n\n"
+            "Note: Full integration with Process Shipment table is in progress.")
+
+    def ocrmill_refresh_history(self):
+        """Refresh the parts history table."""
+        occurrences = self.ocrmill_db.get_recent_occurrences(500)
+
+        self.ocrmill_history_table.setRowCount(len(occurrences))
+        for row, occ in enumerate(occurrences):
+            self.ocrmill_history_table.setItem(row, 0, QTableWidgetItem(str(occ.get('part_number', ''))))
+            self.ocrmill_history_table.setItem(row, 1, QTableWidgetItem(str(occ.get('invoice_number', ''))))
+            self.ocrmill_history_table.setItem(row, 2, QTableWidgetItem(str(occ.get('project_number', ''))))
+            self.ocrmill_history_table.setItem(row, 3, QTableWidgetItem(str(occ.get('quantity', ''))))
+            price = occ.get('total_price', 0) or 0
+            self.ocrmill_history_table.setItem(row, 4, QTableWidgetItem(f"${price:,.2f}" if price else ""))
+            self.ocrmill_history_table.setItem(row, 5, QTableWidgetItem(str(occ.get('hts_code', ''))))
+            self.ocrmill_history_table.setItem(row, 6, QTableWidgetItem(str(occ.get('mid', ''))))
+            self.ocrmill_history_table.setItem(row, 7, QTableWidgetItem(str(occ.get('country_origin', ''))))
+            self.ocrmill_history_table.setItem(row, 8, QTableWidgetItem(str(occ.get('processed_date', ''))[:19]))
+            self.ocrmill_history_table.setItem(row, 9, QTableWidgetItem(str(occ.get('source_file', ''))))
+
+    def ocrmill_filter_history(self, search_text: str):
+        """Filter history table based on search text."""
+        search_lower = search_text.lower()
+        for row in range(self.ocrmill_history_table.rowCount()):
+            match = False
+            for col in range(3):  # Search first 3 columns (part, invoice, project)
+                item = self.ocrmill_history_table.item(row, col)
+                if item and search_lower in item.text().lower():
+                    match = True
+                    break
+            self.ocrmill_history_table.setRowHidden(row, not match and bool(search_text))
+
+    def ocrmill_export_history(self):
+        """Export selected history rows to CSV."""
+        selected_rows = set(idx.row() for idx in self.ocrmill_history_table.selectedIndexes())
+        if not selected_rows:
+            QMessageBox.information(self, "No Selection", "Please select rows to export.")
+            return
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "Export to CSV",
+            str(self.ocrmill_config.output_folder / "history_export.csv"),
+            "CSV Files (*.csv)"
+        )
+        if file_path:
+            import csv
+            with open(file_path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                headers = [self.ocrmill_history_table.horizontalHeaderItem(i).text()
+                          for i in range(self.ocrmill_history_table.columnCount())]
+                writer.writerow(headers)
+                for row in sorted(selected_rows):
+                    row_data = [self.ocrmill_history_table.item(row, col).text() if self.ocrmill_history_table.item(row, col) else ""
+                               for col in range(self.ocrmill_history_table.columnCount())]
+                    writer.writerow(row_data)
+            self.ocrmill_log(f"Exported {len(selected_rows)} rows to {file_path}")
+
+    def ocrmill_load_invoice_to_process(self):
+        """Load selected invoice data into Process Shipment tab."""
+        selected_rows = set(idx.row() for idx in self.ocrmill_history_table.selectedIndexes())
+        if not selected_rows:
+            QMessageBox.information(self, "No Selection", "Please select rows to load.")
+            return
+
+        # Get invoice number from first selected row
+        first_row = min(selected_rows)
+        invoice_item = self.ocrmill_history_table.item(first_row, 1)
+        if invoice_item:
+            invoice_number = invoice_item.text()
+            items = self.ocrmill_db.get_parts_by_invoice(invoice_number)
+            if items:
+                self.ocrmill_last_items = items
+                self.ocrmill_send_to_process_shipment()
+
+    def ocrmill_refresh_stats(self):
+        """Refresh the statistics display."""
+        stats = self.ocrmill_db.get_statistics()
+
+        stats_text = f"""
+OCRMill Database Statistics
+{'='*50}
+
+Total Unique Parts: {stats['total_parts']:,}
+Total Part Occurrences: {stats['total_occurrences']:,}
+Total Invoices Processed: {stats['total_invoices']:,}
+Total Projects: {stats['total_projects']:,}
+Total Value Processed: ${stats['total_value']:,.2f}
+
+HTS Code Coverage:
+  Parts with HTS Codes: {stats['parts_with_hts']:,}
+  Coverage: {stats['hts_coverage_pct']:.1f}%
+
+{'='*50}
+Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+"""
+        self.ocrmill_stats_text.setPlainText(stats_text)
+
+    def ocrmill_refresh_templates(self):
+        """Refresh the templates list by re-scanning the templates directory."""
+        # Re-discover templates from disk
+        try:
+            from templates import refresh_templates
+            refresh_templates()
+        except Exception as e:
+            self.ocrmill_log(f"Warning: Could not refresh templates module: {e}")
+
+        # Reload processor's template list
+        self.ocrmill_processor.reload_templates()
+
+        self.ocrmill_templates_list.clear()
+        templates = self.ocrmill_processor.get_available_templates()
+
+        for name, info in templates.items():
+            status = "Enabled" if info['enabled'] else "Disabled"
+            item = QListWidgetItem(f"{info['name']} [{status}]")
+            item.setData(Qt.UserRole, name)  # Store template key
+            if info['enabled']:
+                item.setForeground(Qt.darkGreen)
+            else:
+                item.setForeground(Qt.gray)
+            self.ocrmill_templates_list.addItem(item)
+
+    def ocrmill_open_template_builder(self):
+        """Open the AI-assisted template builder dialog."""
+        try:
+            from template_builder import TemplateBuilderDialog
+            dialog = TemplateBuilderDialog(self)
+            dialog.template_created.connect(self.ocrmill_on_template_created)
+            dialog.exec_()
+        except ImportError as e:
+            QMessageBox.warning(
+                self, "Import Error",
+                f"Failed to load Template Builder: {e}\n\n"
+                "Make sure template_builder.py and ollama_helper.py exist."
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to open Template Builder: {e}")
+
+    def ocrmill_open_auto_template_builder(self):
+        """Open the automated template builder dialog."""
+        try:
+            from auto_template_builder import AutoTemplateBuilderDialog
+            dialog = AutoTemplateBuilderDialog(self)
+            dialog.template_created.connect(self.ocrmill_on_template_created)
+            dialog.exec_()
+        except ImportError as e:
+            QMessageBox.warning(
+                self, "Import Error",
+                f"Failed to load Auto Template Builder: {e}\n\n"
+                "Make sure auto_template_builder.py exists."
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to open Auto Template Builder: {e}")
+
+    def ocrmill_on_template_created(self, template_name: str, file_path: str):
+        """Handle new template creation."""
+        self.ocrmill_log(f"New template created: {template_name} at {file_path}")
+        self.ocrmill_log("Note: Restart the application to use the new template, or manually register it in templates/__init__.py")
+        self.ocrmill_refresh_templates()
+
+    def ocrmill_create_new_template(self):
+        """Create a new invoice template from sample_template.py"""
+        # Get template name from user
+        name, ok = QInputDialog.getText(
+            self, "Create New Template",
+            "Enter template name (e.g., 'acme_corp'):\n\n"
+            "Use lowercase with underscores, no spaces.",
+            QLineEdit.Normal, ""
+        )
+        if not ok or not name:
+            return
+
+        # Validate name
+        name = name.strip().lower().replace(' ', '_').replace('-', '_')
+        if not name.replace('_', '').isalnum():
+            QMessageBox.warning(self, "Invalid Name", "Template name must contain only letters, numbers, and underscores.")
+            return
+
+        # Check if template already exists
+        templates_dir = BASE_DIR / "templates"
+        new_template_path = templates_dir / f"{name}.py"
+        if new_template_path.exists():
+            QMessageBox.warning(self, "Template Exists", f"A template named '{name}' already exists.")
+            return
+
+        # Read sample template
+        sample_path = templates_dir / "sample_template.py"
+        if not sample_path.exists():
+            QMessageBox.critical(self, "Error", "sample_template.py not found in templates folder.")
+            return
+
+        try:
+            with open(sample_path, 'r', encoding='utf-8') as f:
+                sample_content = f.read()
+
+            # Create class name from template name
+            class_name = ''.join(word.capitalize() for word in name.split('_')) + 'Template'
+
+            # Replace sample values with new template name
+            new_content = sample_content.replace('SampleTemplate', class_name)
+            new_content = new_content.replace('Sample Template', name.replace('_', ' ').title())
+            new_content = new_content.replace('Sample Client', 'Client Name')
+            new_content = new_content.replace('enabled = False', 'enabled = True')
+
+            # Write new template
+            with open(new_template_path, 'w', encoding='utf-8') as f:
+                f.write(new_content)
+
+            # Ask user if they want to edit the template now
+            reply = QMessageBox.question(
+                self, "Template Created",
+                f"Template '{name}' created successfully!\n\n"
+                f"File: {new_template_path}\n\n"
+                f"Would you like to open it for editing?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+
+            if reply == QMessageBox.Yes:
+                self.ocrmill_open_template_file(new_template_path)
+
+            # Show instructions
+            QMessageBox.information(
+                self, "Next Steps",
+                f"To complete your template:\n\n"
+                f"1. Edit {name}.py to customize extraction logic\n"
+                f"2. Register in templates/__init__.py:\n\n"
+                f"   from .{name} import {class_name}\n\n"
+                f"   Add to TEMPLATE_REGISTRY:\n"
+                f"   '{name}': {class_name},\n\n"
+                f"3. Restart TariffMill or click Refresh"
+            )
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to create template: {e}")
+
+    def ocrmill_edit_template(self):
+        """Edit the selected template file"""
+        current_item = self.ocrmill_templates_list.currentItem()
+        if not current_item:
+            QMessageBox.information(self, "No Selection", "Please select a template to edit.")
+            return
+
+        template_key = current_item.data(Qt.UserRole)
+        if not template_key:
+            # Try to extract from text
+            template_name = current_item.text().split('[')[0].strip().lower().replace(' ', '_')
+        else:
+            template_name = template_key
+
+        # Find template file
+        templates_dir = BASE_DIR / "templates"
+
+        # Try common naming patterns
+        possible_files = [
+            templates_dir / f"{template_name}.py",
+            templates_dir / f"{template_name.replace('mmcité', 'mmcite')}.py",
+            templates_dir / f"{template_name.replace(' ', '_')}.py",
+        ]
+
+        template_path = None
+        for path in possible_files:
+            if path.exists():
+                template_path = path
+                break
+
+        # If not found, list available templates
+        if not template_path:
+            # List all .py files in templates dir
+            py_files = list(templates_dir.glob("*.py"))
+            file_names = [f.stem for f in py_files if f.stem not in ('__init__', 'base_template')]
+
+            if file_names:
+                file_name, ok = QInputDialog.getItem(
+                    self, "Select Template File",
+                    "Could not auto-detect template file. Please select:",
+                    file_names, 0, False
+                )
+                if ok and file_name:
+                    template_path = templates_dir / f"{file_name}.py"
+            else:
+                QMessageBox.warning(self, "No Templates", "No template files found.")
+                return
+
+        if template_path and template_path.exists():
+            self.ocrmill_open_template_file(template_path)
+        else:
+            QMessageBox.warning(self, "File Not Found", f"Template file not found: {template_path}")
+
+    def ocrmill_open_template_file(self, file_path):
+        """Open a template file in the default editor"""
+        import os
+        import subprocess
+        import platform
+
+        try:
+            if platform.system() == 'Windows':
+                os.startfile(str(file_path))
+            elif platform.system() == 'Darwin':  # macOS
+                subprocess.run(['open', str(file_path)])
+            else:  # Linux
+                subprocess.run(['xdg-open', str(file_path)])
+        except Exception as e:
+            # Fallback: show path to user
+            QMessageBox.information(
+                self, "Open Template",
+                f"Please open the following file in your text editor:\n\n{file_path}"
+            )
+
+    def ocrmill_delete_template(self):
+        """Delete the selected template file"""
+        current_item = self.ocrmill_templates_list.currentItem()
+        if not current_item:
+            QMessageBox.information(self, "No Selection", "Please select a template to delete.")
+            return
+
+        template_key = current_item.data(Qt.UserRole)
+        if not template_key:
+            # Try to extract from text
+            template_name = current_item.text().split('[')[0].strip().lower().replace(' ', '_')
+        else:
+            template_name = template_key
+
+        # Find template file
+        templates_dir = BASE_DIR / "templates"
+
+        # Try common naming patterns
+        possible_files = [
+            templates_dir / f"{template_name}.py",
+            templates_dir / f"{template_name.replace('mmcité', 'mmcite')}.py",
+            templates_dir / f"{template_name.replace(' ', '_')}.py",
+        ]
+
+        template_path = None
+        for path in possible_files:
+            if path.exists():
+                template_path = path
+                break
+
+        # If not found, list available templates
+        if not template_path:
+            py_files = list(templates_dir.glob("*.py"))
+            file_names = [f.stem for f in py_files if f.stem not in ('__init__', 'base_template')]
+
+            if file_names:
+                file_name, ok = QInputDialog.getItem(
+                    self, "Select Template File",
+                    "Could not auto-detect template file. Please select:",
+                    file_names, 0, False
+                )
+                if ok and file_name:
+                    template_path = templates_dir / f"{file_name}.py"
+            else:
+                QMessageBox.warning(self, "No Templates", "No template files found.")
+                return
+
+        if template_path and template_path.exists():
+            # Confirm deletion
+            reply = QMessageBox.question(
+                self, "Confirm Delete",
+                f"Are you sure you want to delete the template:\n\n{template_path.name}\n\nThis action cannot be undone.",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+
+            if reply == QMessageBox.Yes:
+                try:
+                    template_path.unlink()
+                    self.ocrmill_log(f"Deleted template: {template_path.name}")
+                    self.ocrmill_refresh_templates()
+                    QMessageBox.information(self, "Deleted", f"Template '{template_path.name}' has been deleted.")
+                except Exception as e:
+                    QMessageBox.critical(self, "Error", f"Failed to delete template:\n{str(e)}")
+        else:
+            QMessageBox.warning(self, "File Not Found", f"Template file not found: {template_path}")
+
     def refresh_parts_table(self):
         try:
             conn = sqlite3.connect(str(DB_PATH))
@@ -8093,48 +10053,40 @@ class TariffMill(QMainWindow):
 
     def import_hts_units_silent(self, part_numbers=None):
         """
-        Silently import CBP Qty1 units from HTS reference file for specific parts.
-        Called automatically after saving new parts to database.
+        Silently import CBP Qty1 units from hts.db for specific parts.
+        Called automatically after saving new parts or reprocessing parts.
 
         Args:
             part_numbers: List of part numbers to update (if None, updates all parts)
 
         Returns:
-            Number of parts updated, or -1 if reference file not found
+            Number of parts updated, or -1 if hts.db not found
         """
-        ref_file = BASE_DIR / "Resources" / "References" / "HTS_qty1.xlsx"
+        hts_db_path = BASE_DIR / "Resources" / "References" / "hts.db"
 
-        if not ref_file.exists():
-            logger.debug("HTS_qty1.xlsx reference file not found, skipping HTS units import")
+        if not hts_db_path.exists():
+            logger.debug("hts.db not found, skipping HTS units import")
             return -1
 
         try:
-            # Read the reference file
-            if ref_file.suffix.lower() in ['.xlsx', '.xls']:
-                df_ref = pd.read_excel(ref_file)
-            else:
-                df_ref = pd.read_csv(ref_file)
-
-            # Expect columns: 'Tariff No' and 'Uom 1'
-            if 'Tariff No' not in df_ref.columns or 'Uom 1' not in df_ref.columns:
-                logger.warning("HTS reference file missing required columns")
-                return -1
-
             # Clean up HTS codes (remove dots for matching)
             def normalize_hts(hts):
-                if pd.isna(hts):
+                if pd.isna(hts) or hts is None:
                     return ""
                 return str(hts).replace(".", "").strip()
 
-            # Create lookup dictionary
-            hts_units = {}
-            for _, row in df_ref.iterrows():
-                hts_code = normalize_hts(row['Tariff No'])
-                unit = str(row['Uom 1']).strip() if pd.notna(row['Uom 1']) else ""
-                if hts_code and unit:
-                    hts_units[hts_code] = unit
+            # Load unit_of_quantity lookup from hts.db
+            hts_conn = sqlite3.connect(str(hts_db_path))
+            hts_cursor = hts_conn.cursor()
+            hts_cursor.execute("SELECT full_code, unit_of_quantity FROM hts_codes WHERE unit_of_quantity IS NOT NULL AND unit_of_quantity != ''")
+            hts_units = {row[0]: row[1] for row in hts_cursor.fetchall()}
+            hts_conn.close()
 
-            # Update database
+            if not hts_units:
+                logger.debug("No unit_of_quantity data found in hts.db")
+                return 0
+
+            # Update parts_master database
             conn = sqlite3.connect(str(DB_PATH))
             c = conn.cursor()
 
@@ -8158,7 +10110,7 @@ class TariffMill(QMainWindow):
             conn.close()
 
             if updated > 0:
-                logger.info(f"Silently updated {updated} parts with Qty Unit values")
+                logger.info(f"Silently updated {updated} parts with Qty Unit values from hts.db")
 
             return updated
 
@@ -8167,59 +10119,53 @@ class TariffMill(QMainWindow):
             return -1
 
     def import_hts_units(self):
-        """Import CBP Qty1 units from HTS reference file and update parts_master"""
-        # Look for the reference file in Resources/References
-        ref_file = BASE_DIR / "Resources" / "References" / "HTS_qty1.xlsx"
+        """Import CBP Qty1 units from hts.db, update parts_master, and highlight invalid HTS codes"""
+        hts_db_path = BASE_DIR / "Resources" / "References" / "hts.db"
 
-        if not ref_file.exists():
-            # Allow user to select a file
-            file_path, _ = QFileDialog.getOpenFileName(
-                self, "Select HTS Units Reference File",
-                str(BASE_DIR / "Resources" / "References"),
-                "Excel Files (*.xlsx *.xls);;CSV Files (*.csv);;All Files (*.*)"
-            )
-            if not file_path:
-                return
-            ref_file = Path(file_path)
-        
+        if not hts_db_path.exists():
+            QMessageBox.warning(self, "Database Not Found",
+                "hts.db not found in Resources/References folder.")
+            return
+
         try:
-            # Read the reference file
-            if ref_file.suffix.lower() in ['.xlsx', '.xls']:
-                df_ref = pd.read_excel(ref_file)
-            else:
-                df_ref = pd.read_csv(ref_file)
-            
-            # Expect columns: 'Tariff No' and 'Uom 1'
-            if 'Tariff No' not in df_ref.columns or 'Uom 1' not in df_ref.columns:
-                QMessageBox.warning(self, "Invalid File", 
-                    "Reference file must have 'Tariff No' and 'Uom 1' columns.")
-                return
-            
             # Clean up HTS codes (remove dots for matching)
             def normalize_hts(hts):
-                if pd.isna(hts):
+                if pd.isna(hts) or hts is None:
                     return ""
                 return str(hts).replace(".", "").strip()
-            
-            # Create lookup dictionary
-            hts_units = {}
-            for _, row in df_ref.iterrows():
-                hts_code = normalize_hts(row['Tariff No'])
-                unit = str(row['Uom 1']).strip() if pd.notna(row['Uom 1']) else ""
-                if hts_code and unit:
-                    hts_units[hts_code] = unit
-            
-            # Update database
+
+            # Load ALL HTS codes from hts.db for validation
+            hts_conn = sqlite3.connect(str(hts_db_path))
+            hts_cursor = hts_conn.cursor()
+
+            # Get all valid HTS codes
+            hts_cursor.execute("SELECT full_code FROM hts_codes")
+            all_valid_hts = {row[0] for row in hts_cursor.fetchall()}
+
+            # Get HTS codes with unit_of_quantity
+            hts_cursor.execute("SELECT full_code, unit_of_quantity FROM hts_codes WHERE unit_of_quantity IS NOT NULL AND unit_of_quantity != ''")
+            hts_units = {row[0]: row[1] for row in hts_cursor.fetchall()}
+            hts_conn.close()
+
+            # Update parts_master database
             conn = sqlite3.connect(str(DB_PATH))
             c = conn.cursor()
-            
+
             # Get all parts with HTS codes
             c.execute("SELECT part_number, hts_code FROM parts_master WHERE hts_code IS NOT NULL AND hts_code != ''")
             parts = c.fetchall()
-            
+
             updated = 0
+            invalid_hts_parts = []  # Track parts with invalid HTS codes
+
             for part_number, hts_code in parts:
                 normalized = normalize_hts(hts_code)
+
+                # Check if HTS code exists in hts.db
+                if normalized and normalized not in all_valid_hts:
+                    invalid_hts_parts.append((part_number, hts_code))
+
+                # Update qty_unit if we have unit data
                 if normalized in hts_units:
                     c.execute("UPDATE parts_master SET qty_unit=? WHERE part_number=?",
                               (hts_units[normalized], part_number))
@@ -8231,113 +10177,127 @@ class TariffMill(QMainWindow):
             # Refresh the table
             self.refresh_parts_table()
 
-            QMessageBox.information(self, "Import Complete",
-                f"Updated {updated} parts with Qty Unit values.\n"
-                f"Reference file had {len(hts_units)} HTS codes.")
-            
+            # Highlight rows with invalid HTS codes (red background on HTS column)
+            invalid_count = 0
+            if invalid_hts_parts:
+                invalid_part_numbers = {p[0] for p in invalid_hts_parts}
+                for row in range(self.parts_table.rowCount()):
+                    part_item = self.parts_table.item(row, 0)
+                    if part_item and part_item.text() in invalid_part_numbers:
+                        # Highlight the HTS code cell (column 2) with light red background
+                        hts_item = self.parts_table.item(row, 2)
+                        if hts_item:
+                            hts_item.setBackground(QColor(255, 200, 200))  # Light red
+                            invalid_count += 1
+
+            # Show results message
+            msg = f"Updated {updated} parts with Qty Unit values from hts.db.\n"
+            msg += f"hts.db contains {len(hts_units)} HTS codes with unit data.\n"
+            if invalid_count > 0:
+                msg += f"\n⚠ {invalid_count} parts have HTS codes not found in hts.db (highlighted in red)."
+
+            QMessageBox.information(self, "Import Complete", msg)
+
         except Exception as e:
             QMessageBox.critical(self, "Import Error", f"Failed to import HTS units:\n{e}")
 
     def export_missing_hts_codes(self):
-        """Export HTS codes that are missing Qty Unit values to the reference file for lookup."""
-        ref_file = BASE_DIR / "Resources" / "References" / "HTS_qty1.xlsx"
+        """Export HTS codes that are missing from hts.db or missing Qty Unit values, including part numbers."""
+        hts_db_path = BASE_DIR / "Resources" / "References" / "hts.db"
 
         try:
-            # Query database for unique HTS codes missing qty_unit
+            def normalize_hts(hts):
+                if pd.isna(hts) or hts is None:
+                    return ""
+                return str(hts).replace(".", "").strip()
+
+            # Load all valid HTS codes from hts.db
+            all_valid_hts = set()
+            if hts_db_path.exists():
+                hts_conn = sqlite3.connect(str(hts_db_path))
+                hts_cursor = hts_conn.cursor()
+                hts_cursor.execute("SELECT full_code FROM hts_codes")
+                all_valid_hts = {row[0] for row in hts_cursor.fetchall()}
+                hts_conn.close()
+
+            # Query database for all parts with HTS codes (including part_number and client_code)
             conn = sqlite3.connect(str(DB_PATH))
             c = conn.cursor()
             c.execute("""
-                SELECT DISTINCT hts_code
+                SELECT part_number, hts_code, qty_unit, client_code
                 FROM parts_master
                 WHERE hts_code IS NOT NULL
                 AND hts_code != ''
-                AND (qty_unit IS NULL OR qty_unit = '')
-                ORDER BY hts_code
+                ORDER BY client_code, hts_code, part_number
             """)
-            missing_hts = [row[0] for row in c.fetchall()]
+            all_parts = c.fetchall()
             conn.close()
 
-            if not missing_hts:
-                QMessageBox.information(self, "No Missing HTS Codes",
-                    "All parts with HTS codes already have Qty Unit values assigned.")
+            # Categorize parts
+            invalid_parts = []  # Parts with HTS not found in hts.db
+            missing_unit_parts = []  # Parts with valid HTS but missing qty_unit
+
+            for part_number, hts_code, qty_unit, client_code in all_parts:
+                normalized = normalize_hts(hts_code)
+                if not normalized:
+                    continue
+
+                if normalized not in all_valid_hts:
+                    invalid_parts.append((part_number, hts_code, client_code, "INVALID - Not in HTS Database"))
+                elif not qty_unit or pd.isna(qty_unit) or str(qty_unit).strip() == '':
+                    missing_unit_parts.append((part_number, hts_code, client_code, "Missing Qty Unit"))
+
+            if not invalid_parts and not missing_unit_parts:
+                QMessageBox.information(self, "No Issues Found",
+                    "All HTS codes are valid and have Qty Unit values assigned.")
                 return
 
-            # Load existing reference file if it exists
-            existing_hts = set()
-            if ref_file.exists():
-                try:
-                    df_existing = pd.read_excel(ref_file)
-                    if 'Tariff No' in df_existing.columns:
-                        # Normalize existing HTS codes for comparison
-                        for hts in df_existing['Tariff No']:
-                            if pd.notna(hts):
-                                normalized = str(hts).replace(".", "").strip()
-                                existing_hts.add(normalized)
-                except Exception as e:
-                    logger.warning(f"Could not read existing reference file: {e}")
+            # Create export data with part numbers and client codes
+            export_data = []
+            for part_number, hts, client_code, status in invalid_parts:
+                export_data.append({'Part Number': part_number, 'Client Code': client_code or '', 'HTS Code': hts, 'Status': status, 'Qty Unit': ''})
+            for part_number, hts, client_code, status in missing_unit_parts:
+                export_data.append({'Part Number': part_number, 'Client Code': client_code or '', 'HTS Code': hts, 'Status': status, 'Qty Unit': ''})
 
-            # Filter out HTS codes that already exist in the reference file
-            def normalize_hts(hts):
-                return str(hts).replace(".", "").strip()
+            df_export = pd.DataFrame(export_data)
 
-            new_hts_codes = []
-            for hts in missing_hts:
-                normalized = normalize_hts(hts)
-                if normalized not in existing_hts:
-                    new_hts_codes.append(hts)
+            # Ask user where to save
+            file_path, _ = QFileDialog.getSaveFileName(
+                self, "Export HTS Issues",
+                str(BASE_DIR / "Resources" / "References" / "HTS_Issues.xlsx"),
+                "Excel Files (*.xlsx);;CSV Files (*.csv)"
+            )
 
-            if not new_hts_codes:
-                QMessageBox.information(self, "No New HTS Codes",
-                    f"All {len(missing_hts)} HTS codes missing Qty Unit are already in the reference file.\n\n"
-                    "Try clicking 'Import HTS Units' to update the database from the reference file.")
+            if not file_path:
                 return
 
-            # Create or append to the reference file
-            if ref_file.exists():
-                # Read existing file and append new rows
-                df_existing = pd.read_excel(ref_file)
-
-                # Create dataframe for new HTS codes with empty Uom 1
-                df_new = pd.DataFrame({
-                    'Tariff No': new_hts_codes,
-                    'Uom 1': [''] * len(new_hts_codes)
-                })
-
-                # Append new rows
-                df_combined = pd.concat([df_existing, df_new], ignore_index=True)
-                df_combined.to_excel(ref_file, index=False)
-
-                QMessageBox.information(self, "Export Complete",
-                    f"Added {len(new_hts_codes)} new HTS codes to the reference file.\n\n"
-                    f"File: {ref_file}\n\n"
-                    "Please fill in the 'Uom 1' column for the new entries, then click 'Import HTS Units' to update the database.")
+            # Save the file
+            if file_path.endswith('.csv'):
+                df_export.to_csv(file_path, index=False)
             else:
-                # Create new file
-                # Ensure directory exists
-                ref_file.parent.mkdir(parents=True, exist_ok=True)
+                df_export.to_excel(file_path, index=False)
 
-                df_new = pd.DataFrame({
-                    'Tariff No': new_hts_codes,
-                    'Uom 1': [''] * len(new_hts_codes)
-                })
-                df_new.to_excel(ref_file, index=False)
+            # Show summary
+            msg = f"Exported {len(export_data)} parts with HTS issues:\n\n"
+            if invalid_parts:
+                msg += f"  • {len(invalid_parts)} parts with INVALID HTS (not found in hts.db)\n"
+            if missing_unit_parts:
+                msg += f"  • {len(missing_unit_parts)} parts missing Qty Unit\n"
+            msg += f"\nFile: {file_path}"
 
-                QMessageBox.information(self, "Export Complete",
-                    f"Created reference file with {len(new_hts_codes)} HTS codes.\n\n"
-                    f"File: {ref_file}\n\n"
-                    "Please fill in the 'Uom 1' column, then click 'Import HTS Units' to update the database.")
+            QMessageBox.information(self, "Export Complete", msg)
 
             # Ask if user wants to open the file
             reply = QMessageBox.question(self, "Open File?",
-                "Would you like to open the reference file now?",
+                "Would you like to open the exported file now?",
                 QMessageBox.Yes | QMessageBox.No)
             if reply == QMessageBox.Yes:
                 import os
-                os.startfile(str(ref_file))
+                os.startfile(str(file_path))
 
         except Exception as e:
-            logger.error(f"Failed to export missing HTS codes: {e}")
-            QMessageBox.critical(self, "Export Error", f"Failed to export missing HTS codes:\n{e}")
+            logger.error(f"Failed to export HTS issues: {e}")
+            QMessageBox.critical(self, "Export Error", f"Failed to export HTS issues:\n{e}")
 
     def export_parts_by_client(self):
         """Export parts list filtered by client code to Excel."""
@@ -9240,8 +11200,9 @@ class TariffMill(QMainWindow):
         search_term = self.hts_db_search.text().strip()
 
         hts_db_path = BASE_DIR / "Resources" / "References" / "hts.db"
+        logger.info(f"HTS search: term='{search_term}', db_path={hts_db_path}, exists={hts_db_path.exists()}")
         if not hts_db_path.exists():
-            QMessageBox.warning(self, "Database Not Found", "hts.db not found in Resources/References/")
+            QMessageBox.warning(self, "Database Not Found", f"hts.db not found at: {hts_db_path}")
             return
 
         try:
@@ -9251,8 +11212,10 @@ class TariffMill(QMainWindow):
             if search_term:
                 # Check if search term starts with a digit (HTS code search)
                 if search_term[0].isdigit():
+                    # Remove periods from search term (DB stores codes without periods)
+                    clean_code = search_term.replace('.', '')
                     # Search for HTS codes starting with the search term
-                    code_pattern = f"{search_term}%"
+                    code_pattern = f"{clean_code}%"
                     cursor.execute("""
                         SELECT full_code, description, unit_of_quantity, general_rate,
                                special_rate, column2_rate, chapter
@@ -9284,12 +11247,22 @@ class TariffMill(QMainWindow):
 
             rows = cursor.fetchall()
             conn.close()
+            logger.info(f"HTS search returned {len(rows)} rows")
 
             # Populate table
             self.hts_db_table.setRowCount(len(rows))
             for row_idx, row_data in enumerate(rows):
                 for col_idx, value in enumerate(row_data):
-                    item = QTableWidgetItem(str(value) if value else "")
+                    display_value = str(value) if value else ""
+                    # Format HTS code with periods for readability (column 0)
+                    if col_idx == 0 and display_value and len(display_value) >= 4:
+                        # Format as XXXX.XX.XXXX (e.g., 4009420050 -> 4009.42.0050)
+                        code = display_value
+                        if len(code) >= 6:
+                            display_value = f"{code[:4]}.{code[4:6]}.{code[6:]}"
+                        elif len(code) >= 4:
+                            display_value = f"{code[:4]}.{code[4:]}"
+                    item = QTableWidgetItem(display_value)
                     self.hts_db_table.setItem(row_idx, col_idx, item)
 
             # Update count label
@@ -9624,28 +11597,33 @@ class TariffMill(QMainWindow):
         value_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsEditable)
         
         items = [
-            QTableWidgetItem("NEW_PART"),  # Product No
-            value_item,  # Value
-            QTableWidgetItem(""),  # HTS
-            QTableWidgetItem(default_mid),  # MID
-            QTableWidgetItem("0.00"),  # cbp_qty
-            QTableWidgetItem("CO"),  # Dec
-            QTableWidgetItem(default_melt),  # Melt
-            QTableWidgetItem(""),  # Cast
-            QTableWidgetItem(""),  # Smelt
-            QTableWidgetItem(""),  # Flag
-            QTableWidgetItem("100.0%"),  # Steel%
-            QTableWidgetItem(""),  # Al%
-            QTableWidgetItem(""),  # Cu%
-            QTableWidgetItem(""),  # Wood%
-            QTableWidgetItem(""),  # Auto%
-            QTableWidgetItem(""),  # Non-232%
-            QTableWidgetItem("")  # 232 Status
+            QTableWidgetItem("NEW_PART"),  # 0: Product No
+            value_item,                     # 1: Value
+            QTableWidgetItem(""),           # 2: HTS
+            QTableWidgetItem(default_mid),  # 3: MID
+            QTableWidgetItem("0.00"),       # 4: Qty1
+            QTableWidgetItem("0.00"),       # 5: Qty2
+            QTableWidgetItem("NO"),         # 6: Qty Unit
+            QTableWidgetItem("CO"),         # 7: Dec
+            QTableWidgetItem(default_melt), # 8: Melt
+            QTableWidgetItem(""),           # 9: Cast
+            QTableWidgetItem(""),           # 10: Smelt
+            QTableWidgetItem(""),           # 11: Flag
+            QTableWidgetItem("100.0%"),     # 12: Steel%
+            QTableWidgetItem(""),           # 13: Al%
+            QTableWidgetItem(""),           # 14: Cu%
+            QTableWidgetItem(""),           # 15: Wood%
+            QTableWidgetItem(""),           # 16: Auto%
+            QTableWidgetItem(""),           # 17: Non-232%
+            QTableWidgetItem(""),           # 18: 232 Status
+            QTableWidgetItem("")            # 19: Cust Ref
+            # TODO: Lacey column - To be implemented at a later date
+            # QTableWidgetItem("")            # 20: Lacey
         ]
 
-        # Make all items editable except ratios and 232 status
+        # Make all items editable except Qty1, Qty2, Steel%, Al%, Cu%, Wood%, Auto%, Non-232%, 232 Status
         for i, item in enumerate(items):
-            if i not in [10, 11, 12, 13, 14, 15, 16]:  # Not Steel%, Al%, Cu%, Wood%, Auto%, Non-232%, 232 Status
+            if i not in [4, 5, 12, 13, 14, 15, 16, 17, 18]:
                 item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsEditable)
             self.table.setItem(row, i, item)
         
@@ -9806,7 +11784,7 @@ class TariffMill(QMainWindow):
         for i in range(self.table.rowCount()):
             cell = self.table.item(i, 1)
             total += (cell.data(Qt.UserRole) or 0.0) if cell else 0.0
-        
+
         # Don't update CI input - let user keep their target value
         # Just compare the preview total against the CI input
         ci_text = self.ci_input.text().replace(',', '').strip()
@@ -9814,19 +11792,22 @@ class TariffMill(QMainWindow):
             target_value = float(ci_text) if ci_text else self.csv_total_value
         except:
             target_value = self.csv_total_value
-        
+
         diff = abs(total - target_value)
         threshold = 0.01
         if diff <= threshold:
             self.process_btn.setEnabled(True)
             self.process_btn.setText("Export Worksheet")
             self.process_btn.setFocus()  # Keep focus on button so user can press Enter to export
-            self.status.setText("VALUES MATCH → READY TO EXPORT")
-            self.status.setStyleSheet("background:#107C10; color:white; font-weight:bold; font-size:16pt;")
+            self.bottom_status.setText(f"VALUES MATCH - Preview: ${total:,.2f} = Target: ${target_value:,.2f}")
+            self.bottom_status.setStyleSheet("background:#107C10; color:white; font-weight:bold; font-size:9px; padding:2px 3px;")
         else:
             self.process_btn.setEnabled(False)
             self.process_btn.setText("Export Worksheet (Values Don't Match)")
-            self.status.setText(f"Preview: ${total:,.2f} • Target: ${target_value:,.2f}")
+            diff_display = total - target_value
+            sign = "+" if diff_display > 0 else ""
+            self.bottom_status.setText(f"Preview: ${total:,.2f} • Target: ${target_value:,.2f} • Diff: {sign}${diff_display:,.2f}")
+            self.bottom_status.setStyleSheet("background:#ff9800; color:white; font-weight:bold; font-size:9px; padding:2px 3px;")
 
     def _process_or_export(self):
         # If no preview yet, run processing; otherwise proceed to export
@@ -9860,6 +11841,12 @@ class TariffMill(QMainWindow):
         # Run processing
         self.status.setText("Reprocessing invoice...")
         self.start_processing()
+
+        # Update qty_unit values from hts.db for all parts (in case HTS codes changed)
+        units_updated = self.import_hts_units_silent()
+        if units_updated > 0:
+            logger.info(f"Updated qty_unit for {units_updated} parts from hts.db during reprocess")
+
         logger.info("Reprocessed invoice to pick up database changes")
 
     def save_preview_parts_to_db(self):
@@ -9876,11 +11863,10 @@ class TariffMill(QMainWindow):
             c = conn.cursor()
             now = datetime.now().isoformat()
             added_count = 0
-            updated_count = 0
 
             # Track which parts we've already processed (avoid duplicates from derivative rows)
             processed_parts = set()
-            # Track parts that were added or updated (for HTS units import)
+            # Track parts that were added (for HTS units import)
             saved_part_numbers = []
 
             for row in range(self.table.rowCount()):
@@ -9888,28 +11874,31 @@ class TariffMill(QMainWindow):
                 part_item = self.table.item(row, 0)
                 if not part_item:
                     continue
-                part_number = part_item.text().strip()
+                part_number = part_item.text().strip().upper()
                 if not part_number or part_number in processed_parts:
                     continue
                 processed_parts.add(part_number)
 
-                # Get values from the preview table
+                # Check if this row is marked as "Not Found" (column 18 = 232 Status)
+                # Only save parts that were NOT in the database - don't overwrite existing DB values
+                status_item = self.table.item(row, 18)
+                status_text = status_item.text().strip() if status_item else ""
+                if status_text != "Not Found":
+                    # Part exists in database - skip to preserve database values
+                    continue
+
+                # Get values from the preview table (only for "Not Found" parts)
                 hts_code = self.table.item(row, 2).text().strip() if self.table.item(row, 2) else ""
                 mid = self.table.item(row, 3).text().strip() if self.table.item(row, 3) else ""
 
-                # Check if part exists in database
-                c.execute("SELECT hts_code, mid FROM parts_master WHERE part_number = ?", (part_number,))
+                # Check if part exists in database (case-insensitive) - double check
+                c.execute("SELECT hts_code, mid FROM parts_master WHERE UPPER(part_number) = UPPER(?)", (part_number,))
                 existing = c.fetchone()
 
                 if existing:
-                    # Part exists - update if HTS or MID changed and current values are not empty
-                    existing_hts, existing_mid = existing
-                    if hts_code and hts_code != existing_hts:
-                        c.execute("UPDATE parts_master SET hts_code = ?, last_updated = ? WHERE part_number = ?",
-                                  (hts_code, now, part_number))
-                        updated_count += 1
-                        saved_part_numbers.append(part_number)
-                        logger.info(f"Updated HTS code for {part_number}: {existing_hts} -> {hts_code}")
+                    # Part already exists in database - don't overwrite with preview table values
+                    # This preserves any updates the user made directly to the database
+                    continue
                 else:
                     # Part doesn't exist - add it if we have at least an HTS code or MID
                     # Percentages are in 0-100 format; default to 100% non-232
@@ -9928,8 +11917,7 @@ class TariffMill(QMainWindow):
             conn.commit()
             conn.close()
 
-            total = added_count + updated_count
-            if total > 0:
+            if added_count > 0:
                 # Refresh the MID dropdown and parts table
                 self.load_available_mids()
 
@@ -9939,7 +11927,7 @@ class TariffMill(QMainWindow):
                     if units_updated > 0:
                         logger.info(f"Updated CBP Qty1 units for {units_updated} saved parts")
 
-            return total
+            return added_count
 
         except Exception as e:
             logger.error(f"Failed to save preview parts to database: {e}")
@@ -10197,7 +12185,7 @@ class TariffMill(QMainWindow):
                 'CountryofMelt': self.table.item(i, 8).text() if self.table.item(i, 8) else "",
                 'CountryOfCast': self.table.item(i, 9).text() if self.table.item(i, 9) else "",
                 'PrimCountryOfSmelt': self.table.item(i, 10).text() if self.table.item(i, 10) else "",
-                'PrimSmeltFlag': self.table.item(i, 11).text() if self.table.item(i, 11) else "",
+                'DeclarationFlag': self.table.item(i, 11).text() if self.table.item(i, 11) else "",
                 'SteelRatio': steel_ratio,
                 'AluminumRatio': aluminum_ratio,
                 'CopperRatio': copper_ratio,
@@ -10211,6 +12199,10 @@ class TariffMill(QMainWindow):
             export_data.append(row_data)
 
         df_out = pd.DataFrame(export_data)
+
+        # Add CustomerRef column from input field
+        customer_ref = self.customer_ref_input.text().strip() if hasattr(self, 'customer_ref_input') else ""
+        df_out['CustomerRef'] = customer_ref
 
         # Build masks for each Section 232 material type BEFORE converting to percentage strings
         steel_mask = df_out['_232_flag'].fillna('').str.contains('232_Steel', case=False, na=False)
@@ -10240,8 +12232,8 @@ class TariffMill(QMainWindow):
         else:
             all_columns = ['Product No', 'ValueUSD', 'HTSCode', 'MID', 'Qty1', 'Qty2',
                 'DecTypeCd', 'CountryofMelt', 'CountryOfCast', 'PrimCountryOfSmelt',
-                'PrimSmeltFlag', 'SteelRatio', 'AluminumRatio', 'CopperRatio',
-                'WoodRatio', 'AutoRatio', 'NonSteelRatio', '232_Status']
+                'DeclarationFlag', 'SteelRatio', 'AluminumRatio', 'CopperRatio',
+                'WoodRatio', 'AutoRatio', 'NonSteelRatio', '232_Status', 'CustomerRef']
 
         # Filter columns based on visibility settings
         cols = []
@@ -10265,6 +12257,14 @@ class TariffMill(QMainWindow):
             else:
                 # Non-ratio columns are always included
                 cols.append(col)
+
+        # Filter out columns that don't exist in the DataFrame
+        cols = [col for col in cols if col in df_out.columns]
+
+        # Ensure we have at least one column to export
+        if not cols:
+            QMessageBox.critical(self, "Export Error", "No valid columns to export. Please check your column configuration.")
+            return
 
         # Apply custom column mapping if set
         if hasattr(self, 'output_column_mapping') and self.output_column_mapping:
@@ -10660,6 +12660,358 @@ class TariffMill(QMainWindow):
             QMessageBox.critical(self, "Export Failed", str(e))
             return
         self.clear_all()
+
+    # TODO: XML Export - To be implemented at a later date
+    # def export_to_xml(self):
+    #     """Export processed invoice data to XML format for e2Open Customs Management."""
+    #     if self.last_processed_df is None or self.table.rowCount() == 0:
+    #         QMessageBox.warning(self, "No Data", "No processed data to export. Please process a shipment file first.")
+    #         return
+    #
+    #     # Build filename from CSV name + date/time
+    #     # Get customer reference from input field, fall back to CSV filename
+    #     customer_ref = self.customer_ref_input.text().strip() if hasattr(self, 'customer_ref_input') else ""
+    #     if self.current_csv:
+    #         csv_name = Path(self.current_csv).stem  # Get filename without extension
+    #     else:
+    #         csv_name = "Invoice"
+    #     # Use customer reference for filename if provided, otherwise use CSV name
+    #     filename_base = customer_ref if customer_ref else csv_name
+    #     default_filename = f"{filename_base}_{datetime.now():%Y%m%d_%H%M}.xml"
+    #
+    #     # Prompt user for save location
+    #     file_path, _ = QFileDialog.getSaveFileName(
+    #         self,
+    #         "Export Commercial Invoice XML",
+    #         str(OUTPUT_DIR / default_filename),
+    #         "XML Files (*.xml);;All Files (*)"
+    #     )
+    #
+    #     if not file_path:
+    #         return  # User cancelled
+    #
+    #     try:
+    #         # Build export data from current table state
+    #         export_rows = []
+    #         for i in range(self.table.rowCount()):
+    #             value_cell = self.table.item(i, 1)
+    #             value = value_cell.data(Qt.UserRole) if value_cell else 0.0
+    #
+    #             # Get Qty1/Qty2 from last_processed_df
+    #             qty1_value = ""
+    #             qty2_value = ""
+    #             qty_unit = ""
+    #             if self.last_processed_df is not None and i < len(self.last_processed_df):
+    #                 qty1_value = str(self.last_processed_df.iloc[i].get('Qty1', '')).strip()
+    #                 if qty1_value in ['nan', 'None']:
+    #                     qty1_value = ""
+    #                 qty2_value = str(self.last_processed_df.iloc[i].get('Qty2', '')).strip()
+    #                 if qty2_value in ['nan', 'None']:
+    #                     qty2_value = ""
+    #                 qty_unit = str(self.last_processed_df.iloc[i].get('qty_unit', '')).strip().upper()
+    #                 if qty_unit in ['nan', 'None']:
+    #                     qty_unit = ""
+    #
+    #             row_data = {
+    #                 'product_no': self.table.item(i, 0).text() if self.table.item(i, 0) else "",
+    #                 'value_usd': value,
+    #                 'hts_code': self.table.item(i, 2).text() if self.table.item(i, 2) else "",
+    #                 'mid': self.table.item(i, 3).text() if self.table.item(i, 3) else "",
+    #                 'qty1': qty1_value,
+    #                 'qty2': qty2_value,
+    #                 'qty_unit': qty_unit,
+    #                 'dec_type_cd': self.table.item(i, 7).text() if self.table.item(i, 7) else "",
+    #                 'country_of_melt': self.table.item(i, 8).text() if self.table.item(i, 8) else "",
+    #                 'country_of_cast': self.table.item(i, 9).text() if self.table.item(i, 9) else "",
+    #                 'country_of_smelt': self.table.item(i, 10).text() if self.table.item(i, 10) else "",
+    #                 'declaration_flag': self.table.item(i, 11).text() if self.table.item(i, 11) else "",
+    #                 'status_232': self.table.item(i, 18).text() if self.table.item(i, 18) else ""
+    #             }
+    #             export_rows.append(row_data)
+    #
+    #         # Get client_code (importer ID) from parts_master for any part in the invoice
+    #         importer_id = ""
+    #         try:
+    #             part_numbers = [row['product_no'] for row in export_rows if row.get('product_no')]
+    #             if part_numbers:
+    #                 conn = sqlite3.connect(str(DB_PATH))
+    #                 c = conn.cursor()
+    #                 placeholders = ','.join(['?' for _ in part_numbers])
+    #                 c.execute(f"""SELECT DISTINCT client_code FROM parts_master
+    #                              WHERE part_number IN ({placeholders})
+    #                              AND client_code IS NOT NULL AND client_code != ''
+    #                              LIMIT 1""", part_numbers)
+    #                 result = c.fetchone()
+    #                 if result:
+    #                     importer_id = result[0]
+    #                 conn.close()
+    #         except Exception as e:
+    #             logger.warning(f"Could not fetch client_code for XML export: {e}")
+    #
+    #         # Generate XML (use customer ref if provided, otherwise CSV name; client_code as importer ID)
+    #         reference_number = customer_ref if customer_ref else csv_name
+    #         xml_content = self._generate_commercial_invoice_xml(export_rows, reference_number, importer_id)
+    #
+    #         # Write to file
+    #         with open(file_path, 'w', encoding='utf-8') as f:
+    #             f.write(xml_content)
+    #
+    #         QMessageBox.information(self, "Success", f"XML export complete!\nSaved: {Path(file_path).name}")
+    #         logger.success(f"XML export complete: {file_path}")
+    #
+    #     except Exception as e:
+    #         logger.error(f"XML export failed: {e}")
+    #         QMessageBox.critical(self, "Export Failed", f"XML export failed: {str(e)}")
+
+    # TODO: Lacey Act PPQ 505 Export - To be implemented at a later date
+    # def export_lacey_act_ppq505(self):
+    #     """Export items requiring Lacey Act declaration to PPQ Form 505 format (Excel)."""
+    #     if self.last_processed_df is None or self.table.rowCount() == 0:
+    #         QMessageBox.warning(self, "No Data", "No processed data to export. Please process a shipment file first.")
+    #         return
+    #
+    #     # Filter for Lacey Act items only
+    #     df = self.last_processed_df.copy()
+    #     if '_lacey_required' not in df.columns:
+    #         QMessageBox.warning(self, "No Lacey Data",
+    #             "Lacey Act information not available. This may be an older processed file.\n"
+    #             "Please reprocess the invoice to detect Lacey Act items.")
+    #         return
+    #
+    #     lacey_df = df[df['_lacey_required'] == 'Y'].copy()
+    #
+    #     if len(lacey_df) == 0:
+    #         QMessageBox.information(self, "No Lacey Items",
+    #             "No items in this shipment require Lacey Act declaration.\n\n"
+    #             "Lacey Act applies to:\n"
+    #             "- HTS Chapters 44, 47, 48 (Wood, Pulp, Paper)\n"
+    #             "- HTS 9401, 9403 (Wood furniture)\n"
+    #             "- Any item with wood content > 0%")
+    #         return
+    #
+    #     # Build filename
+    #     csv_name = Path(self.current_csv).stem if self.current_csv else "Invoice"
+    #     default_filename = f"{csv_name}_PPQ505_{datetime.now():%Y%m%d_%H%M}.xlsx"
+    #
+    #     # Prompt user for save location
+    #     file_path, _ = QFileDialog.getSaveFileName(
+    #         self,
+    #         "Export Lacey Act PPQ Form 505",
+    #         str(OUTPUT_DIR / default_filename),
+    #         "Excel Files (*.xlsx);;All Files (*)"
+    #     )
+    #
+    #     if not file_path:
+    #         return  # User cancelled
+    #
+    #     try:
+    #         # Prepare PPQ 505 columns
+    #         ppq505_columns = {
+    #             'HTSCode': 'HTSUS Number',
+    #             'ValueUSD': 'Entered Value (USD)',
+    #             'Product No': 'Article/Component',
+    #             'LaceySpecies': 'Genus & Species (Scientific Name)',
+    #             'LaceyHarvestCountry': 'Country of Harvest',
+    #             'CalcWtNet': 'Quantity',
+    #             'qty_unit': 'Unit of Measure',
+    #             'LaceyRecycledPct': '% Recycled',
+    #             'WoodRatio': 'Wood Content %',
+    #         }
+    #
+    #         # Create export dataframe with PPQ 505 format
+    #         export_df = pd.DataFrame()
+    #         for src_col, dest_col in ppq505_columns.items():
+    #             if src_col in lacey_df.columns:
+    #                 export_df[dest_col] = lacey_df[src_col]
+    #             else:
+    #                 export_df[dest_col] = ''
+    #
+    #         # Add warning column for missing data
+    #         warnings = []
+    #         for _, row in export_df.iterrows():
+    #             missing = []
+    #             if not row.get('Genus & Species (Scientific Name)', ''):
+    #                 missing.append('Species')
+    #             if not row.get('Country of Harvest', ''):
+    #                 missing.append('Harvest Country')
+    #             warnings.append(', '.join(missing) if missing else '')
+    #         export_df['Missing Data'] = warnings
+    #
+    #         # Export to Excel with formatting
+    #         with pd.ExcelWriter(file_path, engine='openpyxl') as writer:
+    #             export_df.to_excel(writer, index=False, sheet_name='PPQ 505 Data')
+    #
+    #             # Access workbook for formatting
+    #             workbook = writer.book
+    #             worksheet = writer.sheets['PPQ 505 Data']
+    #
+    #             # Format header row
+    #             from openpyxl.styles import Font, PatternFill, Alignment
+    #             header_fill = PatternFill(start_color='27ae60', end_color='27ae60', fill_type='solid')
+    #             header_font = Font(bold=True, color='FFFFFF')
+    #
+    #             for col_num, cell in enumerate(worksheet[1], 1):
+    #                 cell.fill = header_fill
+    #                 cell.font = header_font
+    #                 cell.alignment = Alignment(horizontal='center')
+    #
+    #             # Highlight rows with missing data
+    #             warning_fill = PatternFill(start_color='FFCC99', end_color='FFCC99', fill_type='solid')
+    #             for row_num, row in enumerate(worksheet.iter_rows(min_row=2, max_row=worksheet.max_row), 2):
+    #                 missing_data_cell = worksheet.cell(row=row_num, column=len(ppq505_columns) + 1)
+    #                 if missing_data_cell.value:
+    #                     for cell in row:
+    #                         cell.fill = warning_fill
+    #
+    #             # Adjust column widths
+    #             for column in worksheet.columns:
+    #                 max_length = 0
+    #                 column_letter = column[0].column_letter
+    #                 for cell in column:
+    #                     try:
+    #                         if len(str(cell.value)) > max_length:
+    #                             max_length = len(str(cell.value))
+    #                     except:
+    #                         pass
+    #                 adjusted_width = min(max_length + 2, 50)
+    #                 worksheet.column_dimensions[column_letter].width = adjusted_width
+    #
+    #         QMessageBox.information(self, "Success",
+    #             f"Lacey Act PPQ 505 export complete!\n\n"
+    #             f"Items exported: {len(lacey_df)}\n"
+    #             f"File: {Path(file_path).name}\n\n"
+    #             f"Note: Review items highlighted in orange - they have missing species or country of harvest data.")
+    #         logger.success(f"Lacey Act PPQ 505 export: {len(lacey_df)} items to {file_path}")
+    #
+    #     except Exception as e:
+    #         logger.error(f"Lacey Act export failed: {e}")
+    #         QMessageBox.critical(self, "Export Failed", f"Lacey Act export failed: {str(e)}")
+
+    # TODO: XML Generation - To be implemented at a later date
+    # def _generate_commercial_invoice_xml(self, rows, customer_reference="", importer_id=""):
+    #     """Generate XML content for commercial invoice in e2Open-compatible format."""
+    #     # Create root element with namespace
+    #     root = ET.Element('CommercialInvoice')
+    #     root.set('xmlns', 'urn:customs:commercial-invoice:v1')
+    #     root.set('xmlns:xsi', 'http://www.w3.org/2001/XMLSchema-instance')
+    #
+    #     # Add header information
+    #     header = ET.SubElement(root, 'Header')
+    #
+    #     # Document information
+    #     doc_info = ET.SubElement(header, 'DocumentInfo')
+    #     ET.SubElement(doc_info, 'DocumentType').text = 'CommercialInvoice'
+    #     ET.SubElement(doc_info, 'CreationDateTime').text = datetime.now().isoformat()
+    #     ET.SubElement(doc_info, 'DocumentID').text = f"INV-{datetime.now():%Y%m%d%H%M%S}"
+    #     if customer_reference:
+    #         ET.SubElement(doc_info, 'CustomerReferenceNumber').text = customer_reference
+    #
+    #     # Importer information (from client_code in parts_master)
+    #     if importer_id:
+    #         importer = ET.SubElement(header, 'Importer')
+    #         ET.SubElement(importer, 'ImporterID').text = importer_id
+    #
+    #     # Exporter/Shipper information (from MID if available)
+    #     first_mid = rows[0].get('mid', '') if rows else ''
+    #     if first_mid:
+    #         shipper = ET.SubElement(header, 'Shipper')
+    #         ET.SubElement(shipper, 'ManufacturerID').text = first_mid
+    #         # Extract country from MID prefix (first 2 characters)
+    #         if len(first_mid) >= 2:
+    #             ET.SubElement(shipper, 'CountryCode').text = first_mid[:2]
+    #
+    #     # Invoice summary
+    #     summary = ET.SubElement(header, 'InvoiceSummary')
+    #     total_value = sum(row.get('value_usd', 0) for row in rows)
+    #     ET.SubElement(summary, 'TotalValue').text = f"{total_value:.2f}"
+    #     ET.SubElement(summary, 'CurrencyCode').text = 'USD'
+    #     ET.SubElement(summary, 'TotalLineItems').text = str(len(rows))
+    #
+    #     # Line items
+    #     line_items = ET.SubElement(root, 'LineItems')
+    #
+    #     for idx, row in enumerate(rows, start=1):
+    #         item = ET.SubElement(line_items, 'LineItem')
+    #         item.set('lineNumber', str(idx))
+    #
+    #         # Product identification
+    #         ET.SubElement(item, 'ProductNumber').text = row.get('product_no', '')
+    #
+    #         # Tariff classification
+    #         tariff = ET.SubElement(item, 'TariffClassification')
+    #         hts_code = row.get('hts_code', '')
+    #         ET.SubElement(tariff, 'HTSCode').text = hts_code
+    #         # Extract chapter for material type indication
+    #         if len(hts_code.replace('.', '')) >= 2:
+    #             ET.SubElement(tariff, 'HTSChapter').text = hts_code.replace('.', '')[:2]
+    #
+    #         # Value
+    #         value_elem = ET.SubElement(item, 'Value')
+    #         ET.SubElement(value_elem, 'Amount').text = f"{row.get('value_usd', 0):.2f}"
+    #         ET.SubElement(value_elem, 'CurrencyCode').text = 'USD'
+    #
+    #         # Quantities
+    #         quantities = ET.SubElement(item, 'Quantities')
+    #         qty_unit = row.get('qty_unit', '')
+    #         if qty_unit:
+    #             ET.SubElement(quantities, 'UnitOfMeasure').text = qty_unit
+    #         qty1 = row.get('qty1', '')
+    #         if qty1:
+    #             ET.SubElement(quantities, 'Quantity1').text = str(qty1)
+    #         qty2 = row.get('qty2', '')
+    #         if qty2:
+    #             ET.SubElement(quantities, 'Quantity2').text = str(qty2)
+    #
+    #         # Manufacturer ID
+    #         mid = row.get('mid', '')
+    #         if mid:
+    #             ET.SubElement(item, 'ManufacturerID').text = mid
+    #
+    #         # Section 232 information
+    #         dec_type_cd = row.get('dec_type_cd', '')
+    #         status_232 = row.get('status_232', '')
+    #
+    #         if dec_type_cd or status_232:
+    #             section232 = ET.SubElement(item, 'Section232')
+    #
+    #             if dec_type_cd:
+    #                 ET.SubElement(section232, 'DeclarationTypeCode').text = dec_type_cd
+    #
+    #             if status_232:
+    #                 ET.SubElement(section232, 'MaterialStatus').text = status_232
+    #
+    #             # Country of origin information (for Section 232 materials)
+    #             country_melt = row.get('country_of_melt', '')
+    #             country_cast = row.get('country_of_cast', '')
+    #             country_smelt = row.get('country_of_smelt', '')
+    #             dec_flag = row.get('declaration_flag', '')
+    #
+    #             if country_melt or country_cast or country_smelt:
+    #                 origin = ET.SubElement(section232, 'CountryOfOrigin')
+    #                 if country_melt:
+    #                     ET.SubElement(origin, 'CountryOfMelt').text = country_melt
+    #                 if country_cast:
+    #                     ET.SubElement(origin, 'CountryOfCast').text = country_cast
+    #                 if country_smelt:
+    #                     ET.SubElement(origin, 'PrimaryCountryOfSmelt').text = country_smelt
+    #
+    #             if dec_flag:
+    #                 ET.SubElement(section232, 'DeclarationFlag').text = dec_flag
+    #
+    #     # Convert to pretty-printed XML string
+    #     xml_str = ET.tostring(root, encoding='unicode')
+    #     # Use minidom for pretty printing
+    #     dom = minidom.parseString(xml_str)
+    #     pretty_xml = dom.toprettyxml(indent='  ', encoding=None)
+    #
+    #     # Remove the XML declaration line that minidom adds (we'll add our own)
+    #     lines = pretty_xml.split('\n')
+    #     if lines[0].startswith('<?xml'):
+    #         lines = lines[1:]
+    #
+    #     # Add proper XML declaration
+    #     xml_declaration = '<?xml version="1.0" encoding="UTF-8"?>'
+    #     return xml_declaration + '\n' + '\n'.join(lines)
 
     def log_context_menu(self, pos):
         menu = QMenu()
@@ -11267,6 +13619,7 @@ if __name__ == "__main__":
             splash_progress.setValue(60)
             app.processEvents()
             win.load_mapping_profiles()
+            win.load_folder_profiles()
 
             splash_message.setText("Loading export profiles...")
             splash_progress.setValue(70)

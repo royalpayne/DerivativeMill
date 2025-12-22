@@ -194,7 +194,7 @@ After processing, these columns are added/calculated:
 | CountryofMelt | Country of melt origin |
 | CountryOfCast | Country of cast origin |
 | PrimCountryOfSmelt | Primary country of smelt |
-| PrimSmeltFlag | Smelting declaration flag |
+| DeclarationFlag | Smelting declaration flag |
 | _232_flag | Section 232 material flag |
 | _content_type | Material content type |
 
