@@ -42,18 +42,23 @@ def _discover_templates():
             continue
 
         module_name = file_path.stem  # filename without .py
+        full_module_name = f"templates.{module_name}"
 
         try:
-            # Load the module
+            # Remove from cache if already loaded (force reload)
+            if full_module_name in sys.modules:
+                del sys.modules[full_module_name]
+
+            # Load the module fresh
             spec = importlib.util.spec_from_file_location(
-                f"templates.{module_name}",
+                full_module_name,
                 file_path
             )
             if spec is None or spec.loader is None:
                 continue
 
             module = importlib.util.module_from_spec(spec)
-            sys.modules[f"templates.{module_name}"] = module
+            sys.modules[full_module_name] = module
             spec.loader.exec_module(module)
 
             # Find template class (class that inherits from BaseTemplate)

@@ -2759,8 +2759,7 @@ class TariffMill(QMainWindow):
         self.setTabOrder(self.refresh_input_btn, self.ci_input)
         self.setTabOrder(self.ci_input, self.wt_input)
         self.setTabOrder(self.wt_input, self.mid_combo)
-        self.setTabOrder(self.mid_combo, self.customer_ref_input)
-        self.setTabOrder(self.customer_ref_input, self.process_btn)
+        self.setTabOrder(self.mid_combo, self.process_btn)
         self.setTabOrder(self.process_btn, self.edit_values_btn)
         self.setTabOrder(self.edit_values_btn, self.clear_btn)
         self.setTabOrder(self.clear_btn, self.exports_list)
@@ -5496,7 +5495,7 @@ class TariffMill(QMainWindow):
         self.file_label.setText("No file selected")
         self.ci_input.clear()
         self.wt_input.clear()
-        if hasattr(self, 'customer_ref_input'):
+        if hasattr(self, 'customer_ref_input') and self.customer_ref_input:
             self.customer_ref_input.clear()
         self.mid_combo.setCurrentIndex(-1)
         self.selected_mid = ""
@@ -6605,7 +6604,7 @@ class TariffMill(QMainWindow):
         self.table.setSortingEnabled(False)  # Disable sorting while populating
         self.table.setRowCount(len(df))
         has_232 = False
-        for i, r in df.iterrows():
+        for i, (idx, r) in enumerate(df.iterrows()):
             flag = r.get('_232_flag', '')
             if flag:
                 has_232 = True
@@ -6664,7 +6663,7 @@ class TariffMill(QMainWindow):
             qty_unit_display = str(r.get('qty_unit', '')).strip().upper() if pd.notna(r.get('qty_unit')) else ""
 
             # Get customer reference from input field
-            customer_ref_display = self.customer_ref_input.text().strip() if hasattr(self, 'customer_ref_input') else ""
+            customer_ref_display = self.customer_ref_input.text().strip() if hasattr(self, 'customer_ref_input') and self.customer_ref_input else ""
 
             # TODO: Lacey Act status - To be implemented at a later date
             # lacey_required = r.get('_lacey_required', 'N')
@@ -12201,7 +12200,7 @@ Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         df_out = pd.DataFrame(export_data)
 
         # Add CustomerRef column from input field
-        customer_ref = self.customer_ref_input.text().strip() if hasattr(self, 'customer_ref_input') else ""
+        customer_ref = self.customer_ref_input.text().strip() if hasattr(self, 'customer_ref_input') and self.customer_ref_input else ""
         df_out['CustomerRef'] = customer_ref
 
         # Build masks for each Section 232 material type BEFORE converting to percentage strings

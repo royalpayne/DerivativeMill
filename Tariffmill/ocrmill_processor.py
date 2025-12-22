@@ -201,12 +201,18 @@ class ProcessorEngine:
                     page_buffer.append(page_text)
 
                 # Process remaining pages in buffer
-                if page_buffer and current_invoice:
+                if page_buffer:
                     buffer_text = "\n".join(page_buffer)
+
+                    # If no invoice found with generic pattern, try the template's extraction
+                    if not current_invoice:
+                        current_invoice = template.extract_invoice_number(buffer_text)
+                        current_project = template.extract_project_number(buffer_text)
+
                     _, _, items = template.extract_all(buffer_text)
                     for item in items:
-                        item['invoice_number'] = current_invoice
-                        item['project_number'] = current_project
+                        item['invoice_number'] = current_invoice or 'UNKNOWN'
+                        item['project_number'] = current_project or 'UNKNOWN'
                         if bol_weight:
                             item['bol_gross_weight'] = bol_weight
                         if bol_weight and ('net_weight' not in item or not item.get('net_weight')):
