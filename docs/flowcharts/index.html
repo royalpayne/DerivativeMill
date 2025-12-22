@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TariffMill Flowcharts</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            color: #fff;
+        }
+        .header {
+            background: rgba(0,0,0,0.3);
+            padding: 20px 40px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        .logo h1 {
+            font-size: 24px;
+            font-weight: 600;
+        }
+        .logo span {
+            color: #4CAF50;
+        }
+        .version {
+            background: #4CAF50;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 14px;
+        }
+        .nav {
+            display: flex;
+            background: rgba(0,0,0,0.2);
+            padding: 10px 20px;
+            gap: 10px;
+            overflow-x: auto;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        .nav-btn {
+            background: rgba(255,255,255,0.1);
+            border: none;
+            color: #fff;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            white-space: nowrap;
+            transition: all 0.3s ease;
+        }
+        .nav-btn:hover {
+            background: rgba(255,255,255,0.2);
+        }
+        .nav-btn.active {
+            background: #4CAF50;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 30px;
+        }
+        .flowchart-section {
+            display: none;
+        }
+        .flowchart-section.active {
+            display: block;
+        }
+        .flowchart-title {
+            font-size: 28px;
+            margin-bottom: 10px;
+            color: #4CAF50;
+        }
+        .flowchart-desc {
+            color: rgba(255,255,255,0.7);
+            margin-bottom: 30px;
+            font-size: 16px;
+        }
+        .mermaid-container {
+            background: #fff;
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 30px;
+            overflow-x: auto;
+        }
+        .mermaid {
+            display: flex;
+            justify-content: center;
+        }
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-top: 30px;
+        }
+        .info-card {
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 12px;
+            padding: 25px;
+        }
+        .info-card h3 {
+            color: #4CAF50;
+            margin-bottom: 15px;
+            font-size: 18px;
+        }
+        .info-card ul {
+            list-style: none;
+        }
+        .info-card li {
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            color: rgba(255,255,255,0.8);
+        }
+        .info-card li:last-child {
+            border-bottom: none;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        th {
+            color: #4CAF50;
+            font-weight: 600;
+        }
+        td {
+            color: rgba(255,255,255,0.8);
+        }
+        .footer {
+            text-align: center;
+            padding: 30px;
+            color: rgba(255,255,255,0.5);
+            border-top: 1px solid rgba(255,255,255,0.1);
+            margin-top: 50px;
+        }
+        @media (max-width: 768px) {
+            .header {
+                flex-direction: column;
+                gap: 15px;
+                text-align: center;
+            }
+            .nav {
+                justify-content: flex-start;
+            }
+            .container {
+                padding: 15px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="logo">
+            <h1>Tariff<span>Mill</span></h1>
+            <span style="color: rgba(255,255,255,0.5)">|</span>
+            <span style="color: rgba(255,255,255,0.7)">Documentation Flowcharts</span>
+        </div>
+        <div class="version">v0.94.0</div>
+    </div>
+
+    <div class="nav">
+        <button class="nav-btn active" onclick="showSection('invoice')">Invoice Processing</button>
+        <button class="nav-btn" onclick="showSection('parts')">Parts Master</button>
+        <button class="nav-btn" onclick="showSection('ocrmill')">OCRMill Templates</button>
+        <button class="nav-btn" onclick="showSection('tariff')">Tariff Detection</button>
+        <button class="nav-btn" onclick="showSection('architecture')">Architecture</button>
+        <button class="nav-btn" onclick="showSection('user')">User Workflow</button>
+    </div>
+
+    <div class="container">
+        <!-- Invoice Processing -->
+        <div id="invoice" class="flowchart-section active">
+            <h2 class="flowchart-title">Invoice Processing Workflow</h2>
+            <p class="flowchart-desc">Complete flow from file upload to CBP-compliant export</p>
+
+            <div class="mermaid-container">
+                <div class="mermaid">
+flowchart LR
+    subgraph Input["📁 Input"]
+        A[Select File] --> B{Format?}
+        B -->|CSV| C[Parse CSV]
+        B -->|XLSX| D[Parse Excel]
+    end
+
+    subgraph Map["🔗 Mapping"]
+        C --> E[Apply Profile]
+        D --> E
+        E --> F[Map Columns]
+    end
+
+    subgraph Config["⚙️ Configure"]
+        F --> G[Enter Total]
+        G --> H[Select MID]
+    end
+
+    subgraph Process["⚡ Process"]
+        H --> I[Lookup Parts]
+        I --> J[Calculate Ratiffs]
+        J --> K[Distribute Values]
+    end
+
+    subgraph Review["👁️ Review"]
+        K --> L[Preview Table]
+        L --> M{Match?}
+        M -->|No| N[Edit]
+        N --> L
+    end
+
+    subgraph Export["📤 Export"]
+        M -->|Yes| O[Generate Excel]
+        O --> P[Save & Archive]
+    end
+                </div>
+            </div>
+
+            <div class="info-grid">
+                <div class="info-card">
+                    <h3>Process Steps</h3>
+                    <ul>
+                        <li>1. Load CSV or Excel invoice file</li>
+                        <li>2. Apply or create column mapping</li>
+                        <li>3. Enter invoice total and select MID</li>
+                        <li>4. Process to lookup parts data</li>
+                        <li>5. Review and edit in preview table</li>
+                        <li>6. Export CBP-compliant worksheet</li>
+                    </ul>
+                </div>
+                <div class="info-card">
+                    <h3>Supported Formats</h3>
+                    <table>
+                        <tr><th>Format</th><th>Extension</th></tr>
+                        <tr><td>Comma-Separated Values</td><td>.csv</td></tr>
+                        <tr><td>Excel Workbook</td><td>.xlsx</td></tr>
+                        <tr><td>Excel 97-2003</td><td>.xls</td></tr>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Parts Master -->
+        <div id="parts" class="flowchart-section">
+            <h2 class="flowchart-title">Parts Master Data Flow</h2>
+            <p class="flowchart-desc">How parts data is managed, imported, and used throughout the application</p>
+
+            <div class="mermaid-container">
+                <div class="mermaid">
+flowchart TD
+    subgraph Sources["📥 Data Sources"]
+        A[CSV Import]
+        B[Manual Entry]
+        C[Invoice Processing]
+    end
+
+    subgraph DB["🗄️ Database"]
+        D[(parts_master)]
+        D --> E[Part Number]
+        D --> F[HTS Code]
+        D --> G[Material Ratios]
+        D --> H[Country Data]
+    end
+
+    subgraph Usage["🔄 Usage"]
+        I[Invoice Lookup]
+        J[Query Builder]
+        K[Quick Search]
+    end
+
+    A --> D
+    B --> D
+    C --> I
+    I --> D
+    J --> D
+    K --> D
+                </div>
+            </div>
+
+            <div class="info-grid">
+                <div class="info-card">
+                    <h3>Database Fields</h3>
+                    <table>
+                        <tr><th>Field</th><th>Purpose</th></tr>
+                        <tr><td>part_number</td><td>Primary lookup key</td></tr>
+                        <tr><td>hts_code</td><td>Tariff classification</td></tr>
+                        <tr><td>country_of_origin</td><td>CBP declaration</td></tr>
+                        <tr><td>steel_ratio</td><td>Section 232</td></tr>
+                        <tr><td>aluminum_ratio</td><td>Section 232</td></tr>
+                        <tr><td>country_of_melt</td><td>Steel declaration</td></tr>
+                    </table>
+                </div>
+                <div class="info-card">
+                    <h3>Import Features</h3>
+                    <ul>
+                        <li>Bulk import from CSV files</li>
+                        <li>Column mapping wizard</li>
+                        <li>Data validation before import</li>
+                        <li>Update or insert records</li>
+                        <li>Preview before committing</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <!-- OCRMill -->
+        <div id="ocrmill" class="flowchart-section">
+            <h2 class="flowchart-title">OCRMill Template Processing</h2>
+            <p class="flowchart-desc">How invoice templates are matched and data is extracted</p>
+
+            <div class="mermaid-container">
+                <div class="mermaid">
+flowchart LR
+    subgraph Input["📄 Document"]
+        A[PDF/Image] --> B[OCR Engine]
+        B --> C[Raw Text]
+    end
+
+    subgraph Match["🔍 Template Match"]
+        C --> D[Test Templates]
+        D --> E{Match?}
+        E -->|Yes| F[Score]
+        E -->|No| G[Next]
+        G --> D
+        F --> H[Best Match]
+    end
+
+    subgraph Extract["📊 Extract"]
+        H --> I[Invoice #]
+        H --> J[Line Items]
+        H --> K[Totals]
+    end
+
+    subgraph Output["📁 Output"]
+        I --> L[Structured Data]
+        J --> L
+        K --> L
+        L --> M[Export CSV]
+    end
+                </div>
+            </div>
+
+            <div class="info-grid">
+                <div class="info-card">
+                    <h3>Template Interface</h3>
+                    <ul>
+                        <li><code>can_process(text)</code> - Check if template matches</li>
+                        <li><code>get_confidence_score(text)</code> - Return 0.0-1.0 score</li>
+                        <li><code>extract_invoice_number(text)</code> - Get invoice #</li>
+                        <li><code>extract_line_items(text)</code> - Parse line items</li>
+                    </ul>
+                </div>
+                <div class="info-card">
+                    <h3>Available Templates</h3>
+                    <ul>
+                        <li>Bill of Lading</li>
+                        <li>MMCite Brazilian</li>
+                        <li>MMCite Czech</li>
+                        <li>Lacey Act Form (PPQ 505)</li>
+                        <li>US Customs PPQ</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tariff Detection -->
+        <div id="tariff" class="flowchart-section">
+            <h2 class="flowchart-title">Section 232/301 Tariff Detection</h2>
+            <p class="flowchart-desc">How material classifications and tariff rules are determined</p>
+
+            <div class="mermaid-container">
+                <div class="mermaid">
+flowchart TD
+    subgraph Input["📦 Part Data"]
+        A[Part Number] --> B[Lookup]
+        B --> C[Material Ratios]
+        B --> D[HTS Code]
+        B --> E[Country Data]
+    end
+
+    subgraph S232["🔷 Section 232"]
+        C --> F{Steel > 0?}
+        C --> G{Aluminum > 0?}
+        C --> H{Copper > 0?}
+        F -->|Yes| I[25% Tariff]
+        G -->|Yes| J[10% Tariff]
+        H -->|Yes| K[Check Rate]
+    end
+
+    subgraph Country["🌍 Declarations"]
+        E --> L{US Origin?}
+        L -->|Yes| M[US Declaration]
+        L -->|No| N[Foreign Declaration]
+    end
+
+    subgraph S301["🔶 Section 301"]
+        D --> O{Exclusion?}
+        O -->|Yes| P[Apply Exclusion]
+        O -->|No| Q[Standard Rate]
+    end
+
+    subgraph Output["🎨 Display"]
+        I --> R[Blue Row]
+        J --> S[Green Row]
+        K --> T[Orange Row]
+        P --> U[Red Border]
+    end
+                </div>
+            </div>
+
+            <div class="info-grid">
+                <div class="info-card">
+                    <h3>Section 232 Materials</h3>
+                    <table>
+                        <tr><th>Material</th><th>Rate</th><th>Color</th></tr>
+                        <tr><td>Steel</td><td>25%</td><td style="color:#2196F3">Blue</td></tr>
+                        <tr><td>Aluminum</td><td>10%</td><td style="color:#4CAF50">Green</td></tr>
+                        <tr><td>Copper</td><td>Varies</td><td style="color:#FF9800">Orange</td></tr>
+                        <tr><td>Wood</td><td>Varies</td><td style="color:#795548">Brown</td></tr>
+                        <tr><td>Automotive</td><td>Varies</td><td style="color:#9C27B0">Purple</td></tr>
+                    </table>
+                </div>
+                <div class="info-card">
+                    <h3>Required Declarations</h3>
+                    <ul>
+                        <li><strong>Steel:</strong> Melt, Cast, Smelt countries</li>
+                        <li><strong>Aluminum:</strong> Primary smelt country</li>
+                        <li><strong>301 Exclusion:</strong> Special tariff rate</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <!-- Architecture -->
+        <div id="architecture" class="flowchart-section">
+            <h2 class="flowchart-title">Application Architecture</h2>
+            <p class="flowchart-desc">System components and their relationships</p>
+
+            <div class="mermaid-container">
+                <div class="mermaid">
+flowchart TB
+    subgraph UI["🖥️ User Interface (PyQt5)"]
+        A[Main Window]
+        A --> B[Process Shipment]
+        A --> C[Parts Master]
+        A --> D[OCRMill]
+        A --> E[Settings]
+    end
+
+    subgraph Logic["⚙️ Business Logic"]
+        B --> F[Invoice Processor]
+        C --> G[Parts Manager]
+        D --> H[OCR Engine]
+        F --> I[Tariff Classifier]
+    end
+
+    subgraph Data["💾 Data Layer"]
+        J[(SQLite DB)]
+        K[Template Files]
+        L[Config Files]
+    end
+
+    subgraph External["📁 External"]
+        M[Input Files]
+        N[Output Files]
+        O[Windows Registry]
+    end
+
+    F --> J
+    G --> J
+    H --> K
+    E --> O
+    M --> F
+    F --> N
+                </div>
+            </div>
+
+            <div class="info-grid">
+                <div class="info-card">
+                    <h3>Technology Stack</h3>
+                    <table>
+                        <tr><th>Technology</th><th>Purpose</th></tr>
+                        <tr><td>Python 3.x</td><td>Core language</td></tr>
+                        <tr><td>PyQt5</td><td>Desktop GUI</td></tr>
+                        <tr><td>Pandas</td><td>Data processing</td></tr>
+                        <tr><td>SQLite</td><td>Database</td></tr>
+                        <tr><td>OpenPyXL</td><td>Excel files</td></tr>
+                        <tr><td>pdfminer</td><td>PDF extraction</td></tr>
+                    </table>
+                </div>
+                <div class="info-card">
+                    <h3>File Structure</h3>
+                    <ul>
+                        <li><code>tariffmill.py</code> - Main application</li>
+                        <li><code>version.py</code> - Version management</li>
+                        <li><code>Resources/</code> - Database & assets</li>
+                        <li><code>templates/</code> - OCR templates</li>
+                        <li><code>Input/</code> - Source invoices</li>
+                        <li><code>Output/</code> - Generated exports</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <!-- User Workflow -->
+        <div id="user" class="flowchart-section">
+            <h2 class="flowchart-title">User Workflow</h2>
+            <p class="flowchart-desc">End-to-end user journey from setup to daily operations</p>
+
+            <div class="mermaid-container">
+                <div class="mermaid">
+flowchart LR
+    subgraph Setup["🚀 Setup"]
+        A[Install] --> B[Configure]
+        B --> C[Import Parts]
+        C --> D[Create Profiles]
+    end
+
+    subgraph Daily["📋 Daily"]
+        E[Receive Invoice] --> F{PDF?}
+        F -->|Yes| G[OCRMill]
+        F -->|No| H[Process Shipment]
+        G --> H
+        H --> I[Load & Map]
+        I --> J[Process]
+    end
+
+    subgraph Review["✅ Review"]
+        J --> K[Preview]
+        K --> L{OK?}
+        L -->|No| M[Edit]
+        M --> K
+        L -->|Yes| N[Export]
+    end
+
+    subgraph Done["🎉 Complete"]
+        N --> O[Save File]
+        O --> P[Archive]
+    end
+                </div>
+            </div>
+
+            <div class="info-grid">
+                <div class="info-card">
+                    <h3>Quick Reference</h3>
+                    <table>
+                        <tr><th>Task</th><th>Location</th></tr>
+                        <tr><td>Process Invoice</td><td>Process Shipment tab</td></tr>
+                        <tr><td>Add Part</td><td>Parts Master tab</td></tr>
+                        <tr><td>Search Parts</td><td>Query Builder</td></tr>
+                        <tr><td>OCR Invoice</td><td>OCRMill tab</td></tr>
+                        <tr><td>Settings</td><td>Settings menu</td></tr>
+                    </table>
+                </div>
+                <div class="info-card">
+                    <h3>Keyboard Shortcuts</h3>
+                    <ul>
+                        <li><kbd>Ctrl+O</kbd> - Open file</li>
+                        <li><kbd>Ctrl+S</kbd> - Save/Export</li>
+                        <li><kbd>Ctrl+P</kbd> - Process</li>
+                        <li><kbd>Ctrl+F</kbd> - Search</li>
+                        <li><kbd>F5</kbd> - Refresh</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="footer">
+        <p>TariffMill v0.94.0 | Professional Customs Documentation Processing</p>
+        <p style="margin-top: 10px;">© 2024-2025 Heath Payne. All Rights Reserved.</p>
+    </div>
+
+    <script>
+        mermaid.initialize({
+            startOnLoad: true,
+            theme: 'default',
+            flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis'
+            }
+        });
+
+        function showSection(id) {
+            // Hide all sections
+            document.querySelectorAll('.flowchart-section').forEach(s => {
+                s.classList.remove('active');
+            });
+
+            // Remove active from all buttons
+            document.querySelectorAll('.nav-btn').forEach(b => {
+                b.classList.remove('active');
+            });
+
+            // Show selected section
+            document.getElementById(id).classList.add('active');
+
+            // Set active button
+            event.target.classList.add('active');
+        }
+    </script>
+</body>
+</html>
