@@ -46,6 +46,8 @@ class AIGeneratorThread(QThread):
     finished = pyqtSignal(str)  # Generated code
     error = pyqtSignal(str)
     progress = pyqtSignal(str)
+    stream_update = pyqtSignal(str)  # Streaming text updates (full text so far)
+    cancelled = pyqtSignal()  # Emitted when cancelled
 
     def __init__(self, provider: str, model: str, api_key: str,
                  invoice_text: str, template_name: str, supplier_name: str,
@@ -59,11 +61,28 @@ class AIGeneratorThread(QThread):
         self.supplier_name = supplier_name
         self.country = country
         self.client = client
+        self._cancelled = False
+
+    def cancel(self):
+        """Request cancellation of the generation."""
+        self._cancelled = True
+
+    def is_cancelled(self) -> bool:
+        """Check if cancellation was requested."""
+        return self._cancelled
 
     def run(self):
         try:
+            if self._cancelled:
+                self.cancelled.emit()
+                return
+
             self.progress.emit("Preparing prompt...")
             prompt = self._build_prompt()
+
+            if self._cancelled:
+                self.cancelled.emit()
+                return
 
             self.progress.emit(f"Calling {self.provider} API...")
 
@@ -76,12 +95,19 @@ class AIGeneratorThread(QThread):
             else:
                 raise ValueError(f"Unknown provider: {self.provider}")
 
+            if self._cancelled:
+                self.cancelled.emit()
+                return
+
             self.progress.emit("Processing response...")
             code = self._extract_code(result)
             self.finished.emit(code)
 
         except Exception as e:
-            self.error.emit(str(e))
+            if not self._cancelled:
+                self.error.emit(str(e))
+            else:
+                self.cancelled.emit()
 
     def _build_prompt(self) -> str:
         """Build the prompt for AI template generation."""
@@ -262,16 +288,95 @@ Generate the complete, working Python template code:
         )
         return response.content[0].text
 
+    def _check_ollama_status(self) -> tuple:
+        """
+        Check if Ollama is running and the model is available.
+        Returns: (is_running: bool, available_models: list, error_message: str)
+        """
+        import urllib.request
+        import urllib.error
+        import json
+
+        # Check if Ollama server is running
+        try:
+            with urllib.request.urlopen("http://localhost:11434/api/tags", timeout=5) as response:
+                result = json.loads(response.read().decode('utf-8'))
+                models = [m.get('name', '').split(':')[0] for m in result.get('models', [])]
+                return True, models, ""
+        except urllib.error.URLError as e:
+            if "Connection refused" in str(e) or "No connection" in str(e):
+                return False, [], "not_running"
+            return False, [], str(e)
+        except Exception as e:
+            return False, [], str(e)
+
     def _call_ollama(self, prompt: str) -> str:
         """Call local Ollama API."""
         import urllib.request
+        import urllib.error
         import json
+        import platform
+        import socket
 
+        # First check if Ollama is running
+        is_running, available_models, error_type = self._check_ollama_status()
+
+        if not is_running:
+            system = platform.system()
+
+            if error_type == "not_running":
+                # Ollama not running - provide platform-specific instructions
+                if system == "Windows":
+                    install_instructions = (
+                        "Ollama is not running or not installed.\n\n"
+                        "To install Ollama on Windows:\n"
+                        "1. Download from: https://ollama.com/download\n"
+                        "2. Run the installer\n"
+                        "3. Open a terminal and run: ollama serve\n"
+                        "4. In another terminal, pull a model: ollama pull llama3.1\n\n"
+                        "After installation, start Ollama and try again."
+                    )
+                elif system == "Darwin":  # macOS
+                    install_instructions = (
+                        "Ollama is not running or not installed.\n\n"
+                        "To install Ollama on macOS:\n"
+                        "1. Download from: https://ollama.com/download\n"
+                        "   Or use Homebrew: brew install ollama\n"
+                        "2. Start Ollama: ollama serve\n"
+                        "3. Pull a model: ollama pull llama3.1\n\n"
+                        "After installation, start Ollama and try again."
+                    )
+                else:  # Linux
+                    install_instructions = (
+                        "Ollama is not running or not installed.\n\n"
+                        "To install Ollama on Linux:\n"
+                        "1. Run: curl -fsSL https://ollama.com/install.sh | sh\n"
+                        "2. Start Ollama: ollama serve\n"
+                        "3. Pull a model: ollama pull llama3.1\n\n"
+                        "After installation, start Ollama and try again."
+                    )
+                raise ConnectionError(install_instructions)
+            else:
+                raise ConnectionError(f"Failed to connect to Ollama: {error_type}")
+
+        # Check if the requested model is available
+        model_base = self.model.split(':')[0]
+        if available_models and model_base not in available_models:
+            available_list = ', '.join(available_models) if available_models else 'none'
+            raise ValueError(
+                f"Model '{self.model}' is not installed in Ollama.\n\n"
+                f"Available models: {available_list}\n\n"
+                f"To install this model, run:\n"
+                f"  ollama pull {self.model}\n\n"
+                f"Or select one of the available models from the dropdown."
+            )
+
+        # Make the API call with streaming
         url = "http://localhost:11434/api/generate"
         data = {
             "model": self.model,
             "prompt": prompt,
-            "stream": False
+            "stream": True  # Enable streaming for better UX
         }
 
         req = urllib.request.Request(
@@ -281,11 +386,77 @@ Generate the complete, working Python template code:
         )
 
         try:
-            with urllib.request.urlopen(req, timeout=120) as response:
-                result = json.loads(response.read().decode('utf-8'))
-                return result.get('response', '')
+            # 5 minute timeout for large prompts on slower hardware
+            full_response = ""
+            with urllib.request.urlopen(req, timeout=300) as response:
+                # Read streaming response line by line
+                for line in response:
+                    if self._cancelled:
+                        return full_response  # Return what we have so far
+
+                    try:
+                        chunk = json.loads(line.decode('utf-8'))
+                        if 'response' in chunk:
+                            full_response += chunk['response']
+                            # Emit streaming update with character count in progress
+                            char_count = len(full_response)
+                            self.progress.emit(f"Generating... ({char_count} chars)")
+                            # Send the full text so far for preview
+                            self.stream_update.emit(full_response)
+
+                        # Check if generation is complete
+                        if chunk.get('done', False):
+                            break
+                    except json.JSONDecodeError:
+                        # Skip malformed lines
+                        continue
+
+                return full_response
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                raise ValueError(
+                    f"Model '{self.model}' not found.\n\n"
+                    f"Pull the model first:\n  ollama pull {self.model}"
+                )
+            raise ConnectionError(f"Ollama API error: HTTP {e.code} - {e.reason}")
+        except urllib.error.URLError as e:
+            if "timed out" in str(e).lower():
+                raise TimeoutError(
+                    f"Generation timed out after 5 minutes.\n\n"
+                    f"Suggestions:\n"
+                    f"1. Try a smaller/faster model:\n"
+                    f"   - llama3.2:1b (fastest)\n"
+                    f"   - phi3 or mistral (fast)\n\n"
+                    f"2. Use shorter invoice text (first 1-2 pages)\n\n"
+                    f"3. Use a cloud provider (OpenAI/Anthropic) for faster results"
+                )
+            raise ConnectionError(
+                f"Lost connection to Ollama during generation.\n\n"
+                f"Error: {e}\n\n"
+                f"Make sure Ollama is still running."
+            )
+        except socket.timeout:
+            raise TimeoutError(
+                f"Generation timed out after 5 minutes.\n\n"
+                f"Suggestions:\n"
+                f"1. Try a smaller/faster model:\n"
+                f"   - llama3.2:1b (fastest)\n"
+                f"   - phi3 or mistral (fast)\n\n"
+                f"2. Use shorter invoice text (first 1-2 pages)\n\n"
+                f"3. Use a cloud provider (OpenAI/Anthropic) for faster results"
+            )
         except Exception as e:
-            raise ConnectionError(f"Failed to connect to Ollama: {e}\n\nMake sure Ollama is running (ollama serve)")
+            if "timed out" in str(e).lower():
+                raise TimeoutError(
+                    f"Generation timed out after 5 minutes.\n\n"
+                    f"Suggestions:\n"
+                    f"1. Try a smaller/faster model:\n"
+                    f"   - llama3.2:1b (fastest)\n"
+                    f"   - phi3 or mistral (fast)\n\n"
+                    f"2. Use shorter invoice text (first 1-2 pages)\n\n"
+                    f"3. Use a cloud provider (OpenAI/Anthropic) for faster results"
+                )
+            raise ConnectionError(f"Ollama error: {e}")
 
     def _extract_code(self, response: str) -> str:
         """Extract Python code from AI response."""
@@ -363,16 +534,8 @@ class AITemplateGeneratorDialog(QDialog):
         provider_layout = QFormLayout()
 
         self.provider_combo = QComboBox()
-        providers = []
-        if HAS_OPENAI:
-            providers.append("OpenAI")
-        if HAS_ANTHROPIC:
-            providers.append("Anthropic")
-        providers.append("Ollama (Local)")  # Always available
-
-        if not providers:
-            providers = ["Ollama (Local)"]
-
+        # Always show all providers - status indicator will show if they're available
+        providers = ["OpenAI", "Anthropic", "Ollama (Local)"]
         self.provider_combo.addItems(providers)
         self.provider_combo.currentTextChanged.connect(self.on_provider_changed)
         provider_layout.addRow("Provider:", self.provider_combo)
@@ -384,13 +547,31 @@ class AITemplateGeneratorDialog(QDialog):
         self.api_key_edit = QLineEdit()
         self.api_key_edit.setEchoMode(QLineEdit.Password)
         self.api_key_edit.setPlaceholderText("Enter API key (not needed for Ollama)")
+        self.api_key_edit.textChanged.connect(self._update_status_indicator)
         provider_layout.addRow("API Key:", self.api_key_edit)
+
+        # Status indicator row
+        status_row = QHBoxLayout()
+        self.status_indicator = QLabel("●")
+        self.status_indicator.setFixedWidth(20)
+        self.status_label = QLabel("Checking...")
+        self.check_status_btn = QPushButton("Check Status")
+        self.check_status_btn.setFixedWidth(100)
+        self.check_status_btn.clicked.connect(self._update_status_indicator)
+        status_row.addWidget(self.status_indicator)
+        status_row.addWidget(self.status_label)
+        status_row.addStretch()
+        status_row.addWidget(self.check_status_btn)
+        provider_layout.addRow("Status:", status_row)
 
         provider_group.setLayout(provider_layout)
         layout.addWidget(provider_group)
 
         # Update models for initial provider
         self.on_provider_changed(self.provider_combo.currentText())
+
+        # Initial status check
+        self._update_status_indicator()
 
         # Invoice Input
         input_group = QGroupBox("Sample Invoice")
@@ -483,6 +664,24 @@ class AITemplateGeneratorDialog(QDialog):
         self.generate_btn.clicked.connect(self.generate_template)
         btn_layout.addWidget(self.generate_btn)
 
+        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #e74c3c;
+                color: white;
+                font-weight: bold;
+                padding: 10px 25px;
+                border-radius: 4px;
+                font-size: 13px;
+            }
+            QPushButton:hover {
+                background-color: #c0392b;
+            }
+        """)
+        self.cancel_btn.clicked.connect(self.cancel_generation)
+        self.cancel_btn.setVisible(False)
+        btn_layout.addWidget(self.cancel_btn)
+
         self.save_btn = QPushButton("Save Template")
         self.save_btn.setStyleSheet("""
             QPushButton {
@@ -509,6 +708,89 @@ class AITemplateGeneratorDialog(QDialog):
 
         layout.addLayout(btn_layout)
 
+    def _get_ollama_models(self) -> list:
+        """Get list of available Ollama models."""
+        import urllib.request
+        import urllib.error
+        import json
+
+        try:
+            with urllib.request.urlopen("http://localhost:11434/api/tags", timeout=3) as response:
+                result = json.loads(response.read().decode('utf-8'))
+                models = []
+                for m in result.get('models', []):
+                    name = m.get('name', '')
+                    # Remove the :latest suffix for cleaner display
+                    if ':latest' in name:
+                        name = name.replace(':latest', '')
+                    if name and name not in models:
+                        models.append(name)
+                return models
+        except Exception:
+            return []
+
+    def _update_status_indicator(self, _=None):
+        """Update the status indicator based on current provider and settings."""
+        provider = self.provider_combo.currentText()
+
+        if provider == "Ollama (Local)":
+            # Check if Ollama is running
+            models = self._get_ollama_models()
+            if models:
+                self.status_indicator.setStyleSheet("color: #27ae60; font-size: 16px; font-weight: bold;")
+                self.status_label.setText(f"Ready - {len(models)} model(s) available")
+                self.status_label.setStyleSheet("color: #27ae60;")
+            else:
+                self.status_indicator.setStyleSheet("color: #e74c3c; font-size: 16px; font-weight: bold;")
+                self.status_label.setText("Not connected - Ollama not running")
+                self.status_label.setStyleSheet("color: #e74c3c;")
+
+        elif provider == "OpenAI":
+            # Check if openai package is installed
+            if not HAS_OPENAI:
+                self.status_indicator.setStyleSheet("color: #e74c3c; font-size: 16px; font-weight: bold;")
+                self.status_label.setText("Package not installed - Run: pip install openai")
+                self.status_label.setStyleSheet("color: #e74c3c;")
+                return
+
+            api_key = self.api_key_edit.text().strip()
+            if api_key:
+                if api_key.startswith("sk-"):
+                    self.status_indicator.setStyleSheet("color: #27ae60; font-size: 16px; font-weight: bold;")
+                    self.status_label.setText("Ready - API key configured")
+                    self.status_label.setStyleSheet("color: #27ae60;")
+                else:
+                    self.status_indicator.setStyleSheet("color: #f39c12; font-size: 16px; font-weight: bold;")
+                    self.status_label.setText("Warning - API key format looks incorrect")
+                    self.status_label.setStyleSheet("color: #f39c12;")
+            else:
+                self.status_indicator.setStyleSheet("color: #e74c3c; font-size: 16px; font-weight: bold;")
+                self.status_label.setText("Not ready - Enter OpenAI API key")
+                self.status_label.setStyleSheet("color: #e74c3c;")
+
+        elif provider == "Anthropic":
+            # Check if anthropic package is installed
+            if not HAS_ANTHROPIC:
+                self.status_indicator.setStyleSheet("color: #e74c3c; font-size: 16px; font-weight: bold;")
+                self.status_label.setText("Package not installed - Run: pip install anthropic")
+                self.status_label.setStyleSheet("color: #e74c3c;")
+                return
+
+            api_key = self.api_key_edit.text().strip()
+            if api_key:
+                if api_key.startswith("sk-ant-"):
+                    self.status_indicator.setStyleSheet("color: #27ae60; font-size: 16px; font-weight: bold;")
+                    self.status_label.setText("Ready - API key configured")
+                    self.status_label.setStyleSheet("color: #27ae60;")
+                else:
+                    self.status_indicator.setStyleSheet("color: #f39c12; font-size: 16px; font-weight: bold;")
+                    self.status_label.setText("Warning - API key format looks incorrect")
+                    self.status_label.setStyleSheet("color: #f39c12;")
+            else:
+                self.status_indicator.setStyleSheet("color: #e74c3c; font-size: 16px; font-weight: bold;")
+                self.status_label.setText("Not ready - Enter Anthropic API key")
+                self.status_label.setStyleSheet("color: #e74c3c;")
+
     def on_provider_changed(self, provider: str):
         """Update model list when provider changes."""
         self.model_combo.clear()
@@ -527,10 +809,19 @@ class AITemplateGeneratorDialog(QDialog):
             if os.environ.get('ANTHROPIC_API_KEY'):
                 self.api_key_edit.setText(os.environ['ANTHROPIC_API_KEY'])
         elif provider == "Ollama (Local)":
-            self.model_combo.addItems(["llama3.1", "llama3", "codellama", "mistral", "mixtral", "deepseek-coder"])
+            # Try to get available models from Ollama
+            available_models = self._get_ollama_models()
+            if available_models:
+                self.model_combo.addItems(available_models)
+            else:
+                # Fallback to common models if Ollama not running
+                self.model_combo.addItems(["llama3.1", "llama3", "codellama", "mistral", "mixtral", "deepseek-coder"])
             self.api_key_edit.setEnabled(False)
             self.api_key_edit.setPlaceholderText("Not needed for local Ollama")
             self.api_key_edit.clear()
+
+        # Update status indicator after provider change
+        self._update_status_indicator()
 
     def browse_pdf(self):
         """Browse for PDF file and extract text."""
@@ -625,6 +916,23 @@ class AITemplateGeneratorDialog(QDialog):
         provider = self.provider_combo.currentText()
         api_key = self.api_key_edit.text().strip()
 
+        # Check if required package is installed
+        if provider == "OpenAI" and not HAS_OPENAI:
+            QMessageBox.warning(
+                self, "Package Not Installed",
+                "The OpenAI package is not installed.\n\n"
+                "Install it with:\n  pip install openai"
+            )
+            return
+
+        if provider == "Anthropic" and not HAS_ANTHROPIC:
+            QMessageBox.warning(
+                self, "Package Not Installed",
+                "The Anthropic package is not installed.\n\n"
+                "Install it with:\n  pip install anthropic"
+            )
+            return
+
         if provider in ["OpenAI", "Anthropic"] and not api_key:
             QMessageBox.warning(self, "Missing API Key", f"Please enter your {provider} API key.")
             return
@@ -633,7 +941,8 @@ class AITemplateGeneratorDialog(QDialog):
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, 0)
         self.progress_bar.setFormat("Generating...")
-        self.generate_btn.setEnabled(False)
+        self.generate_btn.setVisible(False)
+        self.cancel_btn.setVisible(True)
         self.save_btn.setEnabled(False)
 
         self.generator_thread = AIGeneratorThread(
@@ -649,16 +958,27 @@ class AITemplateGeneratorDialog(QDialog):
         self.generator_thread.finished.connect(self.on_generation_complete)
         self.generator_thread.error.connect(self.on_generation_error)
         self.generator_thread.progress.connect(self.on_progress)
+        self.generator_thread.stream_update.connect(self.on_stream_update)
+        self.generator_thread.cancelled.connect(self.on_generation_cancelled)
         self.generator_thread.start()
 
     def on_progress(self, message: str):
         """Update progress message."""
         self.progress_bar.setFormat(message)
 
+    def on_stream_update(self, text: str):
+        """Update preview with streaming text from Ollama."""
+        # Show raw streaming text in preview (will be processed on completion)
+        self.code_preview.setPlainText(text)
+        # Scroll to bottom to show latest content
+        scrollbar = self.code_preview.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
     def on_generation_complete(self, code: str):
         """Handle successful generation."""
         self.progress_bar.setVisible(False)
-        self.generate_btn.setEnabled(True)
+        self.generate_btn.setVisible(True)
+        self.cancel_btn.setVisible(False)
         self.save_btn.setEnabled(True)
 
         self.code_preview.setPlainText(code)
@@ -672,12 +992,33 @@ class AITemplateGeneratorDialog(QDialog):
     def on_generation_error(self, error: str):
         """Handle generation error."""
         self.progress_bar.setVisible(False)
-        self.generate_btn.setEnabled(True)
+        self.generate_btn.setVisible(True)
+        self.cancel_btn.setVisible(False)
 
         QMessageBox.critical(
             self, "Generation Error",
             f"Failed to generate template:\n\n{error}"
         )
+
+    def cancel_generation(self):
+        """Cancel the ongoing generation."""
+        if self.generator_thread and self.generator_thread.isRunning():
+            self.progress_bar.setFormat("Cancelling...")
+            self.cancel_btn.setEnabled(False)
+            self.generator_thread.cancel()
+            # Force terminate after a short wait if still running
+            if not self.generator_thread.wait(2000):  # Wait 2 seconds
+                self.generator_thread.terminate()
+                self.generator_thread.wait()
+            self.on_generation_cancelled()
+
+    def on_generation_cancelled(self):
+        """Handle cancelled generation."""
+        self.progress_bar.setVisible(False)
+        self.generate_btn.setVisible(True)
+        self.cancel_btn.setVisible(False)
+        self.cancel_btn.setEnabled(True)
+        self.progress_bar.setFormat("Cancelled")
 
     def save_template(self):
         """Save the generated template."""

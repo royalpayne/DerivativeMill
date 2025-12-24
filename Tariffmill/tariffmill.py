@@ -2743,6 +2743,10 @@ class TariffMill(QMainWindow):
         # Connect signal to save column widths when they change
         self.table.horizontalHeader().sectionResized.connect(self.save_column_widths)
 
+        # Handle selection changes to make selected text readable
+        self.table.itemSelectionChanged.connect(self.on_table_selection_changed)
+        self._previous_selection = set()  # Track previously selected items
+
         # Load saved column widths
         self.load_column_widths()
 
@@ -3634,6 +3638,9 @@ class TariffMill(QMainWindow):
                     # Refresh the preview table if it exists
                     if hasattr(self, 'table') and self.table.rowCount() > 0:
                         self.refresh_preview_colors()
+                    # If this is the highlight color, apply it to the application palette
+                    if config_key == 'preview_highlight_color':
+                        self.apply_highlight_color(color_hex)
 
             button.clicked.connect(pick_color)
             layout.addWidget(button)
@@ -3676,12 +3683,22 @@ class TariffMill(QMainWindow):
         other_label.setMinimumHeight(24)
         colors_main_layout.addWidget(other_label)
 
-        # Sec301 row
+        # Not Found, Incomplete, and Sec301 rows
         row3_layout = QHBoxLayout()
-        row3_layout.setSpacing(10)
-        row3_layout.addWidget(create_color_swatch("Sec 301 Exclusions (Background)", 'preview_sec301_bg_color', '#ffc8c8'))
+        row3_layout.setSpacing(20)
+        row3_layout.addWidget(create_color_swatch("Not Found", 'preview_notfound_color', '#f39c12'))
+        row3_layout.addWidget(create_color_swatch("Incomplete", 'preview_incomplete_color', '#e91e63'))
+        row3_layout.addWidget(create_color_swatch("Sec 301 (BG)", 'preview_sec301_bg_color', '#ffc8c8'))
         row3_layout.addStretch()
         colors_main_layout.addLayout(row3_layout)
+
+        # Cell Selection Highlight row
+        row4_layout = QHBoxLayout()
+        row4_layout.setSpacing(20)
+        # Default highlight color depends on theme - use a dark blue that works well with white text
+        row4_layout.addWidget(create_color_swatch("Cell Highlight", 'preview_highlight_color', '#1e3c64', label_width=85))
+        row4_layout.addStretch()
+        colors_main_layout.addLayout(row4_layout)
 
         colors_group.setLayout(colors_main_layout)
         appearance_layout.addWidget(colors_group)
@@ -4284,7 +4301,8 @@ class TariffMill(QMainWindow):
                     border-radius: 4px;
                 }
                 QTableWidget::item:selected {
-                    background-color: #0096b4;
+                    background-color: #1e3c64;
+                    color: #ffffff;
                 }
                 QLabel {
                     color: #c0e0f0;
@@ -4495,7 +4513,8 @@ class TariffMill(QMainWindow):
                     border-radius: 4px;
                 }
                 QTableWidget::item:selected {
-                    background-color: #4a5a6a;
+                    background-color: #4a6080;
+                    color: #ffffff;
                 }
                 QLabel {
                     color: #c0c0c0;
@@ -4507,7 +4526,8 @@ class TariffMill(QMainWindow):
                     border-radius: 4px;
                 }
                 QMenu::item:selected {
-                    background-color: #4a5a6a;
+                    background-color: #4a6080;
+                    color: #ffffff;
                 }
                 QMenuBar {
                     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
@@ -4550,6 +4570,9 @@ class TariffMill(QMainWindow):
         # Refresh preview colors for the new theme (colors are stored per-theme)
         if hasattr(self, 'table') and self.table.rowCount() > 0:
             self.refresh_preview_colors()
+
+        # Apply saved highlight color for this theme
+        self.apply_highlight_color()
 
         # Refresh OCRMill templates list styling for new theme
         if hasattr(self, 'ocrmill_templates_list'):
@@ -5202,7 +5225,8 @@ class TariffMill(QMainWindow):
             '232_Wood': '#27ae60',       # Green
             '232_Auto': '#9b59b6',       # Purple
             'Non_232': '#ff0000',        # Red
-            'Not_Found': '#f39c12'       # Yellow/Gold - indicates part not in database
+            'Not_Found': '#f39c12',      # Yellow/Gold - indicates part not in database
+            'Incomplete': '#e91e63'      # Pink - part in DB but missing HTS/ratios
         }
 
         # Handle backward compatibility - if passed a boolean
@@ -5216,6 +5240,9 @@ class TariffMill(QMainWindow):
         elif material_flag == 'Not_Found':
             color_key = 'preview_notfound_color'
             default_color = default_colors['Not_Found']
+        elif material_flag == 'Incomplete':
+            color_key = 'preview_incomplete_color'
+            default_color = default_colors['Incomplete']
         elif material_flag.startswith('232_'):
             # Map flag to color key
             material = material_flag  # e.g., '232_Steel'
@@ -5279,6 +5306,73 @@ class TariffMill(QMainWindow):
         except Exception as e:
             logger.error(f"Error refreshing preview colors: {e}")
             self.table.blockSignals(False)
+
+    def apply_highlight_color(self, color_hex=None):
+        """Apply cell selection highlight color to the application palette and table.
+
+        Args:
+            color_hex: Hex color string (e.g., '#1e3c64'). If None, loads from settings.
+        """
+        if color_hex is None:
+            # Get default based on current theme
+            theme = get_user_setting('theme', 'Fusion (Light)')
+            if 'ocean' in theme.lower():
+                default_highlight = '#1e3c64'
+            elif 'dark' in theme.lower():
+                default_highlight = '#4a6080'
+            else:
+                default_highlight = '#3399ff'
+            color_hex = get_theme_color('preview_highlight_color', default_highlight)
+
+        try:
+            from PyQt5.QtGui import QPalette, QColor
+
+            # Update the application palette
+            app = QApplication.instance()
+            if app:
+                palette = app.palette()
+                palette.setColor(QPalette.Highlight, QColor(color_hex))
+                palette.setColor(QPalette.HighlightedText, QColor(255, 255, 255))
+                app.setPalette(palette)
+
+                # Also update the app stylesheet's QTableWidget::item:selected color
+                current_style = app.styleSheet()
+                if current_style:
+                    import re
+                    # Replace any existing item:selected background-color in app stylesheet
+                    new_style = re.sub(
+                        r'(QTableWidget::item:selected\s*\{[^}]*background-color:)\s*[^;]*(;)',
+                        f'\\1 {color_hex}\\2',
+                        current_style
+                    )
+                    if new_style != current_style:
+                        app.setStyleSheet(new_style)
+
+            # Also update the table's own stylesheet if it has item:selected
+            if hasattr(self, 'table'):
+                current_style = self.table.styleSheet()
+                if 'item:selected' in current_style:
+                    import re
+                    new_style = re.sub(
+                        r'(QTableWidget::item:selected\s*\{[^}]*background-color:)\s*[^;]*(;)',
+                        f'\\1 {color_hex}\\2',
+                        current_style
+                    )
+                    self.table.setStyleSheet(new_style)
+                else:
+                    # Add item:selected style to table
+                    new_style = current_style + f"""
+                        QTableWidget::item:selected {{
+                            background-color: {color_hex};
+                            color: #ffffff;
+                        }}
+                    """
+                    self.table.setStyleSheet(new_style)
+                self.table.viewport().update()
+
+            logger.info(f"Applied highlight color: {color_hex}")
+        except Exception as e:
+            logger.error(f"Error applying highlight color: {e}")
 
     def apply_column_visibility(self):
         """Apply saved column visibility settings to the preview table"""
@@ -5395,7 +5489,10 @@ class TariffMill(QMainWindow):
     def get_dark_palette(self):
         """Create a Windows 11 dark mode inspired theme"""
         from PyQt5.QtGui import QPalette, QColor
-        
+
+        # Get user's saved highlight color for this theme
+        highlight_color = get_theme_color('preview_highlight_color', '#1678d4', 'Fusion (Dark)')
+
         palette = QPalette()
         # Windows 11 dark theme colors
         palette.setColor(QPalette.Window, QColor(45, 45, 45))  # Main background
@@ -5409,13 +5506,16 @@ class TariffMill(QMainWindow):
         palette.setColor(QPalette.ButtonText, QColor(243, 243, 243))  # Primary text on buttons
         palette.setColor(QPalette.BrightText, QColor(164, 38, 44))  # Danger/error red
         palette.setColor(QPalette.Link, QColor(0, 120, 212))  # Accent blue
-        palette.setColor(QPalette.Highlight, QColor(22, 120, 212))  # Selection/highlight blue
+        palette.setColor(QPalette.Highlight, QColor(highlight_color))  # User's saved highlight color
         palette.setColor(QPalette.HighlightedText, QColor(243, 243, 243))  # Primary text
         return palette
 
     def get_ocean_palette(self):
         """Create an ocean-themed color palette with deep blues and teals - professional look"""
         from PyQt5.QtGui import QPalette, QColor
+
+        # Get user's saved highlight color for this theme
+        highlight_color = get_theme_color('preview_highlight_color', '#1e3c64', 'Ocean')
 
         palette = QPalette()
         # Deep ocean blue backgrounds with more contrast
@@ -5430,7 +5530,7 @@ class TariffMill(QMainWindow):
         palette.setColor(QPalette.ButtonText, QColor(255, 255, 255))  # Button text
         palette.setColor(QPalette.BrightText, QColor(0, 200, 220))  # Bright accent
         palette.setColor(QPalette.Link, QColor(0, 168, 204))  # Link color (teal)
-        palette.setColor(QPalette.Highlight, QColor(0, 150, 180))  # Selection highlight
+        palette.setColor(QPalette.Highlight, QColor(highlight_color))  # User's saved highlight color
         palette.setColor(QPalette.HighlightedText, QColor(255, 255, 255))  # Selected text
         palette.setColor(QPalette.Light, QColor(58, 106, 154))  # Light shade
         palette.setColor(QPalette.Midlight, QColor(42, 80, 112))  # Mid-light shade
@@ -6182,22 +6282,31 @@ class TariffMill(QMainWindow):
                     # Part not in database - leave all ratios at 0 to show "Not Found" status
                     pass
                 else:
-                    # Look up HTS code to determine material type
+                    # Part is in database - check if it has HTS code set
                     hts = row.get('hts_code', '')
-                    material, _, _ = get_232_info(hts)
-                    if material == 'Aluminum':
-                        aluminum_pct = 100.0
-                    elif material == 'Copper':
-                        copper_pct = 100.0
-                    elif material == 'Wood':
-                        wood_pct = 100.0
-                    elif material == 'Auto':
-                        auto_pct = 100.0
-                    elif material == 'Steel':
-                        steel_pct = 100.0
+                    hts_clean = str(hts).strip() if pd.notna(hts) else ''
+
+                    if hts_clean:
+                        # Has HTS code - look up material type
+                        material, _, _ = get_232_info(hts)
+                        if material == 'Aluminum':
+                            aluminum_pct = 100.0
+                        elif material == 'Copper':
+                            copper_pct = 100.0
+                        elif material == 'Wood':
+                            wood_pct = 100.0
+                        elif material == 'Auto':
+                            auto_pct = 100.0
+                        elif material == 'Steel':
+                            steel_pct = 100.0
+                        else:
+                            # HTS doesn't indicate a specific 232 material - mark as incomplete
+                            # so user knows data needs to be filled in
+                            row['_incomplete_data'] = True
                     else:
-                        # Default to 100% steel for backward compatibility if no material found
-                        steel_pct = 100.0
+                        # Part in database but NO HTS code and NO ratios - mark as incomplete
+                        # Don't default to steel - let user know this part needs attention
+                        row['_incomplete_data'] = True
 
             # Validate that percentages sum to 100% - recalculate non_steel_pct if needed
             # This fixes database entries where non_steel_ratio was incorrectly set to 100%
@@ -6328,11 +6437,26 @@ class TariffMill(QMainWindow):
                 not_found_row['_content_type'] = 'not_found'
                 expanded_rows.append(not_found_row)
 
+            # Handle parts in database but with incomplete data (no HTS and no ratios)
+            if len(expanded_rows) == row_start_idx and row.get('_incomplete_data', False):
+                # Part is in database but has no HTS code and no ratios set - needs attention
+                incomplete_row = row.copy()
+                incomplete_row['value_usd'] = original_value
+                incomplete_row['SteelRatio'] = 0.0
+                incomplete_row['AluminumRatio'] = 0.0
+                incomplete_row['CopperRatio'] = 0.0
+                incomplete_row['WoodRatio'] = 0.0
+                incomplete_row['AutoRatio'] = 0.0
+                incomplete_row['NonSteelRatio'] = 0.0
+                incomplete_row['_content_type'] = 'incomplete'
+                expanded_rows.append(incomplete_row)
+
             # Fix rounding errors: adjust the last created row to ensure total matches original
             if len(expanded_rows) > row_start_idx:
                 remainder = round(original_value - allocated_value, 2)
-                if abs(remainder) > 0.001 and expanded_rows[-1].get('_content_type') != 'not_found':
-                    # Add remainder to the last row created for this item (skip for not_found rows)
+                content_type = expanded_rows[-1].get('_content_type', '')
+                if abs(remainder) > 0.001 and content_type not in ['not_found', 'incomplete']:
+                    # Add remainder to the last row created for this item (skip for not_found/incomplete rows)
                     expanded_rows[-1]['value_usd'] = round(expanded_rows[-1]['value_usd'] + remainder, 2)
 
         # Rebuild dataframe from expanded rows
@@ -6506,6 +6630,8 @@ class TariffMill(QMainWindow):
             # All derivative rows with the same HTS code get the same declaration code
             if content_type == 'not_found':
                 flag = 'Not_Found'
+            elif content_type == 'incomplete':
+                flag = 'Incomplete'
             elif content_type == 'steel':
                 flag = '232_Steel'
             elif content_type == 'aluminum':
@@ -6843,12 +6969,20 @@ class TariffMill(QMainWindow):
             non_steel_ratio_val = r.get('NonSteelRatio', 0.0) or 0.0
             is_232_row = steel_ratio_val > 0.0 or aluminum_ratio_val > 0.0 or copper_ratio_val > 0.0 or wood_ratio_val > 0.0 or auto_ratio_val > 0.0
 
-            # Check if part is not in database - show "Not Found" in 232 Status column
+            # Check if part is not in database or has incomplete data
             not_in_db = r.get('_not_in_db', False)
-            status_display = "Not Found" if not_in_db else flag
+            is_incomplete = flag == 'Incomplete'
 
-            # Display percentages (empty for "Not Found" rows)
+            # Set display status - Not Found takes precedence, then Incomplete, then flag
             if not_in_db:
+                status_display = "Not Found"
+            elif is_incomplete:
+                status_display = "Incomplete"
+            else:
+                status_display = flag
+
+            # Display percentages (empty for "Not Found" and "Incomplete" rows)
+            if not_in_db or is_incomplete:
                 steel_display = ""
                 aluminum_display = ""
                 copper_display = ""
@@ -6922,7 +7056,14 @@ class TariffMill(QMainWindow):
                     item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsEditable)
 
             # Set font colors based on Section 232 material type
-            row_color = self.get_preview_row_color(flag)
+            # Use "Not_Found" color when part is not in database, "Incomplete" when data is missing
+            if not_in_db:
+                color_flag = 'Not_Found'
+            elif is_incomplete:
+                color_flag = 'Incomplete'
+            else:
+                color_flag = flag
+            row_color = self.get_preview_row_color(color_flag)
             for item in items:
                 item.setForeground(row_color)
                 f = item.font()
@@ -9500,6 +9641,7 @@ class TariffMill(QMainWindow):
         self.ocrmill_send_btn = QPushButton("Send to Process Shipment")
         self.ocrmill_send_btn.setEnabled(False)
         self.ocrmill_send_btn.clicked.connect(self.ocrmill_send_to_process_shipment)
+        self._update_send_btn_tooltip()
         btn_layout.addWidget(self.ocrmill_send_btn)
 
         processing_layout.addLayout(btn_layout)
@@ -9772,6 +9914,7 @@ class TariffMill(QMainWindow):
             self.ocrmill_output_edit.setText(folder_str)
             set_user_setting('ocrmill_output_folder', folder_str)
             self.ocrmill_log(f"Output folder set to: {folder_str}")
+            self._update_send_btn_tooltip()
 
     def ocrmill_settings_browse_input(self):
         """Browse for input folder from Settings tab."""
@@ -9799,6 +9942,7 @@ class TariffMill(QMainWindow):
             self.ocrmill_output_edit.setText(folder_str)
             set_user_setting('ocrmill_output_folder', folder_str)
             self.ocrmill_log(f"Output folder set to: {folder_str}")
+            self._update_send_btn_tooltip()
 
     def ocrmill_poll_interval_changed(self, value):
         """Handle poll interval change."""
@@ -9940,21 +10084,104 @@ class TariffMill(QMainWindow):
             self.ocrmill_last_items = items
             self.ocrmill_send_btn.setEnabled(True)
 
+    def _update_send_btn_tooltip(self):
+        """Update the Send to Process Shipment button tooltip with current output folder."""
+        output_folder = str(self.ocrmill_config.output_folder)
+        self.ocrmill_send_btn.setToolTip(
+            f"Send extracted items to Process Shipment tab\n"
+            f"CSV Output Folder: {output_folder}"
+        )
+
     def ocrmill_send_to_process_shipment(self):
         """Send extracted items to the Process Shipment tab."""
         if not self.ocrmill_last_items:
             QMessageBox.information(self, "No Items", "No extracted items to send.")
             return
 
+        # Get the OCRMill output folder (where CSV files are saved)
+        ocrmill_output = str(self.ocrmill_config.output_folder)
+
+        # Check if a folder profile exists with matching input folder (pointing to OCRMill output)
+        matching_profile = None
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("SELECT profile_name, input_folder, output_folder FROM folder_profiles")
+            for row in c.fetchall():
+                profile_name, input_folder, output_folder = row
+                # Check if input folder matches OCRMill output (Process Shipment reads from there)
+                if input_folder and os.path.normpath(input_folder) == os.path.normpath(ocrmill_output):
+                    matching_profile = profile_name
+                    break
+            conn.close()
+        except Exception as e:
+            logger.warning(f"Failed to check folder profiles: {e}")
+
+        # If no matching profile, offer to create one
+        if not matching_profile:
+            reply = QMessageBox.question(
+                self, "Folder Profile Not Found",
+                f"No folder profile is configured to read from OCRMill's output folder:\n"
+                f"{ocrmill_output}\n\n"
+                f"Would you like to create an 'OCRMill' folder profile automatically?\n\n"
+                f"This will configure Process Shipment to read CSV files from OCRMill's output.",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+                QMessageBox.Yes
+            )
+
+            if reply == QMessageBox.Cancel:
+                return
+            elif reply == QMessageBox.Yes:
+                # Create OCRMill folder profile
+                try:
+                    conn = sqlite3.connect(str(DB_PATH))
+                    c = conn.cursor()
+                    # Input = OCRMill output (where CSVs are saved)
+                    # Output = same folder for processed exports
+                    c.execute("""INSERT OR REPLACE INTO folder_profiles
+                                (profile_name, input_folder, output_folder, created_date)
+                                VALUES (?, ?, ?, ?)""",
+                             ('OCRMill', ocrmill_output, ocrmill_output, datetime.now().isoformat()))
+                    conn.commit()
+                    conn.close()
+
+                    matching_profile = 'OCRMill'
+                    self.load_folder_profiles()  # Refresh the dropdown
+                    self.ocrmill_log("Created 'OCRMill' folder profile")
+                    logger.info(f"Created OCRMill folder profile: input={ocrmill_output}, output={ocrmill_output}")
+                except Exception as e:
+                    logger.error(f"Failed to create OCRMill folder profile: {e}")
+                    QMessageBox.critical(self, "Error", f"Failed to create folder profile: {e}")
+                    return
+            else:
+                # User chose No - still switch tabs but warn about folder mismatch
+                pass
+
         # Switch to Process Shipment tab
         self.tabs.setCurrentIndex(0)
 
-        # TODO: Populate the Process Shipment preview table with ocrmill_last_items
-        # This requires understanding the Process Shipment tab's data model
+        # Select the matching folder profile if found/created
+        if matching_profile:
+            idx = self.folder_profile_combo.findText(matching_profile)
+            if idx >= 0:
+                self.folder_profile_combo.setCurrentIndex(idx)
+                self.ocrmill_log(f"Selected folder profile: {matching_profile}")
+
+        # Refresh input files to show the OCRMill CSV output
+        self.refresh_input_files()
+
         self.ocrmill_log(f"Sent {len(self.ocrmill_last_items)} items to Process Shipment tab")
-        QMessageBox.information(self, "Items Sent",
-            f"Sent {len(self.ocrmill_last_items)} items to Process Shipment.\n\n"
-            "Note: Full integration with Process Shipment table is in progress.")
+
+        if matching_profile:
+            QMessageBox.information(self, "Items Sent",
+                f"Sent {len(self.ocrmill_last_items)} items to Process Shipment.\n\n"
+                f"Folder profile '{matching_profile}' is now selected.\n"
+                f"CSV files from OCRMill are available in the Input Files list.")
+        else:
+            QMessageBox.warning(self, "Items Sent",
+                f"Sent {len(self.ocrmill_last_items)} items to Process Shipment.\n\n"
+                f"Warning: No folder profile is configured for OCRMill output.\n"
+                f"Select a folder profile or create one to see the CSV files.")
 
     def ocrmill_refresh_history(self):
         """Refresh the parts history table."""
@@ -12147,6 +12374,37 @@ Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             item = self.table.item(row, column_index)
             if item:
                 item.setSelected(True)
+
+    def on_table_selection_changed(self):
+        """Handle selection changes to make selected text readable with white foreground."""
+        try:
+            # Get current selection
+            current_selection = set()
+            for item in self.table.selectedItems():
+                current_selection.add((item.row(), item.column()))
+
+            # Restore original colors for previously selected items that are no longer selected
+            for row, col in self._previous_selection - current_selection:
+                item = self.table.item(row, col)
+                if item:
+                    # Get the original color from the 232 Status column for this row
+                    status_item = self.table.item(row, 18)
+                    status_text = status_item.text() if status_item else ''
+                    original_color = self.get_preview_row_color(status_text)
+                    item.setForeground(original_color)
+
+            # Set white foreground for newly selected items
+            for row, col in current_selection - self._previous_selection:
+                item = self.table.item(row, col)
+                if item:
+                    # Store original color if not already stored
+                    if item.data(Qt.UserRole + 2) is None:
+                        item.setData(Qt.UserRole + 2, item.foreground().color().name())
+                    item.setForeground(QColor(255, 255, 255))  # White text for selected
+
+            self._previous_selection = current_selection
+        except Exception as e:
+            logger.debug(f"Selection change handling: {e}")
 
     def save_column_widths(self):
         """Save column widths to per-user settings for persistence"""
