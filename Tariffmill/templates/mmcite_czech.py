@@ -138,6 +138,11 @@ class MmciteCzechTemplate(BaseTemplate):
             # Try to match line items
             item = self._parse_line_item(line, lines, i, is_downpayment)
             if item:
+                # Skip parts that start with SLU or OBAL (packaging/shipping items)
+                part_upper = item['part_number'].upper()
+                if part_upper.startswith('SLU') or part_upper.startswith('OBAL'):
+                    continue
+
                 # Create deduplication key
                 item_key = f"{item['part_number']}_{item['quantity']}_{item['total_price']}"
                 if item_key not in seen_items:

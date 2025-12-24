@@ -2570,10 +2570,11 @@ class TariffMill(QMainWindow):
         # Invoice check label and Edit Values button
         self.invoice_check_label = QLabel("No file loaded")
         self.invoice_check_label.setWordWrap(False)  # Don't wrap - keep invoice total on one line
-        self.invoice_check_label.setStyleSheet("font-size: 7pt;")
+        font_size = get_user_setting_int('font_size', 9)
+        self.invoice_check_label.setStyleSheet(f"font-size: {font_size}pt;")
         self.invoice_check_label.setAlignment(Qt.AlignCenter)
-        self.invoice_check_label.setMinimumWidth(180)  # Wider minimum to fit invoice totals
-        self.invoice_check_label.setMaximumWidth(250)  # Allow more space for larger amounts
+        self.invoice_check_label.setMinimumWidth(200)  # Wider minimum to fit invoice totals
+        self.invoice_check_label.setMaximumWidth(280)  # Allow more space for larger amounts
 
         vbox_check = QVBoxLayout()
         vbox_check.setSpacing(12)
@@ -5893,10 +5894,11 @@ class TariffMill(QMainWindow):
                 self.invoice_check_label.setWordWrap(False)  # Single line display
                 self.invoice_check_label.setText("No file loaded")
                 # Gold color in dark theme (text-shadow not supported in Qt)
+                font_size = get_user_setting_int('font_size', 9)
                 if hasattr(self, 'current_theme') and self.current_theme in ["Fusion (Dark)", "Ocean"]:
-                    self.invoice_check_label.setStyleSheet("background:transparent; color: gold; font-weight:bold; font-size:7pt; padding:3px;")
+                    self.invoice_check_label.setStyleSheet(f"background:transparent; color: gold; font-weight:bold; font-size:{font_size}pt; padding:3px;")
                 else:
-                    self.invoice_check_label.setStyleSheet("background:transparent; color: #A4262C; font-weight:bold; font-size:7pt; padding:3px;")
+                    self.invoice_check_label.setStyleSheet(f"background:transparent; color: #A4262C; font-weight:bold; font-size:{font_size}pt; padding:3px;")
                 self.edit_values_btn.setVisible(False)
                 return
 
@@ -5910,15 +5912,16 @@ class TariffMill(QMainWindow):
             threshold = 0.01
 
             # Update the invoice check label and Edit Values button
+            font_size = get_user_setting_int('font_size', 9)
             if user_val == 0.0:
                 self.invoice_check_label.setWordWrap(False)  # Single line display
                 self.invoice_check_label.setText(f"Total: ${self.csv_total_value:,.2f}")
-                self.invoice_check_label.setStyleSheet("background:#0078D4; color:white; font-weight:bold; font-size:7pt; padding:3px;")
+                self.invoice_check_label.setStyleSheet(f"background:#0078D4; color:white; font-weight:bold; font-size:{font_size}pt; padding:3px;")
                 self.edit_values_btn.setVisible(False)
             elif diff <= threshold:
                 self.invoice_check_label.setWordWrap(False)  # Single line display
                 self.invoice_check_label.setText(f"✓ Match: ${self.csv_total_value:,.2f}")
-                self.invoice_check_label.setStyleSheet("background:#107C10; color:white; font-weight:bold; font-size:7pt; padding:3px;")
+                self.invoice_check_label.setStyleSheet(f"background:#107C10; color:white; font-weight:bold; font-size:{font_size}pt; padding:3px;")
                 self.edit_values_btn.setVisible(False)
             else:
                 # Values don't match - show comparison and Edit Values button (two lines)
@@ -5927,7 +5930,7 @@ class TariffMill(QMainWindow):
                     f"Total: ${self.csv_total_value:,.2f}\n"
                     f"Difference: ${diff:,.2f}"
                 )
-                self.invoice_check_label.setStyleSheet("background:#ff9800; color:white; font-weight:bold; font-size:7pt; padding:3px;")
+                self.invoice_check_label.setStyleSheet(f"background:#ff9800; color:white; font-weight:bold; font-size:{font_size}pt; padding:3px;")
                 # Show Edit Values button only if haven't processed yet
                 if self.last_processed_df is None:
                     self.edit_values_btn.setVisible(True)
@@ -6880,15 +6883,16 @@ class TariffMill(QMainWindow):
         # Display-only; enablement handled by update/check methods
         diff = abs(csv_sum - user_entered)
         threshold = 0.01
+        font_size = get_user_setting_int('font_size', 9)
         if diff > threshold:
             self.invoice_check_label.setText(
                 f": CSV = ${csv_sum:,.2f} | "
                 f"Entered = ${user_entered:,.2f} | Diff = ${diff:,.2f}"
             )
-            self.invoice_check_label.setStyleSheet("background:#A4262C; color:white; font-weight:bold; font-size:7pt; padding:3px;")
+            self.invoice_check_label.setStyleSheet(f"background:#A4262C; color:white; font-weight:bold; font-size:{font_size}pt; padding:3px;")
         else:
             self.invoice_check_label.setText(f"Match: ${csv_sum:,.2f}")
-            self.invoice_check_label.setStyleSheet("background:#107C10; color:white; font-weight:bold; font-size:7pt; padding:3px;")
+            self.invoice_check_label.setStyleSheet(f"background:#107C10; color:white; font-weight:bold; font-size:{font_size}pt; padding:3px;")
 
     def save_edited_values_and_process(self):
         if not hasattr(self, 'editable_invoice_df'):
