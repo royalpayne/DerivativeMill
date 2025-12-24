@@ -2,7 +2,7 @@
 Smart Extractor Dialog for TariffMill
 
 PyQt5 UI for the SmartExtractor that provides an intuitive interface
-for extracting line items from commercial invoices.
+for extracting line items from commercial invoices and creating templates.
 """
 
 from PyQt5.QtWidgets import (
@@ -10,13 +10,15 @@ from PyQt5.QtWidgets import (
     QTableWidget, QTableWidgetItem, QFileDialog, QGroupBox,
     QFormLayout, QLineEdit, QTextEdit, QSplitter, QHeaderView,
     QMessageBox, QProgressBar, QComboBox, QSpinBox, QCheckBox,
-    QTabWidget, QWidget, QApplication
+    QTabWidget, QWidget, QApplication, QInputDialog, QPlainTextEdit
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QThread
 from PyQt5.QtGui import QFont, QColor
 
 from pathlib import Path
 import os
+import re
+from datetime import datetime
 
 try:
     from smart_extractor import SmartExtractor, ExtractionResult, LineItem
@@ -47,7 +49,8 @@ class ExtractorThread(QThread):
 
 class SmartExtractorDialog(QDialog):
     """
-    Dialog for extracting line items from commercial invoices.
+    Dialog for extracting line items from commercial invoices
+    and creating templates from successful extractions.
 
     Uses data shape recognition to find part numbers, quantities,
     and prices regardless of their position in the document.
@@ -56,6 +59,9 @@ class SmartExtractorDialog(QDialog):
     # Signal emitted when extraction is complete with results
     extraction_complete = pyqtSignal(object)  # ExtractionResult
 
+    # Signal emitted when a template is created
+    template_created = pyqtSignal(str, str)  # template_name, file_path
+
     def __init__(self, parent=None, pdf_path: str = None):
         super().__init__(parent)
         self.pdf_path = pdf_path
@@ -63,7 +69,7 @@ class SmartExtractorDialog(QDialog):
         self.extractor_thread = None
 
         self.setWindowTitle("Smart Invoice Extractor")
-        self.setMinimumSize(1000, 700)
+        self.setMinimumSize(1100, 750)
         self.setup_ui()
 
         # Auto-load if PDF path provided
@@ -83,8 +89,8 @@ class SmartExtractorDialog(QDialog):
         layout.addWidget(header)
 
         desc = QLabel(
-            "Extracts line items by recognizing data shapes (part codes, quantities, prices) "
-            "rather than fixed positions. Works with inconsistent invoice layouts."
+            "Extracts line items by recognizing data shapes (part codes, quantities, prices). "
+            "After successful extraction, you can create a template for this supplier."
         )
         desc.setWordWrap(True)
         desc.setStyleSheet("color: #7f8c8d; margin-bottom: 15px;")
@@ -204,6 +210,99 @@ class SmartExtractorDialog(QDialog):
         raw_layout.addWidget(self.raw_text)
 
         self.tabs.addTab(raw_widget, "Raw Text")
+
+        # Tab 3: Create Template
+        template_widget = QWidget()
+        template_layout = QVBoxLayout(template_widget)
+
+        template_info = QLabel(
+            "Create a template to automatically process future invoices from this supplier.\n"
+            "The template will use the Smart Extractor with supplier-specific identification."
+        )
+        template_info.setWordWrap(True)
+        template_info.setStyleSheet("color: #7f8c8d; margin-bottom: 15px;")
+        template_layout.addWidget(template_info)
+
+        # Template settings
+        settings_group = QGroupBox("Template Settings")
+        settings_form = QFormLayout()
+
+        self.template_name_edit = QLineEdit()
+        self.template_name_edit.setPlaceholderText("e.g., acme_corp (lowercase with underscores)")
+        settings_form.addRow("Template Name:", self.template_name_edit)
+
+        self.template_display_name = QLineEdit()
+        self.template_display_name.setPlaceholderText("e.g., Acme Corporation")
+        settings_form.addRow("Display Name:", self.template_display_name)
+
+        self.template_client = QLineEdit()
+        self.template_client.setPlaceholderText("e.g., Sigma Corporation")
+        settings_form.addRow("Client:", self.template_client)
+
+        self.template_country = QLineEdit()
+        self.template_country.setPlaceholderText("e.g., CHINA, INDIA, USA")
+        settings_form.addRow("Country of Origin:", self.template_country)
+
+        settings_group.setLayout(settings_form)
+        template_layout.addWidget(settings_group)
+
+        # Supplier identification
+        identify_group = QGroupBox("Supplier Identification")
+        identify_layout = QVBoxLayout()
+
+        identify_label = QLabel(
+            "Enter keywords that identify this supplier's invoices (one per line).\n"
+            "These will be used to match incoming invoices to this template."
+        )
+        identify_label.setWordWrap(True)
+        identify_layout.addWidget(identify_label)
+
+        self.supplier_keywords = QPlainTextEdit()
+        self.supplier_keywords.setPlaceholderText(
+            "Example:\nacme corporation\nacme corp\nacme trading"
+        )
+        self.supplier_keywords.setMaximumHeight(100)
+        identify_layout.addWidget(self.supplier_keywords)
+
+        identify_group.setLayout(identify_layout)
+        template_layout.addWidget(identify_group)
+
+        # Preview
+        preview_group = QGroupBox("Template Preview")
+        preview_layout = QVBoxLayout()
+
+        self.template_preview = QPlainTextEdit()
+        self.template_preview.setReadOnly(True)
+        self.template_preview.setFont(QFont("Courier New", 9))
+        self.template_preview.setStyleSheet("background-color: #f8f9fa;")
+        preview_layout.addWidget(self.template_preview)
+
+        preview_btn = QPushButton("Generate Preview")
+        preview_btn.clicked.connect(self.generate_template_preview)
+        preview_layout.addWidget(preview_btn)
+
+        preview_group.setLayout(preview_layout)
+        template_layout.addWidget(preview_group, stretch=1)
+
+        # Create button
+        create_btn = QPushButton("Create Template")
+        create_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3498db;
+                color: white;
+                font-weight: bold;
+                padding: 12px 30px;
+                border-radius: 4px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #2980b9;
+            }
+        """)
+        create_btn.clicked.connect(self.create_template)
+        template_layout.addWidget(create_btn)
+
+        self.tabs.addTab(template_widget, "Create Template")
 
         layout.addWidget(self.tabs, stretch=1)
 
@@ -325,6 +424,14 @@ class SmartExtractorDialog(QDialog):
         self.copy_btn.setEnabled(len(result.line_items) > 0)
         self.export_btn.setEnabled(len(result.line_items) > 0)
 
+        # Pre-fill template fields from extraction results
+        if result.supplier_name:
+            # Convert supplier name to template name
+            template_name = re.sub(r'[^a-z0-9]+', '_', result.supplier_name.lower()).strip('_')
+            self.template_name_edit.setText(template_name)
+            self.template_display_name.setText(result.supplier_name)
+            self.supplier_keywords.setPlainText(result.supplier_name.lower())
+
         # Emit signal
         self.extraction_complete.emit(result)
 
@@ -398,6 +505,289 @@ class SmartExtractorDialog(QDialog):
             )
         except Exception as e:
             QMessageBox.critical(self, "Export Error", f"Failed to export: {e}")
+
+    def generate_template_preview(self):
+        """Generate preview of the template code."""
+        template_name = self.template_name_edit.text().strip()
+        display_name = self.template_display_name.text().strip()
+        client = self.template_client.text().strip() or "Universal"
+        country = self.template_country.text().strip() or "UNKNOWN"
+        keywords = [k.strip() for k in self.supplier_keywords.toPlainText().strip().split('\n') if k.strip()]
+
+        if not template_name:
+            QMessageBox.warning(self, "Missing Info", "Please enter a template name.")
+            return
+
+        if not keywords:
+            QMessageBox.warning(self, "Missing Info", "Please enter at least one supplier keyword.")
+            return
+
+        # Generate class name from template name
+        class_name = ''.join(word.title() for word in template_name.split('_')) + 'Template'
+
+        # Generate the template code
+        code = self._generate_template_code(
+            class_name=class_name,
+            display_name=display_name or template_name.replace('_', ' ').title(),
+            client=client,
+            country=country,
+            keywords=keywords
+        )
+
+        self.template_preview.setPlainText(code)
+
+    def _generate_template_code(self, class_name: str, display_name: str, client: str,
+                                 country: str, keywords: list) -> str:
+        """Generate the Python template code."""
+        keywords_str = ',\n        '.join(f"'{k}'" for k in keywords)
+
+        code = f'''"""
+{display_name} Template
+
+Auto-generated template for invoices from {display_name}.
+Uses SmartExtractor for reliable extraction with supplier-specific identification.
+
+Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+"""
+
+import re
+from typing import List, Dict
+from .base_template import BaseTemplate
+
+import sys
+from pathlib import Path
+
+parent_dir = Path(__file__).parent.parent
+if str(parent_dir) not in sys.path:
+    sys.path.insert(0, str(parent_dir))
+
+try:
+    from smart_extractor import SmartExtractor
+except ImportError:
+    try:
+        from Tariffmill.smart_extractor import SmartExtractor
+    except ImportError:
+        SmartExtractor = None
+
+
+class {class_name}(BaseTemplate):
+    """
+    Template for {display_name} invoices.
+    Uses SmartExtractor for line item extraction.
+    """
+
+    name = "{display_name}"
+    description = "Invoices from {display_name}"
+    client = "{client}"
+    version = "1.0.0"
+    enabled = True
+
+    extra_columns = ['po_number', 'unit_price', 'description', 'country_origin']
+
+    # Keywords to identify this supplier
+    SUPPLIER_KEYWORDS = [
+        {keywords_str}
+    ]
+
+    def __init__(self):
+        super().__init__()
+        self._extractor = None
+        self._last_result = None
+
+    @property
+    def extractor(self):
+        """Lazy-load SmartExtractor."""
+        if self._extractor is None and SmartExtractor is not None:
+            self._extractor = SmartExtractor()
+        return self._extractor
+
+    def can_process(self, text: str) -> bool:
+        """Check if this is a {display_name} invoice."""
+        text_lower = text.lower()
+
+        # Check for supplier keywords
+        for keyword in self.SUPPLIER_KEYWORDS:
+            if keyword in text_lower:
+                return True
+
+        return False
+
+    def get_confidence_score(self, text: str) -> float:
+        """Return confidence score for template matching."""
+        if not self.can_process(text):
+            return 0.0
+
+        score = 0.7  # High base score for specific supplier match
+        text_lower = text.lower()
+
+        # Add confidence for each keyword found
+        for keyword in self.SUPPLIER_KEYWORDS:
+            if keyword in text_lower:
+                score += 0.1
+                break
+
+        # Add confidence for client name
+        if '{client.lower()}' in text_lower:
+            score += 0.1
+
+        return min(score, 1.0)
+
+    def extract_invoice_number(self, text: str) -> str:
+        """Extract invoice number."""
+        patterns = [
+            r'INVOICE\\s*(?:NO\\.?)?\\s*[:\\s]*([A-Z0-9][\\w\\-/]+)',
+            r'Invoice\\s*(?:No\\.?|#)\\s*[:\\s]*([A-Z0-9][\\w\\-/]+)',
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                return match.group(1).strip()
+
+        return "UNKNOWN"
+
+    def extract_project_number(self, text: str) -> str:
+        """Extract PO number."""
+        patterns = [
+            r'P\\.?O\\.?\\s*#?\\s*:?\\s*(\\d{{6,}})',
+            r'Purchase\\s*Order[:\\s]*(\\d+)',
+            r'\\b(400\\d{{5}})\\b',  # Sigma PO format
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                return match.group(1)
+
+        return "UNKNOWN"
+
+    def extract_manufacturer_name(self, text: str) -> str:
+        """Return the manufacturer name."""
+        return "{display_name.upper()}"
+
+    def extract_line_items(self, text: str) -> List[Dict]:
+        """
+        Extract line items using SmartExtractor.
+        """
+        if not self.extractor:
+            return []
+
+        try:
+            self._last_result = self.extractor.extract_from_text(text)
+
+            items = []
+            for item in self._last_result.line_items:
+                items.append({{
+                    'part_number': item.part_number,
+                    'quantity': item.quantity,
+                    'total_price': item.total_price,
+                    'unit_price': item.unit_price,
+                    'description': item.description,
+                    'po_number': self._last_result.po_numbers[0] if self._last_result.po_numbers else '',
+                    'country_origin': '{country}',
+                }})
+
+            return items
+
+        except Exception as e:
+            print(f"SmartExtractor error: {{e}}")
+            return []
+
+    def post_process_items(self, items: List[Dict]) -> List[Dict]:
+        """Post-process - deduplicate."""
+        if not items:
+            return items
+
+        seen = set()
+        unique_items = []
+
+        for item in items:
+            key = f"{{item['part_number']}}_{{item['quantity']}}_{{item['total_price']}}"
+            if key not in seen:
+                seen.add(key)
+                unique_items.append(item)
+
+        return unique_items
+
+    def is_packing_list(self, text: str) -> bool:
+        """Check if document is only a packing list."""
+        text_lower = text.lower()
+        if 'packing list' in text_lower and 'invoice' not in text_lower:
+            return True
+        return False
+'''
+        return code
+
+    def create_template(self):
+        """Create and save the template file."""
+        template_name = self.template_name_edit.text().strip()
+        display_name = self.template_display_name.text().strip()
+        client = self.template_client.text().strip() or "Universal"
+        country = self.template_country.text().strip() or "UNKNOWN"
+        keywords = [k.strip() for k in self.supplier_keywords.toPlainText().strip().split('\n') if k.strip()]
+
+        # Validate
+        if not template_name:
+            QMessageBox.warning(self, "Missing Info", "Please enter a template name.")
+            return
+
+        if not re.match(r'^[a-z][a-z0-9_]*$', template_name):
+            QMessageBox.warning(
+                self, "Invalid Name",
+                "Template name must be lowercase, start with a letter, "
+                "and contain only letters, numbers, and underscores."
+            )
+            return
+
+        if not keywords:
+            QMessageBox.warning(self, "Missing Info", "Please enter at least one supplier keyword.")
+            return
+
+        # Generate class name and code
+        class_name = ''.join(word.title() for word in template_name.split('_')) + 'Template'
+        code = self._generate_template_code(
+            class_name=class_name,
+            display_name=display_name or template_name.replace('_', ' ').title(),
+            client=client,
+            country=country,
+            keywords=keywords
+        )
+
+        # Determine templates directory
+        templates_dir = Path(__file__).parent / 'templates'
+        if not templates_dir.exists():
+            templates_dir = Path(__file__).parent.parent / 'Tariffmill' / 'templates'
+
+        file_path = templates_dir / f"{template_name}.py"
+
+        # Check if file already exists
+        if file_path.exists():
+            reply = QMessageBox.question(
+                self, "File Exists",
+                f"Template '{template_name}' already exists.\n\nOverwrite?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
+
+        # Save the file
+        try:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(code)
+
+            QMessageBox.information(
+                self, "Template Created",
+                f"Template created successfully!\n\n"
+                f"File: {file_path}\n\n"
+                f"The template will be available after refreshing templates or restarting the application."
+            )
+
+            # Emit signal for parent to refresh templates
+            self.template_created.emit(template_name, str(file_path))
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to save template:\n{e}")
 
 
 def main():

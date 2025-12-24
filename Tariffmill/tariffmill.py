@@ -9400,27 +9400,9 @@ class TariffMill(QMainWindow):
         # Template buttons
         template_buttons_layout = QHBoxLayout()
 
-        btn_create_template = QPushButton("Visual Template Builder")
-        btn_create_template.setStyleSheet(self.get_button_style("success"))
-        btn_create_template.setToolTip("Open the visual template builder - select regions on PDF to define extraction fields")
-        btn_create_template.clicked.connect(self.ocrmill_open_template_builder)
-        template_buttons_layout.addWidget(btn_create_template)
-
-        btn_auto_generator = QPushButton("Auto Template Generator")
-        btn_auto_generator.setStyleSheet(self.get_button_style("primary"))
-        btn_auto_generator.setToolTip("Analyze a PDF invoice and automatically generate a template - uses pattern detection")
-        btn_auto_generator.clicked.connect(self.ocrmill_open_auto_generator)
-        template_buttons_layout.addWidget(btn_auto_generator)
-
-        btn_token_builder = QPushButton("Token Builder")
-        btn_token_builder.setStyleSheet(self.get_button_style("warning"))
-        btn_token_builder.setToolTip("Smart template builder - recognizes data shapes (dates, codes, prices) for inconsistent layouts")
-        btn_token_builder.clicked.connect(self.ocrmill_open_token_builder)
-        template_buttons_layout.addWidget(btn_token_builder)
-
         btn_smart_extractor = QPushButton("Smart Extractor")
-        btn_smart_extractor.setStyleSheet(self.get_button_style("info"))
-        btn_smart_extractor.setToolTip("Extract line items from invoices using data shape recognition - no template needed")
+        btn_smart_extractor.setStyleSheet(self.get_button_style("success"))
+        btn_smart_extractor.setToolTip("Extract line items and create templates using data shape recognition")
         btn_smart_extractor.clicked.connect(self.ocrmill_open_smart_extractor)
         template_buttons_layout.addWidget(btn_smart_extractor)
 
@@ -9883,64 +9865,12 @@ Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                 item.setForeground(Qt.gray)
             self.ocrmill_templates_list.addItem(item)
 
-    def ocrmill_open_template_builder(self):
-        """Open the visual template builder dialog."""
-        try:
-            from visual_template_builder import VisualTemplateBuilderDialog
-            dialog = VisualTemplateBuilderDialog(self)
-            dialog.template_created.connect(self.ocrmill_on_template_created)
-            dialog.exec_()
-        except ImportError as e:
-            QMessageBox.warning(
-                self, "Import Error",
-                f"Failed to load Visual Template Builder: {e}\n\n"
-                "Make sure visual_template_builder.py exists."
-            )
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to open Template Builder: {e}")
-
-    def ocrmill_open_auto_template_builder(self):
-        """Open the visual template builder dialog (same as main builder)."""
-        # Both buttons now open the same visual builder
-        self.ocrmill_open_template_builder()
-
-    def ocrmill_open_auto_generator(self):
-        """Open the Auto Template Generator dialog."""
-        try:
-            from auto_template_generator_dialog import AutoTemplateGeneratorDialog
-            dialog = AutoTemplateGeneratorDialog(self)
-            dialog.template_created.connect(self.ocrmill_on_template_created)
-            dialog.exec_()
-        except ImportError as e:
-            QMessageBox.warning(
-                self, "Import Error",
-                f"Failed to load Auto Template Generator: {e}\n\n"
-                "Make sure auto_template_generator_dialog.py exists and pdfplumber is installed."
-            )
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to open Auto Template Generator: {e}")
-
-    def ocrmill_open_token_builder(self):
-        """Open the Token-Based Template Builder dialog."""
-        try:
-            from token_template_dialog import TokenTemplateDialog
-            dialog = TokenTemplateDialog(self)
-            dialog.template_created.connect(self.ocrmill_on_template_created)
-            dialog.exec_()
-        except ImportError as e:
-            QMessageBox.warning(
-                self, "Import Error",
-                f"Failed to load Token Template Builder: {e}\n\n"
-                "Make sure token_template_dialog.py and token_template_builder.py exist."
-            )
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to open Token Builder: {e}")
-
     def ocrmill_open_smart_extractor(self):
-        """Open the Smart Extractor dialog for template-free extraction."""
+        """Open the Smart Extractor dialog for extraction and template building."""
         try:
             from smart_extractor_dialog import SmartExtractorDialog
             dialog = SmartExtractorDialog(self)
+            dialog.template_created.connect(self.ocrmill_on_template_created)
             dialog.exec_()
         except ImportError as e:
             QMessageBox.warning(
