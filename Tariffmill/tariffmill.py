@@ -2729,13 +2729,21 @@ class TariffMill(QMainWindow):
         self.table.setSelectionMode(QTableWidget.ExtendedSelection)
         self.table.setSortingEnabled(False)  # Disabled for better performance
         # Set row height from saved preference (per-user setting)
-        saved_row_height = get_user_setting_int('preview_row_height', 20)
+        saved_row_height = get_user_setting_int('preview_row_height', 22)
         self.table.verticalHeader().setDefaultSectionSize(saved_row_height)
+        # Configure vertical header (row numbers) for compact display
+        self.table.verticalHeader().setMinimumSectionSize(14)  # Allow small rows
+        self.table.verticalHeader().setFixedWidth(30)  # Fixed width for row numbers
+        self.table.verticalHeader().setDefaultAlignment(Qt.AlignCenter)
         # Match body font size to the header font size and make non-bold
         header_font = self.table.horizontalHeader().font()
         header_font.setBold(False)
         self.table.horizontalHeader().setFont(header_font)
         self.table.setFont(header_font)
+        # Use smaller font for row numbers to prevent clipping
+        vh_font = self.table.verticalHeader().font()
+        vh_font.setPointSize(8)
+        self.table.verticalHeader().setFont(vh_font)
 
         # Enable clicking header to select entire column
         self.table.horizontalHeader().sectionClicked.connect(self.select_column)
@@ -3517,17 +3525,17 @@ class TariffMill(QMainWindow):
         # Row Height Slider for Result Preview table
         row_height_layout = QHBoxLayout()
         row_height_slider = QSlider(Qt.Horizontal)
-        row_height_slider.setMinimum(16)
+        row_height_slider.setMinimum(22)
         row_height_slider.setMaximum(40)
-        row_height_slider.setValue(20)  # Default
+        row_height_slider.setValue(22)  # Default
         row_height_slider.setTickPosition(QSlider.TicksBelow)
         row_height_slider.setTickInterval(4)
 
-        row_height_value_label = QLabel("20px")
+        row_height_value_label = QLabel("22px")
         row_height_value_label.setMinimumWidth(40)
 
         # Load saved row height preference from per-user settings
-        saved_row_height = get_user_setting_int('preview_row_height', 20)
+        saved_row_height = get_user_setting_int('preview_row_height', 22)
         row_height_slider.setValue(saved_row_height)
         row_height_value_label.setText(f"{saved_row_height}px")
 
@@ -4638,6 +4646,7 @@ class TariffMill(QMainWindow):
         """Apply the selected row height to the Result Preview table"""
         if hasattr(self, 'table'):
             self.table.verticalHeader().setDefaultSectionSize(height)
+            self.table.verticalHeader().setMinimumSectionSize(14)  # Allow small rows
             # Also update existing rows
             for row in range(self.table.rowCount()):
                 self.table.setRowHeight(row, height)
@@ -6277,36 +6286,35 @@ class TariffMill(QMainWindow):
             # If no percentages are set, use HTS lookup to determine material type
             # BUT only for parts that ARE in the database - unfound parts should NOT get defaults
             not_in_db = row.get('_not_in_db', False)
+
+            # Check for incomplete data: part in DB but missing required fields (HTS or qty_unit)
+            hts = row.get('hts_code', '')
+            hts_clean = str(hts).strip() if pd.notna(hts) else ''
+            qty_unit = row.get('qty_unit', '')
+            qty_unit_clean = str(qty_unit).strip() if pd.notna(qty_unit) else ''
+
+            # Mark as incomplete if in database but missing HTS or qty_unit
+            if not not_in_db and (not hts_clean or not qty_unit_clean):
+                row['_incomplete_data'] = True
+
             if steel_pct == 0 and aluminum_pct == 0 and copper_pct == 0 and wood_pct == 0 and auto_pct == 0 and non_steel_pct == 0:
                 if not_in_db:
                     # Part not in database - leave all ratios at 0 to show "Not Found" status
                     pass
-                else:
-                    # Part is in database - check if it has HTS code set
-                    hts = row.get('hts_code', '')
-                    hts_clean = str(hts).strip() if pd.notna(hts) else ''
-
-                    if hts_clean:
-                        # Has HTS code - look up material type
-                        material, _, _ = get_232_info(hts)
-                        if material == 'Aluminum':
-                            aluminum_pct = 100.0
-                        elif material == 'Copper':
-                            copper_pct = 100.0
-                        elif material == 'Wood':
-                            wood_pct = 100.0
-                        elif material == 'Auto':
-                            auto_pct = 100.0
-                        elif material == 'Steel':
-                            steel_pct = 100.0
-                        else:
-                            # HTS doesn't indicate a specific 232 material - mark as incomplete
-                            # so user knows data needs to be filled in
-                            row['_incomplete_data'] = True
-                    else:
-                        # Part in database but NO HTS code and NO ratios - mark as incomplete
-                        # Don't default to steel - let user know this part needs attention
-                        row['_incomplete_data'] = True
+                elif hts_clean:
+                    # Part is in database with HTS code - look up material type
+                    material, _, _ = get_232_info(hts)
+                    if material == 'Aluminum':
+                        aluminum_pct = 100.0
+                    elif material == 'Copper':
+                        copper_pct = 100.0
+                    elif material == 'Wood':
+                        wood_pct = 100.0
+                    elif material == 'Auto':
+                        auto_pct = 100.0
+                    elif material == 'Steel':
+                        steel_pct = 100.0
+                    # If material is None/unknown, _incomplete_data is already set above
 
             # Validate that percentages sum to 100% - recalculate non_steel_pct if needed
             # This fixes database entries where non_steel_ratio was incorrectly set to 100%
@@ -6332,6 +6340,20 @@ class TariffMill(QMainWindow):
             # Track allocated value to ensure total equals original (avoid rounding errors)
             allocated_value = 0.0
             row_start_idx = len(expanded_rows)
+
+            # If part is marked as incomplete, create incomplete row and skip normal row creation
+            if row.get('_incomplete_data', False):
+                incomplete_row = row.copy()
+                incomplete_row['value_usd'] = original_value
+                incomplete_row['SteelRatio'] = 0.0
+                incomplete_row['AluminumRatio'] = 0.0
+                incomplete_row['CopperRatio'] = 0.0
+                incomplete_row['WoodRatio'] = 0.0
+                incomplete_row['AutoRatio'] = 0.0
+                incomplete_row['NonSteelRatio'] = 0.0
+                incomplete_row['_content_type'] = 'incomplete'
+                expanded_rows.append(incomplete_row)
+                continue  # Skip normal row creation for incomplete parts
 
             # Create non-232 portion row first (if non_steel_pct > 0)
             if non_steel_pct > 0:
@@ -6437,19 +6459,7 @@ class TariffMill(QMainWindow):
                 not_found_row['_content_type'] = 'not_found'
                 expanded_rows.append(not_found_row)
 
-            # Handle parts in database but with incomplete data (no HTS and no ratios)
-            if len(expanded_rows) == row_start_idx and row.get('_incomplete_data', False):
-                # Part is in database but has no HTS code and no ratios set - needs attention
-                incomplete_row = row.copy()
-                incomplete_row['value_usd'] = original_value
-                incomplete_row['SteelRatio'] = 0.0
-                incomplete_row['AluminumRatio'] = 0.0
-                incomplete_row['CopperRatio'] = 0.0
-                incomplete_row['WoodRatio'] = 0.0
-                incomplete_row['AutoRatio'] = 0.0
-                incomplete_row['NonSteelRatio'] = 0.0
-                incomplete_row['_content_type'] = 'incomplete'
-                expanded_rows.append(incomplete_row)
+            # Note: Incomplete parts are handled earlier with 'continue', so this block is no longer needed
 
             # Fix rounding errors: adjust the last created row to ensure total matches original
             if len(expanded_rows) > row_start_idx:
@@ -10918,6 +10928,9 @@ Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             now = datetime.now().isoformat()
             saved = 0
             renamed = 0
+            inserted = 0
+            updated = 0
+            unchanged = 0
             for row in range(self.parts_table.rowCount()):
                 items = [self.parts_table.item(row, col) for col in range(15)]
                 if not items[0] or not items[0].text().strip(): continue
@@ -10972,25 +10985,89 @@ Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                 if not qty_unit and hts:
                     qty_unit = get_hts_qty_unit(hts)
                 sec301_exclusion = items[13].text() if items[13] else ""
-                c.execute("""INSERT INTO parts_master (part_number, description, hts_code, country_origin, mid, client_code,
-                          steel_ratio, non_steel_ratio, last_updated, qty_unit, aluminum_ratio, copper_ratio, wood_ratio, auto_ratio,
-                          Sec301_Exclusion_Tariff)
-                          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                          ON CONFLICT(part_number) DO UPDATE SET
-                          description=excluded.description, hts_code=excluded.hts_code,
-                          country_origin=excluded.country_origin, mid=excluded.mid,
-                          client_code=excluded.client_code, steel_ratio=excluded.steel_ratio,
-                          non_steel_ratio=excluded.non_steel_ratio, last_updated=excluded.last_updated,
-                          qty_unit=excluded.qty_unit, aluminum_ratio=excluded.aluminum_ratio,
-                          copper_ratio=excluded.copper_ratio, wood_ratio=excluded.wood_ratio,
-                          auto_ratio=excluded.auto_ratio, Sec301_Exclusion_Tariff=excluded.Sec301_Exclusion_Tariff""",
-                          (part, desc, hts, origin, mid, client_code, steel, non_steel, now, qty_unit, aluminum, copper, wood, auto, sec301_exclusion))
-                if c.rowcount: saved += 1
+
+                # Check if this part exists and if data has changed
+                c.execute("""SELECT description, hts_code, country_origin, mid, client_code,
+                          steel_ratio, aluminum_ratio, copper_ratio, wood_ratio, auto_ratio,
+                          non_steel_ratio, qty_unit, Sec301_Exclusion_Tariff
+                          FROM parts_master WHERE part_number = ?""", (part,))
+                existing = c.fetchone()
+
+                if existing is None:
+                    # New part - insert with current timestamp
+                    c.execute("""INSERT INTO parts_master (part_number, description, hts_code, country_origin, mid, client_code,
+                              steel_ratio, non_steel_ratio, last_updated, qty_unit, aluminum_ratio, copper_ratio, wood_ratio, auto_ratio,
+                              Sec301_Exclusion_Tariff)
+                              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                              (part, desc, hts, origin, mid, client_code, steel, non_steel, now, qty_unit, aluminum, copper, wood, auto, sec301_exclusion))
+                    inserted += 1
+                    saved += 1
+                else:
+                    # Part exists - check if any field changed
+                    # existing: (desc, hts, origin, mid, client, steel, al, cu, wood, auto, non_steel, qty_unit, sec301)
+                    old_desc, old_hts, old_origin, old_mid, old_client, old_steel, old_al, old_cu, old_wood, old_auto, old_non, old_qty, old_sec301 = existing
+                    # Normalize for comparison (handle None values)
+                    old_desc = old_desc or ""
+                    old_hts = old_hts or ""
+                    old_origin = old_origin or ""
+                    old_mid = old_mid or ""
+                    old_client = old_client or ""
+                    old_steel = old_steel or 0.0
+                    old_al = old_al or 0.0
+                    old_cu = old_cu or 0.0
+                    old_wood = old_wood or 0.0
+                    old_auto = old_auto or 0.0
+                    old_non = old_non or 0.0
+                    old_qty = old_qty or ""
+                    old_sec301 = old_sec301 or ""
+
+                    # Compare values (use small epsilon for float comparison)
+                    eps = 0.001
+                    has_changes = (
+                        desc != old_desc or
+                        hts != old_hts or
+                        origin != old_origin or
+                        mid != old_mid or
+                        client_code != old_client or
+                        abs(steel - old_steel) > eps or
+                        abs(aluminum - old_al) > eps or
+                        abs(copper - old_cu) > eps or
+                        abs(wood - old_wood) > eps or
+                        abs(auto - old_auto) > eps or
+                        abs(non_steel - old_non) > eps or
+                        qty_unit != old_qty or
+                        sec301_exclusion != old_sec301
+                    )
+
+                    if has_changes:
+                        # Update only if data changed
+                        c.execute("""UPDATE parts_master SET
+                                  description=?, hts_code=?, country_origin=?, mid=?, client_code=?,
+                                  steel_ratio=?, non_steel_ratio=?, last_updated=?, qty_unit=?,
+                                  aluminum_ratio=?, copper_ratio=?, wood_ratio=?, auto_ratio=?,
+                                  Sec301_Exclusion_Tariff=?
+                                  WHERE part_number=?""",
+                                  (desc, hts, origin, mid, client_code, steel, non_steel, now, qty_unit, aluminum, copper, wood, auto, sec301_exclusion, part))
+                        updated += 1
+                        saved += 1
+                    else:
+                        unchanged += 1
+
             conn.commit(); conn.close()
-            # Build success message
-            msg = f"Saved {saved} parts!"
-            if renamed > 0:
-                msg += f"\n(Renamed {renamed} part number(s))"
+            # Build success message with breakdown
+            if saved > 0:
+                details = []
+                if inserted > 0:
+                    details.append(f"{inserted} new")
+                if updated > 0:
+                    details.append(f"{updated} updated")
+                if renamed > 0:
+                    details.append(f"{renamed} renamed")
+                msg = f"Saved {saved} parts!"
+                if details:
+                    msg += f"\n({', '.join(details)})"
+            else:
+                msg = "No changes to save."
             QMessageBox.information(self, "Success", msg)
             self.bottom_status.setText("Database saved")
             self.load_available_mids()
