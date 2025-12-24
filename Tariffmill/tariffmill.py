@@ -9392,9 +9392,34 @@ class TariffMill(QMainWindow):
         templates_widget = QWidget()
         templates_layout = QVBoxLayout(templates_widget)
 
-        templates_layout.addWidget(QLabel("Available Invoice Templates:"))
+        templates_label = QLabel("Available Invoice Templates:")
+        templates_label.setStyleSheet("font-weight: bold; font-size: 14px; padding: 5px;")
+        templates_layout.addWidget(templates_label)
 
         self.ocrmill_templates_list = QListWidget()
+        # Apply theme-aware styling for better visibility
+        self.ocrmill_templates_list.setStyleSheet("""
+            QListWidget {
+                background-color: #1e2d3d;
+                border: 2px solid #3a6a9a;
+                border-radius: 6px;
+                padding: 5px;
+                font-size: 13px;
+            }
+            QListWidget::item {
+                padding: 8px 10px;
+                margin: 2px 0;
+                border-radius: 4px;
+            }
+            QListWidget::item:selected {
+                background-color: #00a8cc;
+                color: #ffffff;
+            }
+            QListWidget::item:hover:!selected {
+                background-color: #2a4a6a;
+            }
+        """)
+        self.ocrmill_templates_list.setAlternatingRowColors(True)
         templates_layout.addWidget(self.ocrmill_templates_list, 1)
 
         # Template buttons
@@ -9859,10 +9884,13 @@ Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             status = "Enabled" if info['enabled'] else "Disabled"
             item = QListWidgetItem(f"{info['name']} [{status}]")
             item.setData(Qt.UserRole, name)  # Store template key
+            # Use bright, visible colors for both themes
             if info['enabled']:
-                item.setForeground(Qt.darkGreen)
+                # Bright green for enabled templates - visible on dark backgrounds
+                item.setForeground(QColor("#00e676"))  # Material green A400
             else:
-                item.setForeground(Qt.gray)
+                # Dimmed color for disabled templates
+                item.setForeground(QColor("#78909c"))  # Blue grey 400
             self.ocrmill_templates_list.addItem(item)
 
     def ocrmill_open_smart_extractor(self):
