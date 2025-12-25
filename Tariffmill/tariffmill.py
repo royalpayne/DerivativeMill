@@ -700,17 +700,25 @@ else:
 
 # Directory structure for application data
 RESOURCES_DIR = BASE_DIR / "Resources"
-INPUT_DIR = BASE_DIR / "Input"
-OUTPUT_DIR = BASE_DIR / "Output"
-PROCESSED_DIR = INPUT_DIR / "Processed"
-OUTPUT_PROCESSED_DIR = OUTPUT_DIR / "Processed"
+INPUT_DIR = BASE_DIR / "Tariffmill_Input"
+OUTPUT_DIR = BASE_DIR / "Tariffmill_Output"
+
+def get_processed_dir(input_dir: Path) -> Path:
+    """Get the processed directory path based on input directory.
+
+    Creates a sibling folder named {FolderName}_Processed.
+    e.g., /home/user/OCROutput -> /home/user/OCROutput_Processed
+    """
+    return input_dir.parent / f"{input_dir.name}_Processed"
+
+PROCESSED_DIR = get_processed_dir(INPUT_DIR)
 
 # Configuration files for data mappings
 MAPPING_FILE = BASE_DIR / "column_mapping.json"
 SHIPMENT_MAPPING_FILE = BASE_DIR / "shipment_mapping.json"
 
 # Create required directories
-for p in (RESOURCES_DIR, INPUT_DIR, OUTPUT_DIR, PROCESSED_DIR, OUTPUT_PROCESSED_DIR):
+for p in (RESOURCES_DIR, INPUT_DIR, OUTPUT_DIR, PROCESSED_DIR):
     p.mkdir(exist_ok=True)
 
 # Copy bundled database to user location on first run (for frozen exe)
@@ -2021,12 +2029,12 @@ class PDFDropZone(QLabel):
     def __init__(self, browse_folder=None):
         super().__init__()
         self.browse_folder = browse_folder or str(Path.home())
-        self.setText("Drop PDF Invoice(s) Here\n\nor click to browse")
+        self.setText("Drop PDF Invoice(s) Here or click to browse")
         self.setAlignment(Qt.AlignCenter)
         self.setWordWrap(True)
-        self.setMinimumHeight(100)
         self.setAcceptDrops(True)
         self.setCursor(Qt.PointingHandCursor)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.update_style(False)
 
     def update_style(self, hover=False):
@@ -2137,8 +2145,9 @@ class TariffMill(QMainWindow):
         # Hide window during initialization to prevent ghost window flash
         self.setAttribute(Qt.WA_DontShowOnScreen, True)
         self.setWindowTitle(APP_NAME)
-        # Compact default size - fully scalable with no minimum constraint
+        # Compact default size - fully scalable with minimum constraint to prevent shrinking
         self.setGeometry(50, 50, 1200, 700)
+        self.setMinimumSize(800, 500)
 
         # Install application-level event filter to intercept ALL keyboard events
         QApplication.instance().installEventFilter(self)
@@ -2332,7 +2341,7 @@ class TariffMill(QMainWindow):
         tabs_layout.setContentsMargins(0, 0, 0, 0)
         tabs_layout.setSpacing(10)
         tabs_layout.addWidget(self.tabs)
-        layout.addWidget(tabs_container)
+        layout.addWidget(tabs_container, 1)
         
         # Bottom status bar with export progress indicator
         bottom_bar = QWidget()
@@ -2484,7 +2493,7 @@ class TariffMill(QMainWindow):
             global INPUT_DIR, PROCESSED_DIR
             if row:
                 INPUT_DIR = Path(row[0])
-                PROCESSED_DIR = INPUT_DIR / "Processed"
+                PROCESSED_DIR = get_processed_dir(INPUT_DIR)
                 PROCESSED_DIR.mkdir(exist_ok=True)
                 QApplication.processEvents()
             c.execute("SELECT value FROM app_config WHERE key = 'output_dir'")
@@ -2510,13 +2519,23 @@ class TariffMill(QMainWindow):
         
         # Create splitter for resizable panels
         splitter = QSplitter(Qt.Horizontal)
-        
-        # LEFT SIDE: Single outer box containing all controls
+
+        # LEFT SIDE: Single outer box containing all controls with scroll area
         left_outer_box = QGroupBox("Controls")
-        left_side = QVBoxLayout(left_outer_box)
+        left_outer_layout = QVBoxLayout(left_outer_box)
+        left_outer_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Create scroll area for left side content
+        left_scroll = QScrollArea()
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        left_scroll.setFrameShape(QFrame.NoFrame)
+
+        left_scroll_widget = QWidget()
+        left_side = QVBoxLayout(left_scroll_widget)
         left_side.setSpacing(10)
         left_side.setContentsMargins(10, 10, 10, 10)
-        
+
         # INPUT FILES LIST — now inside Shipment File group
         self.input_files_list = AutoSelectListWidget()
         self.input_files_list.setSelectionMode(QListWidget.SingleSelection)
@@ -2700,9 +2719,14 @@ class TariffMill(QMainWindow):
 
         exports_group.setLayout(exports_layout)
         left_side.addWidget(exports_group)
-        
-        # Set maximum width for left controls to keep it compact
-        left_outer_box.setMaximumWidth(350)
+
+        # Finish scroll area setup
+        left_scroll.setWidget(left_scroll_widget)
+        left_outer_layout.addWidget(left_scroll)
+
+        # Set min/max width for left controls
+        left_outer_box.setMinimumWidth(300)
+        left_outer_box.setMaximumWidth(400)
 
         # Add left_outer_box to splitter
         splitter.addWidget(left_outer_box)
@@ -2773,8 +2797,8 @@ class TariffMill(QMainWindow):
         # Add right widget to splitter
         splitter.addWidget(right_widget)
 
-        # Set initial splitter sizes - minimize left, maximize right (15% left, 85% right)
-        splitter.setSizes([200, 1000])
+        # Set initial splitter sizes (left: 350, right: remaining)
+        splitter.setSizes([350, 850])
 
         # Make the splitter collapsible on the left side
         splitter.setCollapsible(0, False)  # Don't allow full collapse
@@ -3782,65 +3806,7 @@ class TariffMill(QMainWindow):
         # Add stretch to appearance tab
         appearance_layout.addStretch()
         tabs.addTab(appearance_widget, "Appearance")
-
-        # ===== TAB 2: FOLDER LOCATIONS =====
-        folders_widget = QWidget()
-        folders_layout = QVBoxLayout(folders_widget)
-
-        group = QGroupBox("Folder Locations")
-        glayout = QFormLayout()
-        
-        # Input folder display and button
-        global INPUT_DIR, OUTPUT_DIR
-        input_dir_str = str(INPUT_DIR) if 'INPUT_DIR' in globals() and INPUT_DIR else "(not set)"
-        output_dir_str = str(OUTPUT_DIR) if 'OUTPUT_DIR' in globals() and OUTPUT_DIR else "(not set)"
-
-        # Helper function to create path display widget
-        def create_path_display(path_str):
-            """Create a read-only text edit for displaying file paths"""
-            from PyQt5.QtGui import QPalette
-
-            text_edit = QPlainTextEdit()
-            text_edit.setPlainText(path_str)
-            text_edit.setReadOnly(True)
-            text_edit.setFixedHeight(45)
-
-            # Apply theme-aware styling using result preview background color
-            app = QApplication.instance()
-            palette = app.palette()
-            base_color = palette.color(QPalette.Base)
-            text_color = palette.color(QPalette.Text)
-
-            # Format colors for stylesheet
-            bg_color = base_color.name()
-            fg_color = text_color.name()
-
-            text_edit.setStyleSheet(f"background:{bg_color}; padding:5px; border:1px solid #555; color:{fg_color}; font-family: monospace;")
-
-            return text_edit
-
-        input_path_display = create_path_display(input_dir_str)
-
-        input_btn = QPushButton("Change Input Folder")
-        input_btn.clicked.connect(lambda: self.select_input_folder(input_path_display))
-        glayout.addRow("Input Folder:", input_path_display)
-        glayout.addRow("", input_btn)
-
-        # Output folder display and button
-        output_path_display = create_path_display(output_dir_str)
-
-        output_btn = QPushButton("Change Output Folder")
-        output_btn.clicked.connect(lambda: self.select_output_folder(output_path_display))
-        glayout.addRow("Output Folder:", output_path_display)
-        glayout.addRow("", output_btn)
-
-        group.setLayout(glayout)
-        folders_layout.addWidget(group)
-
-        folders_layout.addStretch()
-        tabs.addTab(folders_widget, "Folders")
-
-        # ===== TAB 3: DATABASE =====
+        # ===== TAB 2: DATABASE =====
         database_widget = QWidget()
         database_layout = QVBoxLayout(database_widget)
 
@@ -4030,7 +3996,7 @@ class TariffMill(QMainWindow):
         database_layout.addStretch()
         tabs.addTab(database_widget, "Database")
 
-        # ===== TAB 4: UPDATES =====
+        # ===== TAB 3: UPDATES =====
         updates_widget = QWidget()
         updates_layout = QVBoxLayout(updates_widget)
 
@@ -5974,7 +5940,7 @@ class TariffMill(QMainWindow):
         folder = QFileDialog.getExistingDirectory(self, "Select Input Folder", str(INPUT_DIR))
         if folder:
             INPUT_DIR = Path(folder)
-            PROCESSED_DIR = INPUT_DIR / "Processed"
+            PROCESSED_DIR = get_processed_dir(INPUT_DIR)
             PROCESSED_DIR.mkdir(exist_ok=True)
             if display_widget:
                 if isinstance(display_widget, QPlainTextEdit):
@@ -9086,8 +9052,8 @@ class TariffMill(QMainWindow):
             self.folder_profile_combo.blockSignals(False)
 
     def load_folder_profile(self, name):
-        """Load a folder profile and update INPUT_DIR and OUTPUT_DIR"""
-        global INPUT_DIR, OUTPUT_DIR
+        """Load a folder profile and update INPUT_DIR, OUTPUT_DIR, and PROCESSED_DIR"""
+        global INPUT_DIR, OUTPUT_DIR, PROCESSED_DIR
 
         if not name or name == "-- Select Folder Profile --":
             return
@@ -9104,6 +9070,8 @@ class TariffMill(QMainWindow):
                 if input_folder:
                     input_folder = os.path.normpath(input_folder)
                     INPUT_DIR = Path(input_folder)
+                    PROCESSED_DIR = get_processed_dir(INPUT_DIR)
+                    PROCESSED_DIR.mkdir(exist_ok=True)
                     set_user_setting('input_folder', input_folder)
                 if output_folder:
                     output_folder = os.path.normpath(output_folder)
@@ -9572,7 +9540,8 @@ class TariffMill(QMainWindow):
         from ocrmill_processor import ProcessorEngine, OCRMillConfig
         from ocrmill_worker import OCRMillWorker, SingleFileWorker, MultiFileWorker, ParallelFolderWorker
 
-        layout = QVBoxLayout()
+        # Use QVBoxLayout directly on the tab widget (like Process Shipment tab)
+        layout = QVBoxLayout(self.tab_ocrmill)
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(10)
 
@@ -9581,8 +9550,8 @@ class TariffMill(QMainWindow):
         self.ocrmill_config = OCRMillConfig()
 
         # Load saved settings (normalize paths to OS-native format)
-        input_setting = get_user_setting('ocrmill_input_folder', str(BASE_DIR / "Input" / "OCRMill"))
-        output_setting = get_user_setting('ocrmill_output_folder', str(BASE_DIR / "Output" / "OCRMill"))
+        input_setting = get_user_setting('ocrmill_input_folder', str(BASE_DIR / "OCR_Input"))
+        output_setting = get_user_setting('ocrmill_output_folder', str(BASE_DIR / "OCR_Output"))
         self.ocrmill_config.input_folder = Path(input_setting)
         self.ocrmill_config.output_folder = Path(output_setting)
         # Update registry with normalized paths if they were stored with wrong separators
@@ -9607,6 +9576,25 @@ class TariffMill(QMainWindow):
         processing_widget = QWidget()
         processing_layout = QVBoxLayout(processing_widget)
 
+        # Create splitter for resizable panels (like Process Shipment tab)
+        splitter = QSplitter(Qt.Horizontal)
+
+        # LEFT SIDE: Controls box with scroll area
+        left_outer_box = QGroupBox("Controls")
+        left_outer_layout = QVBoxLayout(left_outer_box)
+        left_outer_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Create scroll area for left side content
+        left_scroll = QScrollArea()
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        left_scroll.setFrameShape(QFrame.NoFrame)
+
+        left_scroll_widget = QWidget()
+        left_side = QVBoxLayout(left_scroll_widget)
+        left_side.setSpacing(10)
+        left_side.setContentsMargins(10, 10, 10, 10)
+
         # Folder configuration
         folder_group = QGroupBox("Folder Configuration")
         folder_layout = QFormLayout()
@@ -9615,55 +9603,147 @@ class TariffMill(QMainWindow):
         input_row = QHBoxLayout()
         self.ocrmill_input_edit = QLineEdit(str(self.ocrmill_config.input_folder))
         self.ocrmill_input_edit.setReadOnly(True)
-        input_browse_btn = QPushButton("Browse...")
+        input_browse_btn = QPushButton("...")
+        input_browse_btn.setFixedWidth(30)
         input_browse_btn.clicked.connect(self.ocrmill_browse_input_folder)
         input_row.addWidget(self.ocrmill_input_edit)
         input_row.addWidget(input_browse_btn)
-        folder_layout.addRow("Input Folder:", input_row)
+        folder_layout.addRow("Input:", input_row)
 
         # Output folder
         output_row = QHBoxLayout()
         self.ocrmill_output_edit = QLineEdit(str(self.ocrmill_config.output_folder))
         self.ocrmill_output_edit.setReadOnly(True)
-        output_browse_btn = QPushButton("Browse...")
+        output_browse_btn = QPushButton("...")
+        output_browse_btn.setFixedWidth(30)
         output_browse_btn.clicked.connect(self.ocrmill_browse_output_folder)
         output_row.addWidget(self.ocrmill_output_edit)
         output_row.addWidget(output_browse_btn)
-        folder_layout.addRow("Output Folder:", output_row)
+        folder_layout.addRow("Output:", output_row)
 
         folder_group.setLayout(folder_layout)
-        processing_layout.addWidget(folder_group)
+        left_side.addWidget(folder_group)
 
-        # Control buttons
-        btn_layout = QHBoxLayout()
+        # Input files list
+        input_files_group = QGroupBox("Input Files (PDFs)")
+        input_files_layout = QVBoxLayout()
+        self.ocrmill_input_files_list = QListWidget()
+        self.ocrmill_input_files_list.setSelectionMode(QListWidget.SingleSelection)
+        self.ocrmill_input_files_list.itemDoubleClicked.connect(self.ocrmill_open_input_file)
+        self.ocrmill_input_files_list.setFixedHeight(75)
+        input_files_layout.addWidget(self.ocrmill_input_files_list)
+        refresh_input_btn = QPushButton("Refresh")
+        refresh_input_btn.setFixedHeight(25)
+        refresh_input_btn.clicked.connect(self.ocrmill_refresh_input_files)
+        input_files_layout.addWidget(refresh_input_btn)
+        input_files_group.setLayout(input_files_layout)
+        left_side.addWidget(input_files_group)
 
+        # Output files list
+        output_files_group = QGroupBox("Output Files (CSVs)")
+        output_files_layout = QVBoxLayout()
+        self.ocrmill_output_files_list = QListWidget()
+        self.ocrmill_output_files_list.setSelectionMode(QListWidget.SingleSelection)
+        self.ocrmill_output_files_list.itemClicked.connect(self.ocrmill_preview_output_file)
+        self.ocrmill_output_files_list.itemDoubleClicked.connect(self.ocrmill_open_output_file)
+        self.ocrmill_output_files_list.setFixedHeight(75)
+        output_files_layout.addWidget(self.ocrmill_output_files_list)
+        refresh_output_btn = QPushButton("Refresh")
+        refresh_output_btn.setFixedHeight(25)
+        refresh_output_btn.clicked.connect(self.ocrmill_refresh_output_files)
+        output_files_layout.addWidget(refresh_output_btn)
+        output_files_group.setLayout(output_files_layout)
+        left_side.addWidget(output_files_group)
+
+        # Actions group
+        actions_group = QGroupBox("Actions")
+        actions_layout = QVBoxLayout()
+
+        # Monitoring row with button and auto-start checkbox
+        monitor_row = QHBoxLayout()
         self.ocrmill_monitor_btn = QPushButton("Start Monitoring")
         self.ocrmill_monitor_btn.setCheckable(True)
+        self.ocrmill_monitor_btn.setFixedHeight(28)
         self.ocrmill_monitor_btn.clicked.connect(self.ocrmill_toggle_monitoring)
-        btn_layout.addWidget(self.ocrmill_monitor_btn)
+        monitor_row.addWidget(self.ocrmill_monitor_btn)
+
+        self.ocrmill_autostart_check = QCheckBox("Auto-start")
+        self.ocrmill_autostart_check.setToolTip("Auto-start monitoring on application launch")
+        self.ocrmill_autostart_check.setChecked(get_user_setting_bool('ocrmill_autostart', False))
+        self.ocrmill_autostart_check.stateChanged.connect(lambda s: set_user_setting('ocrmill_autostart', 'true' if s else 'false'))
+        monitor_row.addWidget(self.ocrmill_autostart_check)
+        actions_layout.addLayout(monitor_row)
 
         process_file_btn = QPushButton("Process PDF File...")
+        process_file_btn.setFixedHeight(28)
         process_file_btn.clicked.connect(self.ocrmill_process_single_file)
-        btn_layout.addWidget(process_file_btn)
+        actions_layout.addWidget(process_file_btn)
 
         process_folder_btn = QPushButton("Process Folder Now")
+        process_folder_btn.setFixedHeight(28)
         process_folder_btn.clicked.connect(self.ocrmill_process_folder_now)
-        btn_layout.addWidget(process_folder_btn)
+        actions_layout.addWidget(process_folder_btn)
 
-        btn_layout.addStretch()
-
-        self.ocrmill_send_btn = QPushButton("Send to Process Shipment")
+        self.ocrmill_send_btn = QPushButton("Send to Tariffmill")
+        self.ocrmill_send_btn.setFixedHeight(28)
         self.ocrmill_send_btn.setEnabled(False)
-        self.ocrmill_send_btn.clicked.connect(self.ocrmill_send_to_process_shipment)
-        self._update_send_btn_tooltip()
-        btn_layout.addWidget(self.ocrmill_send_btn)
+        self.ocrmill_send_btn.clicked.connect(self.ocrmill_send_to_tariffmill)
+        self.ocrmill_send_btn.setToolTip("Move CSV files from OCR_Output to Tariffmill_Input")
+        actions_layout.addWidget(self.ocrmill_send_btn)
 
-        processing_layout.addLayout(btn_layout)
+        # Output mode for multi-invoice PDFs
+        output_mode_label = QLabel("Multi-invoice PDFs:")
+        output_mode_label.setStyleSheet("font-weight: bold; margin-top: 5px;")
+        actions_layout.addWidget(output_mode_label)
 
-        # PDF Drop Zone
+        self.ocrmill_output_mode_group = QButtonGroup(self)
+
+        self.ocrmill_split_output_radio = QRadioButton("Split (one CSV per invoice)")
+        self.ocrmill_split_output_radio.setToolTip("Each invoice in the PDF will be saved as a separate CSV file")
+        self.ocrmill_output_mode_group.addButton(self.ocrmill_split_output_radio, 0)
+        actions_layout.addWidget(self.ocrmill_split_output_radio)
+
+        self.ocrmill_single_output_radio = QRadioButton("Combine (all invoices together)")
+        self.ocrmill_single_output_radio.setToolTip("All invoices in the PDF will be combined into one CSV file")
+        self.ocrmill_output_mode_group.addButton(self.ocrmill_single_output_radio, 1)
+        actions_layout.addWidget(self.ocrmill_single_output_radio)
+
+        # Set initial state from config
+        if get_user_setting_bool('ocrmill_consolidate', False):
+            self.ocrmill_single_output_radio.setChecked(True)
+        else:
+            self.ocrmill_split_output_radio.setChecked(True)
+
+        self.ocrmill_output_mode_group.buttonClicked.connect(self.ocrmill_output_mode_changed)
+
+        actions_group.setLayout(actions_layout)
+        left_side.addWidget(actions_group)
+
+        # Finish scroll area setup
+        left_scroll.setWidget(left_scroll_widget)
+        left_outer_layout.addWidget(left_scroll)
+
+        # Set min/max width for left controls
+        left_outer_box.setMinimumWidth(300)
+        left_outer_box.setMaximumWidth(400)
+
+        # Add left_outer_box to splitter
+        splitter.addWidget(left_outer_box)
+
+        # RIGHT SIDE: Activity Log, Results Preview, and Drop Zone
+        right_widget = QWidget()
+        right_side = QVBoxLayout(right_widget)
+        right_side.setContentsMargins(0, 0, 0, 0)
+
+        # PDF Drop Zone at top
         self.ocrmill_drop_zone = PDFDropZone(str(self.ocrmill_config.input_folder))
         self.ocrmill_drop_zone.files_dropped.connect(self.ocrmill_process_dropped_files)
-        processing_layout.addWidget(self.ocrmill_drop_zone)
+        self.ocrmill_drop_zone.setFixedHeight(80)
+        right_side.addWidget(self.ocrmill_drop_zone)
+
+        # Vertical splitter for Activity Log and Results Preview
+        right_splitter = QSplitter(Qt.Vertical)
+        right_splitter.setChildrenCollapsible(False)
 
         # Activity log
         log_group = QGroupBox("Activity Log")
@@ -9681,7 +9761,41 @@ class TariffMill(QMainWindow):
         log_layout.addLayout(log_btn_layout)
 
         log_group.setLayout(log_layout)
-        processing_layout.addWidget(log_group, 1)
+        right_splitter.addWidget(log_group)
+
+        # Results Preview
+        preview_group = QGroupBox("Results Preview")
+        preview_layout = QVBoxLayout()
+
+        self.ocrmill_preview_table = QTableWidget()
+        self.ocrmill_preview_table.setColumnCount(5)
+        self.ocrmill_preview_table.setHorizontalHeaderLabels([
+            "Part Number", "Description", "Quantity", "Unit Price", "Total"
+        ])
+        self.ocrmill_preview_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.ocrmill_preview_table.horizontalHeader().setStretchLastSection(True)
+        self.ocrmill_preview_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.ocrmill_preview_table.setSelectionMode(QTableWidget.ExtendedSelection)
+        self.ocrmill_preview_table.setAlternatingRowColors(True)
+        self.ocrmill_preview_table.verticalHeader().setDefaultSectionSize(22)
+        self.ocrmill_preview_table.verticalHeader().setFixedWidth(30)
+        preview_layout.addWidget(self.ocrmill_preview_table)
+
+        preview_group.setLayout(preview_layout)
+        right_splitter.addWidget(preview_group)
+
+        # Set initial splitter sizes (log: 200, preview: 300)
+        right_splitter.setSizes([200, 300])
+
+        right_side.addWidget(right_splitter, 1)
+
+        # Add right widget to splitter
+        splitter.addWidget(right_widget)
+
+        # Set initial splitter sizes (left: 350, right: remaining)
+        splitter.setSizes([350, 650])
+
+        processing_layout.addWidget(splitter, 1)
 
         self.ocrmill_tabs.addTab(processing_widget, "Invoice Processing")
 
@@ -9730,21 +9844,7 @@ class TariffMill(QMainWindow):
 
         self.ocrmill_tabs.addTab(history_widget, "Parts History")
 
-        # ===== TAB 3: STATISTICS =====
-        stats_widget = QWidget()
-        stats_layout = QVBoxLayout(stats_widget)
-
-        self.ocrmill_stats_text = QPlainTextEdit()
-        self.ocrmill_stats_text.setReadOnly(True)
-        stats_layout.addWidget(self.ocrmill_stats_text, 1)
-
-        refresh_stats_btn = QPushButton("Refresh Statistics")
-        refresh_stats_btn.clicked.connect(self.ocrmill_refresh_stats)
-        stats_layout.addWidget(refresh_stats_btn)
-
-        self.ocrmill_tabs.addTab(stats_widget, "Statistics")
-
-        # ===== TAB 4: TEMPLATES =====
+        # ===== TAB 3: TEMPLATES =====
         templates_widget = QWidget()
         templates_layout = QVBoxLayout(templates_widget)
 
@@ -9796,108 +9896,17 @@ class TariffMill(QMainWindow):
 
         self.ocrmill_tabs.addTab(templates_widget, "Templates")
 
-        # ===== TAB 3: SETTINGS =====
-        settings_widget = QWidget()
-        settings_layout = QVBoxLayout(settings_widget)
-
-        # Folder Settings Group
-        folders_group = QGroupBox("Folder Settings")
-        folders_layout = QFormLayout()
-
-        # Input folder (uses same controls as Invoice Processing tab)
-        settings_input_row = QHBoxLayout()
-        self.ocrmill_settings_input_edit = QLineEdit(str(self.ocrmill_config.input_folder))
-        self.ocrmill_settings_input_edit.setReadOnly(True)
-        settings_input_browse = QPushButton("Browse...")
-        settings_input_browse.clicked.connect(self.ocrmill_settings_browse_input)
-        settings_input_row.addWidget(self.ocrmill_settings_input_edit)
-        settings_input_row.addWidget(settings_input_browse)
-        folders_layout.addRow("Input Folder:", settings_input_row)
-
-        # Output folder
-        settings_output_row = QHBoxLayout()
-        self.ocrmill_settings_output_edit = QLineEdit(str(self.ocrmill_config.output_folder))
-        self.ocrmill_settings_output_edit.setReadOnly(True)
-        settings_output_browse = QPushButton("Browse...")
-        settings_output_browse.clicked.connect(self.ocrmill_settings_browse_output)
-        settings_output_row.addWidget(self.ocrmill_settings_output_edit)
-        settings_output_row.addWidget(settings_output_browse)
-        folders_layout.addRow("Output Folder:", settings_output_row)
-
-        folders_group.setLayout(folders_layout)
-        settings_layout.addWidget(folders_group)
-
-        # Processing Options Group
-        options_group = QGroupBox("Processing Options")
-        options_layout = QFormLayout()
-
-        # Poll interval
-        self.ocrmill_poll_spin = QSpinBox()
-        self.ocrmill_poll_spin.setRange(10, 300)
-        self.ocrmill_poll_spin.setValue(self.ocrmill_config.poll_interval)
-        self.ocrmill_poll_spin.setSuffix(" seconds")
-        self.ocrmill_poll_spin.valueChanged.connect(self.ocrmill_poll_interval_changed)
-        options_layout.addRow("Monitoring Poll Interval:", self.ocrmill_poll_spin)
-
-        # Auto-start monitoring
-        self.ocrmill_autostart_check = QCheckBox("Auto-start monitoring on application launch")
-        self.ocrmill_autostart_check.setChecked(get_user_setting_bool('ocrmill_autostart', False))
-        self.ocrmill_autostart_check.stateChanged.connect(lambda s: set_user_setting('ocrmill_autostart', 'true' if s else 'false'))
-        options_layout.addRow("", self.ocrmill_autostart_check)
-
-        options_group.setLayout(options_layout)
-        settings_layout.addWidget(options_group)
-
-        # Output Mode Group
-        output_mode_group = QGroupBox("Output Mode")
-        output_mode_layout = QVBoxLayout()
-
-        output_mode_label = QLabel("When processing a PDF containing multiple invoices:")
-        output_mode_layout.addWidget(output_mode_label)
-
-        self.ocrmill_output_mode_group = QButtonGroup(self)
-
-        self.ocrmill_split_output_radio = QRadioButton("Split into separate CSV files (one per invoice)")
-        self.ocrmill_split_output_radio.setToolTip("Each invoice in the PDF will be saved as a separate CSV file")
-        self.ocrmill_output_mode_group.addButton(self.ocrmill_split_output_radio, 0)
-        output_mode_layout.addWidget(self.ocrmill_split_output_radio)
-
-        self.ocrmill_single_output_radio = QRadioButton("Combine into single CSV file (all invoices together)")
-        self.ocrmill_single_output_radio.setToolTip("All invoices in the PDF will be combined into one CSV file")
-        self.ocrmill_output_mode_group.addButton(self.ocrmill_single_output_radio, 1)
-        output_mode_layout.addWidget(self.ocrmill_single_output_radio)
-
-        # Set initial state from config
-        if get_user_setting_bool('ocrmill_consolidate', False):
-            self.ocrmill_single_output_radio.setChecked(True)
-        else:
-            self.ocrmill_split_output_radio.setChecked(True)
-
-        self.ocrmill_output_mode_group.buttonClicked.connect(self.ocrmill_output_mode_changed)
-
-        output_mode_group.setLayout(output_mode_layout)
-        settings_layout.addWidget(output_mode_group)
-
-        # Info label
-        info_label = QLabel(
-            "OCRMill processes PDF invoices and extracts line items with HTS codes.\n"
-            "Configure folders and processing options above."
-        )
-        info_label.setStyleSheet("color: #666666; font-style: italic;")
-        settings_layout.addWidget(info_label)
-
-        settings_layout.addStretch()
-        self.ocrmill_tabs.addTab(settings_widget, "Settings")
-
         layout.addWidget(self.ocrmill_tabs, 1)
 
-        # Store extracted items for "Send to Process Shipment"
+        # Store extracted items for "Send to Tariffmill"
         self.ocrmill_last_items = []
-
-        self.tab_ocrmill.setLayout(layout)
 
         # Initial log message
         self.ocrmill_log("OCRMill initialized. Ready to process PDF invoices.")
+
+        # Initial file list refresh
+        self.ocrmill_refresh_input_files()
+        self.ocrmill_refresh_output_files()
 
     def ocrmill_log(self, message: str):
         """Add a message to the OCRMill activity log."""
@@ -9916,6 +9925,7 @@ class TariffMill(QMainWindow):
             self.ocrmill_drop_zone.set_browse_folder(folder_str)
             set_user_setting('ocrmill_input_folder', folder_str)
             self.ocrmill_log(f"Input folder set to: {folder_str}")
+            self.ocrmill_refresh_input_files()
 
     def ocrmill_browse_output_folder(self):
         """Browse for output folder."""
@@ -9928,40 +9938,139 @@ class TariffMill(QMainWindow):
             self.ocrmill_output_edit.setText(folder_str)
             set_user_setting('ocrmill_output_folder', folder_str)
             self.ocrmill_log(f"Output folder set to: {folder_str}")
-            self._update_send_btn_tooltip()
+            self.ocrmill_refresh_output_files()
 
-    def ocrmill_settings_browse_input(self):
-        """Browse for input folder from Settings tab."""
-        folder = QFileDialog.getExistingDirectory(self, "Select Input Folder", str(self.ocrmill_config.input_folder))
-        if folder:
-            folder_path = Path(folder)
-            folder_str = str(folder_path)
-            self.ocrmill_config.input_folder = folder_path
-            # Update both the Settings tab and Invoice Processing tab
-            self.ocrmill_settings_input_edit.setText(folder_str)
-            self.ocrmill_input_edit.setText(folder_str)
-            self.ocrmill_drop_zone.set_browse_folder(folder_str)
-            set_user_setting('ocrmill_input_folder', folder_str)
-            self.ocrmill_log(f"Input folder set to: {folder_str}")
+    def ocrmill_refresh_input_files(self):
+        """Refresh the input files list with PDFs from the input folder."""
+        try:
+            self.ocrmill_input_files_list.clear()
+            input_folder = self.ocrmill_config.input_folder
+            if input_folder.exists():
+                # Get PDF files sorted by modification time (newest first)
+                pdf_files = sorted(
+                    input_folder.glob("*.pdf"),
+                    key=lambda f: f.stat().st_mtime,
+                    reverse=True
+                )
+                for f in pdf_files:
+                    self.ocrmill_input_files_list.addItem(f.name)
+        except Exception as e:
+            logger.warning(f"Failed to refresh OCRMill input files: {e}")
 
-    def ocrmill_settings_browse_output(self):
-        """Browse for output folder from Settings tab."""
-        folder = QFileDialog.getExistingDirectory(self, "Select Output Folder", str(self.ocrmill_config.output_folder))
-        if folder:
-            folder_path = Path(folder)
-            folder_str = str(folder_path)
-            self.ocrmill_config.output_folder = folder_path
-            # Update both the Settings tab and Invoice Processing tab
-            self.ocrmill_settings_output_edit.setText(folder_str)
-            self.ocrmill_output_edit.setText(folder_str)
-            set_user_setting('ocrmill_output_folder', folder_str)
-            self.ocrmill_log(f"Output folder set to: {folder_str}")
-            self._update_send_btn_tooltip()
+    def ocrmill_refresh_output_files(self):
+        """Refresh the output files list with CSVs from the output folder."""
+        try:
+            self.ocrmill_output_files_list.clear()
+            output_folder = self.ocrmill_config.output_folder
+            if output_folder.exists():
+                # Get CSV files sorted by modification time (newest first)
+                csv_files = sorted(
+                    output_folder.glob("*.csv"),
+                    key=lambda f: f.stat().st_mtime,
+                    reverse=True
+                )
+                for f in csv_files:
+                    self.ocrmill_output_files_list.addItem(f.name)
+                # Enable Send button if there are CSV files to send
+                self.ocrmill_send_btn.setEnabled(len(csv_files) > 0)
+            else:
+                self.ocrmill_send_btn.setEnabled(False)
+        except Exception as e:
+            logger.warning(f"Failed to refresh OCRMill output files: {e}")
 
-    def ocrmill_poll_interval_changed(self, value):
-        """Handle poll interval change."""
-        self.ocrmill_config.poll_interval = value
-        set_user_setting('ocrmill_poll_interval', str(value))
+    def ocrmill_open_input_file(self, item):
+        """Open the selected input PDF file."""
+        if not item:
+            return
+        file_path = self.ocrmill_config.input_folder / item.text()
+        if file_path.exists():
+            try:
+                import subprocess
+                import sys
+                if sys.platform == 'win32':
+                    os.startfile(str(file_path))
+                elif sys.platform == 'darwin':
+                    subprocess.run(['open', str(file_path)])
+                else:
+                    subprocess.run(['xdg-open', str(file_path)])
+                self.ocrmill_log(f"Opened: {item.text()}")
+            except Exception as e:
+                self.ocrmill_log(f"Failed to open file: {e}")
+
+    def ocrmill_open_output_file(self, item):
+        """Open the selected output CSV file."""
+        if not item:
+            return
+        file_path = self.ocrmill_config.output_folder / item.text()
+        if file_path.exists():
+            try:
+                import subprocess
+                import sys
+                if sys.platform == 'win32':
+                    os.startfile(str(file_path))
+                elif sys.platform == 'darwin':
+                    subprocess.run(['open', str(file_path)])
+                else:
+                    subprocess.run(['xdg-open', str(file_path)])
+                self.ocrmill_log(f"Opened: {item.text()}")
+            except Exception as e:
+                self.ocrmill_log(f"Failed to open file: {e}")
+
+    def ocrmill_preview_output_file(self, item):
+        """Load the selected output CSV file into the Results Preview table."""
+        if not item:
+            return
+        file_path = self.ocrmill_config.output_folder / item.text()
+        if not file_path.exists():
+            return
+
+        try:
+            import csv
+            with open(file_path, 'r', newline='', encoding='utf-8') as f:
+                reader = csv.reader(f)
+                rows = list(reader)
+
+            if not rows:
+                self.ocrmill_preview_table.setRowCount(0)
+                return
+
+            # First row is header
+            headers = rows[0] if rows else []
+            data_rows = rows[1:] if len(rows) > 1 else []
+
+            # Update table columns based on CSV headers
+            self.ocrmill_preview_table.setColumnCount(len(headers))
+            self.ocrmill_preview_table.setHorizontalHeaderLabels(headers)
+            self.ocrmill_preview_table.setRowCount(len(data_rows))
+
+            # Populate table
+            for row_idx, row_data in enumerate(data_rows):
+                for col_idx, cell_value in enumerate(row_data):
+                    item_widget = QTableWidgetItem(str(cell_value))
+                    self.ocrmill_preview_table.setItem(row_idx, col_idx, item_widget)
+
+            # Resize columns to content
+            self.ocrmill_preview_table.resizeColumnsToContents()
+
+            # Limit Description column (index 1) to ~50 characters wide but keep it expandable
+            if len(headers) > 1:
+                desc_col_idx = None
+                for i, h in enumerate(headers):
+                    if h.lower() == 'description':
+                        desc_col_idx = i
+                        break
+                if desc_col_idx is not None:
+                    # Approximate 50 characters at ~7 pixels per character
+                    max_width = 350
+                    if self.ocrmill_preview_table.columnWidth(desc_col_idx) > max_width:
+                        self.ocrmill_preview_table.setColumnWidth(desc_col_idx, max_width)
+
+            self.ocrmill_log(f"Preview loaded: {item.text()} ({len(data_rows)} rows)")
+
+        except Exception as e:
+            logger.error(f"Failed to preview file {file_path}: {e}")
+            self.ocrmill_log(f"Failed to preview file: {e}")
+
 
     def ocrmill_output_mode_changed(self, button):
         """Handle output mode radio button change."""
@@ -10008,7 +10117,7 @@ class TariffMill(QMainWindow):
         if items:
             self.ocrmill_last_items = items
             self.ocrmill_send_btn.setEnabled(True)
-            self.ocrmill_log(f"Extracted {len(items)} items. Ready to send to Process Shipment.")
+            self.ocrmill_log(f"Extracted {len(items)} items. Ready to send to Tariffmill.")
         else:
             self.ocrmill_log("No items extracted from file.")
 
@@ -10049,7 +10158,6 @@ class TariffMill(QMainWindow):
             self.ocrmill_last_items = all_items
             self.ocrmill_send_btn.setEnabled(True)
             self.ocrmill_refresh_history()
-            self.ocrmill_refresh_stats()
 
     def ocrmill_process_folder_now(self):
         """Process all PDFs in the input folder immediately using parallel processing."""
@@ -10084,13 +10192,11 @@ class TariffMill(QMainWindow):
         """Handle completion of parallel folder processing."""
         self.ocrmill_log(f"Folder processing complete: {total_items} total items")
         self.ocrmill_refresh_history()
-        self.ocrmill_refresh_stats()
 
     def ocrmill_on_processing_finished(self, item_count: int):
         """Handle completion of batch processing."""
         self.ocrmill_log(f"Processing complete: {item_count} items extracted")
         self.ocrmill_refresh_history()
-        self.ocrmill_refresh_stats()
 
     def ocrmill_on_items_extracted(self, items: list):
         """Handle extracted items from worker."""
@@ -10098,104 +10204,59 @@ class TariffMill(QMainWindow):
             self.ocrmill_last_items = items
             self.ocrmill_send_btn.setEnabled(True)
 
-    def _update_send_btn_tooltip(self):
-        """Update the Send to Process Shipment button tooltip with current output folder."""
-        output_folder = str(self.ocrmill_config.output_folder)
-        self.ocrmill_send_btn.setToolTip(
-            f"Send extracted items to Process Shipment tab\n"
-            f"CSV Output Folder: {output_folder}"
-        )
+    def ocrmill_send_to_tariffmill(self):
+        """Move CSV files from OCR_Output to Tariffmill_Input folder."""
+        # Get the OCRMill output folder (where CSV files are saved)
+        ocr_output = self.ocrmill_config.output_folder
+        tariffmill_input = INPUT_DIR
 
-    def ocrmill_send_to_process_shipment(self):
-        """Send extracted items to the Process Shipment tab."""
-        if not self.ocrmill_last_items:
-            QMessageBox.information(self, "No Items", "No extracted items to send.")
+        # Find all CSV files in OCR_Output
+        csv_files = list(ocr_output.glob("*.csv"))
+
+        if not csv_files:
+            QMessageBox.information(self, "No Files", "No CSV files found in OCR_Output folder.")
             return
 
-        # Get the OCRMill output folder (where CSV files are saved)
-        ocrmill_output = str(self.ocrmill_config.output_folder)
+        # Ensure Tariffmill_Input exists
+        tariffmill_input.mkdir(parents=True, exist_ok=True)
 
-        # Check if a folder profile exists with matching input folder (pointing to OCRMill output)
-        matching_profile = None
-        try:
-            conn = sqlite3.connect(str(DB_PATH))
-            c = conn.cursor()
-            c.execute("SELECT profile_name, input_folder, output_folder FROM folder_profiles")
-            for row in c.fetchall():
-                profile_name, input_folder, output_folder = row
-                # Check if input folder matches OCRMill output (Process Shipment reads from there)
-                if input_folder and os.path.normpath(input_folder) == os.path.normpath(ocrmill_output):
-                    matching_profile = profile_name
-                    break
-            conn.close()
-        except Exception as e:
-            logger.warning(f"Failed to check folder profiles: {e}")
+        moved_count = 0
+        errors = []
 
-        # If no matching profile, offer to create one
-        if not matching_profile:
-            reply = QMessageBox.question(
-                self, "Folder Profile Not Found",
-                f"No folder profile is configured to read from OCRMill's output folder:\n"
-                f"{ocrmill_output}\n\n"
-                f"Would you like to create an 'OCRMill' folder profile automatically?\n\n"
-                f"This will configure Process Shipment to read CSV files from OCRMill's output.",
-                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
-                QMessageBox.Yes
-            )
+        for csv_file in csv_files:
+            try:
+                dest_path = tariffmill_input / csv_file.name
+                # If file exists at destination, add a number suffix
+                if dest_path.exists():
+                    base = csv_file.stem
+                    ext = csv_file.suffix
+                    counter = 1
+                    while dest_path.exists():
+                        dest_path = tariffmill_input / f"{base}_{counter}{ext}"
+                        counter += 1
 
-            if reply == QMessageBox.Cancel:
-                return
-            elif reply == QMessageBox.Yes:
-                # Create OCRMill folder profile
-                try:
-                    conn = sqlite3.connect(str(DB_PATH))
-                    c = conn.cursor()
-                    # Input = OCRMill output (where CSVs are saved)
-                    # Output = same folder for processed exports
-                    c.execute("""INSERT OR REPLACE INTO folder_profiles
-                                (profile_name, input_folder, output_folder, created_date)
-                                VALUES (?, ?, ?, ?)""",
-                             ('OCRMill', ocrmill_output, ocrmill_output, datetime.now().isoformat()))
-                    conn.commit()
-                    conn.close()
+                shutil.move(str(csv_file), str(dest_path))
+                moved_count += 1
+                self.ocrmill_log(f"Moved: {csv_file.name} -> {dest_path.name}")
+            except Exception as e:
+                errors.append(f"{csv_file.name}: {e}")
+                logger.error(f"Failed to move {csv_file}: {e}")
 
-                    matching_profile = 'OCRMill'
-                    self.load_folder_profiles()  # Refresh the dropdown
-                    self.ocrmill_log("Created 'OCRMill' folder profile")
-                    logger.info(f"Created OCRMill folder profile: input={ocrmill_output}, output={ocrmill_output}")
-                except Exception as e:
-                    logger.error(f"Failed to create OCRMill folder profile: {e}")
-                    QMessageBox.critical(self, "Error", f"Failed to create folder profile: {e}")
-                    return
-            else:
-                # User chose No - still switch tabs but warn about folder mismatch
-                pass
+        # Refresh file lists
+        self.ocrmill_refresh_output_files()
+        self.refresh_input_files()
 
         # Switch to Process Shipment tab
         self.tabs.setCurrentIndex(0)
 
-        # Select the matching folder profile if found/created
-        if matching_profile:
-            idx = self.folder_profile_combo.findText(matching_profile)
-            if idx >= 0:
-                self.folder_profile_combo.setCurrentIndex(idx)
-                self.ocrmill_log(f"Selected folder profile: {matching_profile}")
-
-        # Refresh input files to show the OCRMill CSV output
-        self.refresh_input_files()
-
-        self.ocrmill_log(f"Sent {len(self.ocrmill_last_items)} items to Process Shipment tab")
-
-        if matching_profile:
-            QMessageBox.information(self, "Items Sent",
-                f"Sent {len(self.ocrmill_last_items)} items to Process Shipment.\n\n"
-                f"Folder profile '{matching_profile}' is now selected.\n"
-                f"CSV files from OCRMill are available in the Input Files list.")
+        if errors:
+            QMessageBox.warning(self, "Files Moved with Errors",
+                f"Moved {moved_count} of {len(csv_files)} files to Tariffmill_Input.\n\n"
+                f"Errors:\n" + "\n".join(errors))
         else:
-            QMessageBox.warning(self, "Items Sent",
-                f"Sent {len(self.ocrmill_last_items)} items to Process Shipment.\n\n"
-                f"Warning: No folder profile is configured for OCRMill output.\n"
-                f"Select a folder profile or create one to see the CSV files.")
+            QMessageBox.information(self, "Files Moved",
+                f"Moved {moved_count} CSV file(s) to Tariffmill_Input.\n\n"
+                f"Destination: {tariffmill_input}")
 
     def ocrmill_refresh_history(self):
         """Refresh the parts history table."""
@@ -10267,30 +10328,7 @@ class TariffMill(QMainWindow):
             items = self.ocrmill_db.get_parts_by_invoice(invoice_number)
             if items:
                 self.ocrmill_last_items = items
-                self.ocrmill_send_to_process_shipment()
-
-    def ocrmill_refresh_stats(self):
-        """Refresh the statistics display."""
-        stats = self.ocrmill_db.get_statistics()
-
-        stats_text = f"""
-OCRMill Database Statistics
-{'='*50}
-
-Total Unique Parts: {stats['total_parts']:,}
-Total Part Occurrences: {stats['total_occurrences']:,}
-Total Invoices Processed: {stats['total_invoices']:,}
-Total Projects: {stats['total_projects']:,}
-Total Value Processed: ${stats['total_value']:,.2f}
-
-HTS Code Coverage:
-  Parts with HTS Codes: {stats['parts_with_hts']:,}
-  Coverage: {stats['hts_coverage_pct']:.1f}%
-
-{'='*50}
-Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-"""
-        self.ocrmill_stats_text.setPlainText(stats_text)
+                self.ocrmill_send_to_tariffmill()
 
     def ocrmill_refresh_templates(self):
         """Refresh the templates list by re-scanning the templates directory."""
@@ -14553,7 +14591,17 @@ Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         
         # Run cleanup once on startup
         QTimer.singleShot(5000, self.cleanup_old_exports)  # Wait 5 seconds after startup
-        
+
+        # Auto-refresh OCRMill input files every 10 seconds
+        self.ocrmill_input_refresh_timer = QTimer(self)
+        self.ocrmill_input_refresh_timer.timeout.connect(self.ocrmill_refresh_input_files_light)
+        self.ocrmill_input_refresh_timer.start(10000)  # 10000ms = 10 seconds
+
+        # Auto-refresh OCRMill output files every 10 seconds
+        self.ocrmill_output_refresh_timer = QTimer(self)
+        self.ocrmill_output_refresh_timer.timeout.connect(self.ocrmill_refresh_output_files_light)
+        self.ocrmill_output_refresh_timer.start(10000)  # 10000ms = 10 seconds
+
         logger.info("Auto-refresh enabled for file lists (10 second interval)")
     
     def refresh_input_files_light(self):
@@ -14585,52 +14633,91 @@ Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             self.refresh_exported_files()
         except:
             pass  # Silently ignore errors during auto-refresh
-    
+
+    def ocrmill_refresh_input_files_light(self):
+        """Lightweight refresh - only update if on OCRMill tab's Invoice Processing sub-tab"""
+        try:
+            # Only refresh if on OCRMill tab (tab index 2)
+            if self.tabs.currentIndex() != 2:
+                return
+
+            # Only refresh if on Invoice Processing sub-tab (tab index 0)
+            if hasattr(self, 'ocrmill_tabs') and self.ocrmill_tabs.currentIndex() != 0:
+                return
+
+            if not self.ocrmill_config.input_folder.exists():
+                return
+
+            # Always refresh - directory mtime is unreliable on network drives
+            self.ocrmill_refresh_input_files()
+        except:
+            pass  # Silently ignore errors during auto-refresh
+
+    def ocrmill_refresh_output_files_light(self):
+        """Lightweight refresh - only update if on OCRMill tab's Invoice Processing sub-tab"""
+        try:
+            # Only refresh if on OCRMill tab (tab index 2)
+            if self.tabs.currentIndex() != 2:
+                return
+
+            # Only refresh if on Invoice Processing sub-tab (tab index 0)
+            if hasattr(self, 'ocrmill_tabs') and self.ocrmill_tabs.currentIndex() != 0:
+                return
+
+            if not self.ocrmill_config.output_folder.exists():
+                return
+
+            # Always refresh - directory mtime is unreliable on network drives
+            self.ocrmill_refresh_output_files()
+        except:
+            pass  # Silently ignore errors during auto-refresh
+
     def cleanup_old_exports(self):
-        """Move exported files older than 3 days to Output/Processed directory"""
+        """Move exported files older than 3 days to Output_Processed directory"""
         try:
             if not OUTPUT_DIR.exists():
                 return
-            
-            # Ensure Output/Processed directory exists
-            OUTPUT_PROCESSED_DIR.mkdir(exist_ok=True)
-            
+
+            # Get the processed directory for output (sibling folder named {OutputDir}_Processed)
+            output_processed_dir = get_processed_dir(OUTPUT_DIR)
+            output_processed_dir.mkdir(exist_ok=True)
+
             from datetime import datetime, timedelta
             cutoff_date = datetime.now() - timedelta(days=3)
             moved_count = 0
-            
+
             # Process all .xlsx files in Output directory
             for file_path in OUTPUT_DIR.glob("*.xlsx"):
                 try:
                     # Skip if it's a directory
                     if file_path.is_dir():
                         continue
-                    
+
                     # Get file modification time
                     file_mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
-                    
+
                     # Move if older than 3 days
                     if file_mtime < cutoff_date:
-                        dest_path = OUTPUT_PROCESSED_DIR / file_path.name
-                        
+                        dest_path = output_processed_dir / file_path.name
+
                         # Handle duplicate filenames
                         if dest_path.exists():
                             base_name = file_path.stem
                             ext = file_path.suffix
                             counter = 1
                             while dest_path.exists():
-                                dest_path = OUTPUT_PROCESSED_DIR / f"{base_name}_{counter}{ext}"
+                                dest_path = output_processed_dir / f"{base_name}_{counter}{ext}"
                                 counter += 1
-                        
+
                         # Move the file
                         shutil.move(str(file_path), str(dest_path))
                         moved_count += 1
                         logger.info(f"Moved old export to Processed: {file_path.name}")
                 except Exception as e:
                     logger.warning(f"Failed to move {file_path.name}: {e}")
-            
+
             if moved_count > 0:
-                logger.info(f"Cleanup: Moved {moved_count} exported file(s) older than 3 days to Output/Processed")
+                logger.info(f"Cleanup: Moved {moved_count} exported file(s) older than 3 days to {output_processed_dir}")
                 # Refresh the exported files list if we're on the Process Shipment tab
                 if self.tabs.currentIndex() == 0:
                     self.refresh_exported_files()
