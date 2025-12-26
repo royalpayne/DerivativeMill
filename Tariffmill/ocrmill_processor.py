@@ -14,7 +14,7 @@ try:
 except ImportError:
     pdfplumber = None
 
-from templates import get_all_templates
+from templates import get_all_templates, refresh_templates
 from templates.bill_of_lading import BillOfLadingTemplate
 
 
@@ -62,6 +62,7 @@ class ProcessorEngine:
 
     def reload_templates(self):
         """Reload templates from disk. Call after adding/removing template files."""
+        refresh_templates()  # Force re-discovery from disk
         self._load_templates()
         self.log(f"Reloaded {len(self.templates)} templates")
 
@@ -250,8 +251,12 @@ class ProcessorEngine:
                     _, _, items = template.extract_all(buffer_text)
                     self.log(f"  Template extracted {len(items)} line items from buffer")
                     for item in items:
-                        item['invoice_number'] = current_invoice or 'UNKNOWN'
-                        item['project_number'] = current_project or 'UNKNOWN'
+                        # Only set invoice_number if template didn't already provide one
+                        if not item.get('invoice_number') or item.get('invoice_number') == 'UNKNOWN':
+                            item['invoice_number'] = current_invoice or 'UNKNOWN'
+                        # Only set project_number if template didn't already provide one
+                        if not item.get('project_number') or item.get('project_number') == 'UNKNOWN':
+                            item['project_number'] = current_project or 'UNKNOWN'
                         if bol_weight:
                             item['bol_gross_weight'] = bol_weight
                         if bol_weight and ('net_weight' not in item or not item.get('net_weight')):
@@ -338,7 +343,7 @@ class ProcessorEngine:
 
         # Determine columns from items with specific ordering
         columns = ['invoice_number', 'project_number', 'part_number', 'description',
-                   'mid', 'country_origin', 'hts_code', 'quantity', 'total_price']
+                   'mid', 'country_origin', 'hts_code', 'quantity', 'quantity_unit', 'total_price']
 
         for item in items:
             for key in item.keys():

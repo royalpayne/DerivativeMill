@@ -82,7 +82,7 @@ import urllib.error
 import xml.etree.ElementTree as ET
 from xml.dom import minidom
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from threading import Thread
 import pandas as pd
 import sqlite3
@@ -884,6 +884,50 @@ def get_user_setting_float(key, default=0.0):
     except (ValueError, TypeError):
         return default
 
+def get_db_config(key, default=None):
+    """
+    Get a value from app_config table in the database.
+
+    Args:
+        key: Config key (e.g., 'last_folder_profile', 'last_map_profile')
+        default: Default value if key doesn't exist
+
+    Returns:
+        The stored value or default
+    """
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        c = conn.cursor()
+        c.execute("SELECT value FROM app_config WHERE key = ?", (key,))
+        row = c.fetchone()
+        conn.close()
+        return row[0] if row else default
+    except Exception as e:
+        logger.warning(f"Failed to get db config {key}: {e}")
+        return default
+
+def set_db_config(key, value):
+    """
+    Set a value in app_config table in the database.
+
+    Args:
+        key: Config key
+        value: Value to store
+
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        c = conn.cursor()
+        c.execute("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)", (key, str(value)))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        logger.warning(f"Failed to set db config {key}: {e}")
+        return False
+
 def get_theme_color_key(base_key, theme_name=None):
     """
     Generate a theme-specific color settings key.
@@ -1104,6 +1148,32 @@ def init_database():
             input_folder TEXT,
             output_folder TEXT,
             created_date TEXT
+        )""")
+
+        # Create billing_records table for tracking exports and generating invoices
+        c.execute("""CREATE TABLE IF NOT EXISTS billing_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_number TEXT NOT NULL,
+            export_date TEXT NOT NULL,
+            export_time TEXT NOT NULL,
+            file_name TEXT,
+            line_count INTEGER DEFAULT 0,
+            total_value REAL DEFAULT 0.0,
+            hts_codes_used TEXT,
+            folder_profile TEXT,
+            map_profile TEXT,
+            mid TEXT,
+            user_name TEXT,
+            machine_id TEXT,
+            processing_time_ms INTEGER DEFAULT 0,
+            invoice_sent INTEGER DEFAULT 0,
+            invoice_month TEXT
+        )""")
+
+        # Create billing_settings table for email and rate configuration
+        c.execute("""CREATE TABLE IF NOT EXISTS billing_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
         )""")
 
         # Migration: Add manufacturer_name and customer_id columns to mid_table if they don't exist
@@ -2145,8 +2215,9 @@ class TariffMill(QMainWindow):
         # Hide window during initialization to prevent ghost window flash
         self.setAttribute(Qt.WA_DontShowOnScreen, True)
         self.setWindowTitle(APP_NAME)
-        # Compact default size - fully scalable with minimum constraint to prevent shrinking
-        self.setGeometry(50, 50, 1200, 700)
+        # Set window size to 100% of available screen dimensions
+        screen = QApplication.primaryScreen().availableGeometry()
+        self.setGeometry(screen)
         self.setMinimumSize(800, 500)
 
         # Install application-level event filter to intercept ALL keyboard events
@@ -2550,6 +2621,11 @@ class TariffMill(QMainWindow):
         self.refresh_input_btn.setFixedHeight(25)
         self.refresh_input_btn.clicked.connect(self.refresh_input_files)
 
+        self.delete_input_btn = QPushButton("Delete")
+        self.delete_input_btn.setFixedHeight(25)
+        self.delete_input_btn.clicked.connect(self.delete_selected_input_file)
+        self.delete_input_btn.setToolTip("Delete selected input file")
+
         # INVOICE VALUES
         values_group = QGroupBox("Invoice Values")
         values_layout = QFormLayout()
@@ -2574,6 +2650,14 @@ class TariffMill(QMainWindow):
         self.mid_combo.setFocusPolicy(Qt.StrongFocus)  # Ensure combo accepts keyboard focus
         self.mid_combo.currentTextChanged.connect(self.on_mid_changed)
         values_layout.addRow(self.mid_label, self.mid_combo)
+
+        # File Number (mandatory billing reference)
+        self.file_number_input = ForceEditableLineEdit("")
+        self.file_number_input.setObjectName("file_number_input")
+        self.file_number_input.setPlaceholderText("Enter file number (required)...")
+        self.file_number_input.setToolTip("Billing reference number - required for export")
+        self.file_number_input.textChanged.connect(self.update_invoice_check)
+        values_layout.addRow("File Number *:", self.file_number_input)
 
         # TODO: Customer Reference - To be implemented with XML export at a later date
         # # Customer Reference Number (for XML export)
@@ -2640,9 +2724,14 @@ class TariffMill(QMainWindow):
         self.profile_combo = QComboBox()
         self.profile_combo.currentTextChanged.connect(self.load_selected_profile)
         file_layout.addRow("Map Profile:", self.profile_combo)
-        # Input files list and refresh button (moved here)
+        # Input files list and refresh/delete buttons (moved here)
         file_layout.addRow("Input Files:", self.input_files_list)
-        file_layout.addRow("", self.refresh_input_btn)
+        input_btn_layout = QHBoxLayout()
+        input_btn_layout.setSpacing(5)
+        input_btn_layout.addWidget(self.refresh_input_btn)
+        input_btn_layout.addWidget(self.delete_input_btn)
+        input_btn_layout.addStretch()
+        file_layout.addRow("", input_btn_layout)
         # File display (read-only, shows selected file from Input Files list)
         self.file_label = QLabel("No file selected")
         self.file_label.setWordWrap(True)
@@ -2811,13 +2900,14 @@ class TariffMill(QMainWindow):
 
         # Set up tab order for keyboard navigation through controls
         # Order: Map Profile → Input Files → Refresh (Shipment) → CI Value → Net Weight →
-        #        MID → Process Invoice → Edit Values → Clear All → Exported Files → Refresh (Exports)
+        #        MID → File Number → Process Invoice → Edit Values → Clear All → Exported Files → Refresh (Exports)
         self.setTabOrder(self.profile_combo, self.input_files_list)
         self.setTabOrder(self.input_files_list, self.refresh_input_btn)
         self.setTabOrder(self.refresh_input_btn, self.ci_input)
         self.setTabOrder(self.ci_input, self.wt_input)
         self.setTabOrder(self.wt_input, self.mid_combo)
-        self.setTabOrder(self.mid_combo, self.process_btn)
+        self.setTabOrder(self.mid_combo, self.file_number_input)
+        self.setTabOrder(self.file_number_input, self.process_btn)
         self.setTabOrder(self.process_btn, self.edit_values_btn)
         self.setTabOrder(self.edit_values_btn, self.clear_btn)
         self.setTabOrder(self.clear_btn, self.exports_list)
@@ -3282,6 +3372,11 @@ class TariffMill(QMainWindow):
         tabs.addTab(tab_output_map, "Output Mapping")
         tabs.addTab(tab_import, "Parts Import")
         tabs.addTab(tab_mid_management, "MID Management")
+
+        # Add Billing tab
+        tab_billing = QWidget()
+        self.setup_billing_tab(tab_billing)
+        tabs.addTab(tab_billing, "Billing")
 
         # Set initial tab if specified
         if initial_tab > 0 and initial_tab < tabs.count():
@@ -6088,6 +6183,15 @@ class TariffMill(QMainWindow):
             QMessageBox.warning(self, "MID Required", "Please select a MID (Manufacturer ID) before processing.")
             return
 
+        # Verify File Number is entered (mandatory for billing)
+        file_number = self.file_number_input.text().strip() if hasattr(self, 'file_number_input') else ""
+        if not file_number:
+            self.file_number_input.setStyleSheet("border: 2px solid #ff4444; background-color: #ffebee;")
+            QTimer.singleShot(1200, lambda: self.file_number_input.setStyleSheet(""))
+            self.file_number_input.setFocus()
+            QMessageBox.warning(self, "File Number Required", "Please enter a File Number before processing.\n\nThis is required for billing purposes.")
+            return
+
         self.process_btn.setEnabled(False)
         self.progress.setVisible(True)
         self.progress.setRange(0, 0)
@@ -6443,8 +6547,24 @@ class TariffMill(QMainWindow):
         logger.info(f"Row expansion: {original_row_count} → {len(expanded_rows)} rows (steel/aluminum/copper/wood/auto/non-232 split)")
 
         # Now calculate CalcWtNet based on expanded rows
+        # If net_weight column exists and has values, use those directly
+        # Otherwise, calculate proportionally based on value
         total_value = df['value_usd'].sum()
-        if total_value == 0:
+        if 'net_weight' in df.columns:
+            # Use invoice-provided net_weight where available, fall back to calculated
+            def get_weight(row):
+                nw = row.get('net_weight', '')
+                if pd.notna(nw) and str(nw).strip():
+                    try:
+                        return float(str(nw).replace(',', '').strip())
+                    except (ValueError, TypeError):
+                        pass
+                # Fall back to proportional calculation
+                if total_value > 0:
+                    return (row['value_usd'] / total_value) * wt
+                return 0.0
+            df['CalcWtNet'] = df.apply(get_weight, axis=1)
+        elif total_value == 0:
             df['CalcWtNet'] = 0.0
         else:
             df['CalcWtNet'] = (df['value_usd'] / total_value) * wt
@@ -6465,9 +6585,10 @@ class TariffMill(QMainWindow):
 
         # Dual units: first quantity is count, second is weight (Qty1 = count, Qty2 = weight)
         # Includes NO. AND KG and metal+weight combinations
-        DUAL_UNITS = {'NO. AND KG', 'NO/KG', 'NO\\KG',
+        DUAL_UNITS = {'NO. AND KG', 'NO/KG', 'NO\\KG', 'NO., KG', 'NO. KG', 'NO KG',
                       'CU KG', 'CY KG', 'NI KG', 'PB KG', 'ZN KG', 'KG AMC',
-                      'AG G', 'AU G', 'IR G', 'OS G', 'PD G', 'PT G', 'RH G', 'RU G'}
+                      'AG G', 'AU G', 'IR G', 'OS G', 'PD G', 'PT G', 'RH G', 'RU G',
+                      'DOZ., KG', 'DOZ. KG', 'DOZ KG', 'PRS., KG', 'PRS. KG', 'PRS KG'}
 
         # Volume/Area/Length units (use quantity from invoice)
         MEASURE_UNITS = {'LITERS', 'PF.LITERS', 'BBL', 'M', 'LIN. M', 'M2', 'CM2', 'M3',
@@ -6485,9 +6606,10 @@ class TariffMill(QMainWindow):
             if qty_unit in NO_QTY_UNITS:
                 return ''
 
-            # Weight-only units: Qty1 is net weight
+            # Weight-only units: Qty1 is net weight (minimum 1 KG)
             if qty_unit in WEIGHT_UNITS:
-                return str(int(round(row['CalcWtNet']))) if row['CalcWtNet'] > 0 else ''
+                wt = int(round(row['CalcWtNet']))
+                return str(max(wt, 1))  # Minimum 1 KG
 
             # Count-only units: Qty1 is piece count from invoice
             if qty_unit in COUNT_UNITS:
@@ -6504,9 +6626,23 @@ class TariffMill(QMainWindow):
                 qty = row.get('quantity', '')
                 if pd.notna(qty) and str(qty).strip():
                     try:
-                        return str(int(float(str(qty).replace(',', '').strip())))
+                        qty_val = float(str(qty).replace(',', '').strip())
+                        # Preserve 2 decimal places for dozen-based units (DOZ., KG etc.)
+                        if 'DOZ' in qty_unit:
+                            return f"{qty_val:.2f}"
+                        # For NO-based units, if qty appears to be in dozens (< 100 and has decimals),
+                        # it may need conversion. Check quantity_unit from invoice to determine.
+                        qty_unit_invoice = str(row.get('quantity_unit', '')).strip().upper()
+                        if 'NO' in qty_unit and qty_unit_invoice == 'DOZ':
+                            # Invoice reported in dozens, convert to pieces
+                            qty_val = qty_val * 12
+                        result = max(int(qty_val), 1)  # Minimum 1 piece
+                        return str(result)
                     except (ValueError, TypeError):
                         return ''
+                # If no quantity, return minimum of 1 for NO-based units
+                if 'NO' in qty_unit:
+                    return '1'
                 return ''
 
             # Measure units: Use quantity from invoice if available
@@ -6569,11 +6705,10 @@ class TariffMill(QMainWindow):
                     return str(int(round(calc_wt)))
                 return ''
 
-            # Dual units: Qty2 is net weight
+            # Dual units: Qty2 is net weight (minimum 1 KG)
             if qty_unit in DUAL_UNITS:
-                if calc_wt > 0:
-                    return str(int(round(calc_wt)))
-                return ''
+                wt = int(round(calc_wt))
+                return str(max(wt, 1))  # Minimum 1 KG
 
             # All other cases: Qty2 is empty
             return ''
@@ -7882,6 +8017,8 @@ class TariffMill(QMainWindow):
         optional_fields = {
             "invoice_number": "Invoice Number",
             "quantity": "Quantity",
+            "quantity_unit": "Quantity Unit",
+            "net_weight": "Net Weight",
             "hts_code": "HTS Code",
             "qty_unit": "Qty Unit"
         }
@@ -8866,6 +9003,8 @@ class TariffMill(QMainWindow):
                 self.apply_current_mapping()
                 logger.info(f"Profile loaded: {name} (header_row={header_row_value})")
                 self.bottom_status.setText(f"Loaded profile: {name}")
+                # Save as last used map profile
+                set_db_config('last_map_profile', name)
                 # Load linked export profile
                 self.load_profile_link(name)
                 # Apply linked export profile settings
@@ -9082,11 +9221,735 @@ class TariffMill(QMainWindow):
                 self.refresh_input_files()
                 self.refresh_exported_files()
 
+                # Save as last used folder profile
+                set_db_config('last_folder_profile', name)
+
                 logger.info(f"Loaded folder profile: {name}")
                 self.bottom_status.setText(f"Folder profile loaded: {name}")
         except Exception as e:
             logger.error(f"Failed to load folder profile: {e}")
             QMessageBox.critical(self, "Error", f"Failed to load folder profile: {e}")
+
+    def restore_last_used_settings(self):
+        """Restore last used folder profile and map profile from database on startup"""
+        try:
+            # Restore last used folder profile
+            last_folder_profile = get_db_config('last_folder_profile')
+            if last_folder_profile and hasattr(self, 'folder_profile_combo'):
+                idx = self.folder_profile_combo.findText(last_folder_profile)
+                if idx >= 0:
+                    self.folder_profile_combo.setCurrentIndex(idx)
+                    logger.info(f"Restored last folder profile: {last_folder_profile}")
+
+            # Restore last used map profile
+            last_map_profile = get_db_config('last_map_profile')
+            if last_map_profile:
+                # Update Process tab combo
+                if hasattr(self, 'profile_combo'):
+                    idx = self.profile_combo.findText(last_map_profile)
+                    if idx >= 0:
+                        self.profile_combo.setCurrentIndex(idx)
+                # Update Invoice Mapping Profiles tab combo
+                if hasattr(self, 'profile_combo_map'):
+                    idx = self.profile_combo_map.findText(last_map_profile)
+                    if idx >= 0:
+                        self.profile_combo_map.setCurrentIndex(idx)
+                logger.info(f"Restored last map profile: {last_map_profile}")
+
+        except Exception as e:
+            logger.warning(f"Failed to restore last used settings: {e}")
+
+    # ========== BILLING FUNCTIONS ==========
+
+    def record_billing_event(self, file_name: str, line_count: int, total_value: float,
+                            hts_codes: list, processing_time_ms: int = 0):
+        """Record a billing event when a file is exported.
+
+        Only records if the file number has not been billed before (allows re-exports
+        without additional billing charges).
+
+        Args:
+            file_name: Name of the exported file
+            line_count: Number of line items in the export
+            total_value: Total value of items processed
+            hts_codes: List of HTS codes used in the export
+            processing_time_ms: Processing time in milliseconds
+        """
+        try:
+            import os
+            import getpass
+
+            file_number = self.file_number_input.text().strip() if hasattr(self, 'file_number_input') else ""
+
+            # Skip if no file number provided
+            if not file_number:
+                logger.debug("No file number provided, skipping billing record")
+                return
+
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+
+            # Check if this file number has already been billed
+            c.execute("SELECT COUNT(*) FROM billing_records WHERE file_number = ?", (file_number,))
+            existing_count = c.fetchone()[0]
+
+            if existing_count > 0:
+                conn.close()
+                logger.info(f"File #{file_number} already billed, skipping duplicate billing record")
+                return
+
+            folder_profile = self.folder_profile_combo.currentText() if hasattr(self, 'folder_profile_combo') else ""
+            map_profile = self.profile_combo.currentText() if hasattr(self, 'profile_combo') else ""
+            mid = self.selected_mid if hasattr(self, 'selected_mid') else ""
+            user_name = getpass.getuser()
+
+            # Get machine ID
+            machine_id = ""
+            try:
+                import hashlib
+                import platform
+                machine_info = f"{platform.node()}-{platform.machine()}"
+                machine_id = hashlib.md5(machine_info.encode()).hexdigest()[:12]
+            except:
+                pass
+
+            now = datetime.now()
+            export_date = now.strftime("%Y-%m-%d")
+            export_time = now.strftime("%H:%M:%S")
+            invoice_month = now.strftime("%Y-%m")
+
+            # Convert HTS codes list to comma-separated string
+            hts_codes_str = ",".join(set(str(h) for h in hts_codes if h)) if hts_codes else ""
+
+            c.execute("""INSERT INTO billing_records
+                        (file_number, export_date, export_time, file_name, line_count, total_value,
+                         hts_codes_used, folder_profile, map_profile, mid, user_name, machine_id,
+                         processing_time_ms, invoice_sent, invoice_month)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)""",
+                     (file_number, export_date, export_time, file_name, line_count, total_value,
+                      hts_codes_str, folder_profile, map_profile, mid, user_name, machine_id,
+                      processing_time_ms, invoice_month))
+            conn.commit()
+            conn.close()
+
+            logger.info(f"Billing record created: File #{file_number}, {line_count} lines, ${total_value:,.2f}")
+
+        except Exception as e:
+            logger.warning(f"Failed to record billing event: {e}")
+
+    def get_billing_summary(self, month: str = None):
+        """Get billing summary for a specific month.
+
+        Args:
+            month: Month in YYYY-MM format, defaults to current month
+
+        Returns:
+            dict with billing summary data
+        """
+        try:
+            if month is None:
+                month = datetime.now().strftime("%Y-%m")
+
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+
+            # Get summary statistics
+            c.execute("""SELECT
+                            COUNT(*) as export_count,
+                            SUM(line_count) as total_lines,
+                            SUM(total_value) as total_value,
+                            COUNT(DISTINCT file_number) as unique_files
+                        FROM billing_records
+                        WHERE invoice_month = ?""", (month,))
+            row = c.fetchone()
+
+            # Get detailed records
+            c.execute("""SELECT * FROM billing_records
+                        WHERE invoice_month = ?
+                        ORDER BY export_date, export_time""", (month,))
+            records = c.fetchall()
+            columns = [desc[0] for desc in c.description]
+
+            conn.close()
+
+            return {
+                'month': month,
+                'export_count': row[0] or 0,
+                'total_lines': row[1] or 0,
+                'total_value': row[2] or 0.0,
+                'unique_files': row[3] or 0,
+                'records': [dict(zip(columns, r)) for r in records]
+            }
+
+        except Exception as e:
+            logger.warning(f"Failed to get billing summary: {e}")
+            return {'month': month, 'export_count': 0, 'total_lines': 0, 'total_value': 0.0, 'unique_files': 0, 'records': []}
+
+    def get_billing_setting(self, key: str, default: str = ""):
+        """Get a billing setting value."""
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("SELECT value FROM billing_settings WHERE key = ?", (key,))
+            row = c.fetchone()
+            conn.close()
+            return row[0] if row else default
+        except:
+            return default
+
+    def set_billing_setting(self, key: str, value: str):
+        """Set a billing setting value."""
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("INSERT OR REPLACE INTO billing_settings (key, value) VALUES (?, ?)", (key, value))
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to set billing setting: {e}")
+            return False
+
+    def setup_billing_tab(self, tab_widget):
+        """Setup the Billing tab for the Configuration dialog."""
+        layout = QVBoxLayout(tab_widget)
+
+        # Title
+        title = QLabel("<h2>Billing Configuration</h2>")
+        layout.addWidget(title)
+
+        # Billing Rate Group
+        rate_group = QGroupBox("Billing Rate")
+        rate_layout = QFormLayout()
+
+        self.billing_rate_spin = QDoubleSpinBox()
+        self.billing_rate_spin.setRange(0, 1000)
+        self.billing_rate_spin.setDecimals(2)
+        self.billing_rate_spin.setPrefix("$")
+        self.billing_rate_spin.setValue(float(self.get_billing_setting('rate_per_file', '0')))
+        rate_layout.addRow("Rate per Export:", self.billing_rate_spin)
+
+        rate_info = QLabel("<small>Amount to charge per exported file. Set to 0 to disable billing.</small>")
+        rate_info.setWordWrap(True)
+        rate_info.setStyleSheet("color:#666; padding:5px;")
+        rate_layout.addRow("", rate_info)
+
+        rate_group.setLayout(rate_layout)
+        layout.addWidget(rate_group)
+
+        # Email Configuration Group
+        email_group = QGroupBox("Email Configuration")
+        email_layout = QFormLayout()
+
+        self.billing_customer_email = QLineEdit()
+        self.billing_customer_email.setPlaceholderText("customer@example.com")
+        self.billing_customer_email.setText(self.get_billing_setting('customer_email', ''))
+        email_layout.addRow("Customer Email:", self.billing_customer_email)
+
+        self.billing_admin_email = QLineEdit()
+        self.billing_admin_email.setPlaceholderText("your@email.com")
+        self.billing_admin_email.setText(self.get_billing_setting('admin_email', ''))
+        email_layout.addRow("Admin Email:", self.billing_admin_email)
+
+        self.billing_smtp_server = QLineEdit()
+        self.billing_smtp_server.setPlaceholderText("smtp.gmail.com")
+        self.billing_smtp_server.setText(self.get_billing_setting('smtp_server', ''))
+        email_layout.addRow("SMTP Server:", self.billing_smtp_server)
+
+        self.billing_smtp_port = QSpinBox()
+        self.billing_smtp_port.setRange(1, 65535)
+        self.billing_smtp_port.setValue(int(self.get_billing_setting('smtp_port', '587')))
+        email_layout.addRow("SMTP Port:", self.billing_smtp_port)
+
+        self.billing_smtp_user = QLineEdit()
+        self.billing_smtp_user.setPlaceholderText("username@gmail.com")
+        self.billing_smtp_user.setText(self.get_billing_setting('smtp_user', ''))
+        email_layout.addRow("SMTP Username:", self.billing_smtp_user)
+
+        self.billing_smtp_password = QLineEdit()
+        self.billing_smtp_password.setEchoMode(QLineEdit.Password)
+        self.billing_smtp_password.setText(self.get_billing_setting('smtp_password', ''))
+        email_layout.addRow("SMTP Password:", self.billing_smtp_password)
+
+        email_info = QLabel("<small>Configure SMTP settings to enable automatic monthly billing reports.</small>")
+        email_info.setWordWrap(True)
+        email_info.setStyleSheet("color:#666; padding:5px;")
+        email_layout.addRow("", email_info)
+
+        email_group.setLayout(email_layout)
+        layout.addWidget(email_group)
+
+        # Buttons row
+        btn_layout = QHBoxLayout()
+
+        btn_test_email = QPushButton("Test Email")
+        btn_test_email.clicked.connect(self._test_billing_email_from_tab)
+        btn_layout.addWidget(btn_test_email)
+
+        btn_layout.addStretch()
+
+        btn_view_report = QPushButton("View Billing Report")
+        btn_view_report.clicked.connect(self.show_billing_report_dialog)
+        btn_layout.addWidget(btn_view_report)
+
+        btn_save = QPushButton("Save Settings")
+        btn_save.setStyleSheet(self.get_button_style("primary"))
+        btn_save.clicked.connect(self._save_billing_settings_from_tab)
+        btn_layout.addWidget(btn_save)
+
+        layout.addLayout(btn_layout)
+        layout.addStretch()
+
+    def _save_billing_settings_from_tab(self):
+        """Save billing settings from the Configuration dialog tab."""
+        self.set_billing_setting('rate_per_file', str(self.billing_rate_spin.value()))
+        self.set_billing_setting('customer_email', self.billing_customer_email.text())
+        self.set_billing_setting('admin_email', self.billing_admin_email.text())
+        self.set_billing_setting('smtp_server', self.billing_smtp_server.text())
+        self.set_billing_setting('smtp_port', str(self.billing_smtp_port.value()))
+        self.set_billing_setting('smtp_user', self.billing_smtp_user.text())
+        self.set_billing_setting('smtp_password', self.billing_smtp_password.text())
+        QMessageBox.information(self, "Saved", "Billing settings saved successfully.")
+
+    def _test_billing_email_from_tab(self):
+        """Test email configuration from the Configuration dialog tab."""
+        self._test_billing_email(
+            self.billing_smtp_server.text(),
+            self.billing_smtp_port.value(),
+            self.billing_smtp_user.text(),
+            self.billing_smtp_password.text(),
+            self.billing_admin_email.text()
+        )
+
+    def show_billing_settings_dialog(self):
+        """Show dialog to configure billing settings."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Billing Settings")
+        dialog.setMinimumSize(450, 350)
+
+        layout = QVBoxLayout(dialog)
+
+        # Billing Rate Group
+        rate_group = QGroupBox("Billing Rate")
+        rate_layout = QFormLayout()
+
+        rate_per_file = QDoubleSpinBox()
+        rate_per_file.setRange(0, 1000)
+        rate_per_file.setDecimals(2)
+        rate_per_file.setPrefix("$")
+        rate_per_file.setValue(float(self.get_billing_setting('rate_per_file', '0')))
+        rate_layout.addRow("Rate per Export:", rate_per_file)
+
+        rate_info = QLabel("<small>Amount to charge per exported file. Set to 0 to disable billing.</small>")
+        rate_info.setWordWrap(True)
+        rate_info.setStyleSheet("color:#666; padding:5px;")
+        rate_layout.addRow("", rate_info)
+
+        rate_group.setLayout(rate_layout)
+        layout.addWidget(rate_group)
+
+        # Email Configuration Group
+        email_group = QGroupBox("Email Configuration")
+        email_layout = QFormLayout()
+
+        customer_email = QLineEdit()
+        customer_email.setPlaceholderText("customer@example.com")
+        customer_email.setText(self.get_billing_setting('customer_email', ''))
+        email_layout.addRow("Customer Email:", customer_email)
+
+        admin_email = QLineEdit()
+        admin_email.setPlaceholderText("your@email.com")
+        admin_email.setText(self.get_billing_setting('admin_email', ''))
+        email_layout.addRow("Admin Email:", admin_email)
+
+        smtp_server = QLineEdit()
+        smtp_server.setPlaceholderText("smtp.gmail.com")
+        smtp_server.setText(self.get_billing_setting('smtp_server', ''))
+        email_layout.addRow("SMTP Server:", smtp_server)
+
+        smtp_port = QSpinBox()
+        smtp_port.setRange(1, 65535)
+        smtp_port.setValue(int(self.get_billing_setting('smtp_port', '587')))
+        email_layout.addRow("SMTP Port:", smtp_port)
+
+        smtp_user = QLineEdit()
+        smtp_user.setPlaceholderText("username@gmail.com")
+        smtp_user.setText(self.get_billing_setting('smtp_user', ''))
+        email_layout.addRow("SMTP Username:", smtp_user)
+
+        smtp_password = QLineEdit()
+        smtp_password.setEchoMode(QLineEdit.Password)
+        smtp_password.setText(self.get_billing_setting('smtp_password', ''))
+        email_layout.addRow("SMTP Password:", smtp_password)
+
+        email_info = QLabel("<small>Configure SMTP settings to enable automatic monthly billing reports.</small>")
+        email_info.setWordWrap(True)
+        email_info.setStyleSheet("color:#666; padding:5px;")
+        email_layout.addRow("", email_info)
+
+        email_group.setLayout(email_layout)
+        layout.addWidget(email_group)
+
+        # Buttons
+        btn_layout = QHBoxLayout()
+
+        test_btn = QPushButton("Test Email")
+        test_btn.clicked.connect(lambda: self._test_billing_email(
+            smtp_server.text(), smtp_port.value(), smtp_user.text(), smtp_password.text(), admin_email.text()
+        ))
+        btn_layout.addWidget(test_btn)
+
+        btn_layout.addStretch()
+
+        save_btn = QPushButton("Save")
+        save_btn.clicked.connect(lambda: self._save_billing_settings(
+            dialog, rate_per_file.value(), customer_email.text(), admin_email.text(),
+            smtp_server.text(), smtp_port.value(), smtp_user.text(), smtp_password.text()
+        ))
+        btn_layout.addWidget(save_btn)
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(dialog.reject)
+        btn_layout.addWidget(cancel_btn)
+
+        layout.addLayout(btn_layout)
+
+        dialog.exec_()
+
+    def _save_billing_settings(self, dialog, rate, customer_email, admin_email, smtp_server, smtp_port, smtp_user, smtp_password):
+        """Save billing settings to database."""
+        self.set_billing_setting('rate_per_file', str(rate))
+        self.set_billing_setting('customer_email', customer_email)
+        self.set_billing_setting('admin_email', admin_email)
+        self.set_billing_setting('smtp_server', smtp_server)
+        self.set_billing_setting('smtp_port', str(smtp_port))
+        self.set_billing_setting('smtp_user', smtp_user)
+        self.set_billing_setting('smtp_password', smtp_password)
+
+        QMessageBox.information(self, "Saved", "Billing settings saved successfully.")
+        dialog.accept()
+
+    def _test_billing_email(self, smtp_server, smtp_port, smtp_user, smtp_password, to_email):
+        """Test email configuration by sending a test email."""
+        if not all([smtp_server, smtp_user, smtp_password, to_email]):
+            QMessageBox.warning(self, "Missing Settings", "Please fill in all SMTP settings and admin email to test.")
+            return
+
+        try:
+            import smtplib
+            from email.mime.text import MIMEText
+            from email.mime.multipart import MIMEMultipart
+
+            msg = MIMEMultipart()
+            msg['From'] = smtp_user
+            msg['To'] = to_email
+            msg['Subject'] = "TariffMill Billing - Test Email"
+
+            body = "This is a test email from TariffMill billing system.\n\nIf you received this, your email configuration is working correctly."
+            msg.attach(MIMEText(body, 'plain'))
+
+            server = smtplib.SMTP(smtp_server, smtp_port)
+            server.starttls()
+            server.login(smtp_user, smtp_password)
+            server.send_message(msg)
+            server.quit()
+
+            QMessageBox.information(self, "Success", f"Test email sent successfully to {to_email}!")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Email Failed", f"Failed to send test email:\n{str(e)}")
+
+    def show_billing_report_dialog(self):
+        """Show dialog with billing report for the selected month."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Billing Report")
+        dialog.setMinimumSize(800, 600)
+
+        layout = QVBoxLayout(dialog)
+
+        # Month selection
+        month_layout = QHBoxLayout()
+        month_layout.addWidget(QLabel("Month:"))
+
+        month_combo = QComboBox()
+        # Generate list of last 12 months
+        now = datetime.now()
+        for i in range(12):
+            month_date = now - timedelta(days=i * 30)
+            month_str = month_date.strftime("%Y-%m")
+            month_display = month_date.strftime("%B %Y")
+            month_combo.addItem(month_display, month_str)
+
+        month_layout.addWidget(month_combo)
+        month_layout.addStretch()
+
+        refresh_btn = QPushButton("Refresh")
+        month_layout.addWidget(refresh_btn)
+
+        generate_btn = QPushButton("Generate Report")
+        month_layout.addWidget(generate_btn)
+
+        send_btn = QPushButton("Send Invoice")
+        month_layout.addWidget(send_btn)
+
+        layout.addLayout(month_layout)
+
+        # Summary
+        summary_group = QGroupBox("Summary")
+        summary_layout = QFormLayout()
+
+        export_count_label = QLabel("0")
+        summary_layout.addRow("Total Exports:", export_count_label)
+
+        total_lines_label = QLabel("0")
+        summary_layout.addRow("Total Lines:", total_lines_label)
+
+        total_value_label = QLabel("$0.00")
+        summary_layout.addRow("Total Value Processed:", total_value_label)
+
+        rate_label = QLabel("$0.00")
+        summary_layout.addRow("Rate per Export:", rate_label)
+
+        amount_due_label = QLabel("$0.00")
+        amount_due_label.setStyleSheet("font-weight: bold; font-size: 14px;")
+        summary_layout.addRow("Amount Due:", amount_due_label)
+
+        summary_group.setLayout(summary_layout)
+        layout.addWidget(summary_group)
+
+        # Details table
+        details_group = QGroupBox("Export Details")
+        details_layout = QVBoxLayout()
+
+        details_table = QTableWidget()
+        details_table.setColumnCount(7)
+        details_table.setHorizontalHeaderLabels([
+            "File #", "Date", "Time", "File Name", "Lines", "Value", "MID"
+        ])
+        details_table.horizontalHeader().setStretchLastSection(True)
+        details_table.setAlternatingRowColors(True)
+
+        details_layout.addWidget(details_table)
+        details_group.setLayout(details_layout)
+        layout.addWidget(details_group)
+
+        # Function to refresh the report
+        def refresh_report():
+            selected_month = month_combo.currentData()
+            summary = self.get_billing_summary(selected_month)
+            rate = float(self.get_billing_setting('rate_per_file', '0'))
+
+            export_count_label.setText(str(summary['export_count']))
+            total_lines_label.setText(str(summary['total_lines']))
+            total_value_label.setText(f"${summary['total_value']:,.2f}")
+            rate_label.setText(f"${rate:.2f}")
+            amount_due_label.setText(f"${summary['export_count'] * rate:,.2f}")
+
+            # Populate table
+            details_table.setRowCount(len(summary['records']))
+            for row_idx, record in enumerate(summary['records']):
+                details_table.setItem(row_idx, 0, QTableWidgetItem(record.get('file_number', '')))
+                details_table.setItem(row_idx, 1, QTableWidgetItem(record.get('export_date', '')))
+                details_table.setItem(row_idx, 2, QTableWidgetItem(record.get('export_time', '')))
+                details_table.setItem(row_idx, 3, QTableWidgetItem(record.get('file_name', '')))
+                details_table.setItem(row_idx, 4, QTableWidgetItem(str(record.get('line_count', 0))))
+                details_table.setItem(row_idx, 5, QTableWidgetItem(f"${record.get('total_value', 0):,.2f}"))
+                details_table.setItem(row_idx, 6, QTableWidgetItem(record.get('mid', '')))
+
+            details_table.resizeColumnsToContents()
+
+        # Connect signals
+        month_combo.currentIndexChanged.connect(refresh_report)
+        refresh_btn.clicked.connect(refresh_report)
+        generate_btn.clicked.connect(lambda: self._generate_billing_report(month_combo.currentData()))
+        send_btn.clicked.connect(lambda: self._send_billing_invoice(month_combo.currentData()))
+
+        # Initial load
+        refresh_report()
+
+        # Close button
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dialog.accept)
+        layout.addWidget(close_btn, alignment=Qt.AlignRight)
+
+        dialog.exec_()
+
+    def _generate_billing_report(self, month: str):
+        """Generate a billing report file for the specified month."""
+        summary = self.get_billing_summary(month)
+        rate = float(self.get_billing_setting('rate_per_file', '0'))
+        amount_due = summary['export_count'] * rate
+
+        # Prompt for save location
+        default_name = f"TariffMill_Invoice_{month}.xlsx"
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "Save Billing Report",
+            str(OUTPUT_DIR / default_name),
+            "Excel Files (*.xlsx);;All Files (*)"
+        )
+
+        if not file_path:
+            return
+
+        try:
+            # Create workbook
+            import pandas as pd
+            from openpyxl import Workbook
+            from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Invoice"
+
+            # Header
+            ws['A1'] = "TariffMill Billing Invoice"
+            ws['A1'].font = Font(size=16, bold=True)
+            ws['A2'] = f"Period: {month}"
+            ws['A3'] = f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+
+            # Summary section
+            ws['A5'] = "Summary"
+            ws['A5'].font = Font(bold=True)
+            ws['A6'] = "Total Exports:"
+            ws['B6'] = summary['export_count']
+            ws['A7'] = "Total Lines Processed:"
+            ws['B7'] = summary['total_lines']
+            ws['A8'] = "Total Value Processed:"
+            ws['B8'] = f"${summary['total_value']:,.2f}"
+            ws['A9'] = "Rate per Export:"
+            ws['B9'] = f"${rate:.2f}"
+            ws['A10'] = "Amount Due:"
+            ws['B10'] = f"${amount_due:,.2f}"
+            ws['A10'].font = Font(bold=True)
+            ws['B10'].font = Font(bold=True)
+
+            # Details section
+            ws['A12'] = "Export Details"
+            ws['A12'].font = Font(bold=True)
+
+            headers = ["File #", "Date", "Time", "File Name", "Lines", "Value", "MID", "Folder Profile"]
+            for col, header in enumerate(headers, 1):
+                cell = ws.cell(row=13, column=col)
+                cell.value = header
+                cell.font = Font(bold=True)
+                cell.fill = PatternFill(start_color="CCCCCC", end_color="CCCCCC", fill_type="solid")
+
+            for row_idx, record in enumerate(summary['records'], 14):
+                ws.cell(row=row_idx, column=1).value = record.get('file_number', '')
+                ws.cell(row=row_idx, column=2).value = record.get('export_date', '')
+                ws.cell(row=row_idx, column=3).value = record.get('export_time', '')
+                ws.cell(row=row_idx, column=4).value = record.get('file_name', '')
+                ws.cell(row=row_idx, column=5).value = record.get('line_count', 0)
+                ws.cell(row=row_idx, column=6).value = f"${record.get('total_value', 0):,.2f}"
+                ws.cell(row=row_idx, column=7).value = record.get('mid', '')
+                ws.cell(row=row_idx, column=8).value = record.get('folder_profile', '')
+
+            # Auto-size columns
+            for col in ws.columns:
+                max_length = 0
+                col_letter = col[0].column_letter
+                for cell in col:
+                    try:
+                        if cell.value:
+                            max_length = max(max_length, len(str(cell.value)))
+                    except:
+                        pass
+                ws.column_dimensions[col_letter].width = max_length + 2
+
+            wb.save(file_path)
+            QMessageBox.information(self, "Report Generated", f"Billing report saved to:\n{file_path}")
+            logger.info(f"Generated billing report: {file_path}")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to generate report:\n{str(e)}")
+            logger.error(f"Failed to generate billing report: {e}")
+
+    def _send_billing_invoice(self, month: str):
+        """Send billing invoice email for the specified month."""
+        customer_email = self.get_billing_setting('customer_email', '')
+        admin_email = self.get_billing_setting('admin_email', '')
+        smtp_server = self.get_billing_setting('smtp_server', '')
+        smtp_port = int(self.get_billing_setting('smtp_port', '587'))
+        smtp_user = self.get_billing_setting('smtp_user', '')
+        smtp_password = self.get_billing_setting('smtp_password', '')
+
+        if not all([customer_email, smtp_server, smtp_user, smtp_password]):
+            QMessageBox.warning(self, "Missing Settings",
+                              "Please configure billing email settings first (Billing > Billing Settings).")
+            return
+
+        summary = self.get_billing_summary(month)
+        rate = float(self.get_billing_setting('rate_per_file', '0'))
+        amount_due = summary['export_count'] * rate
+
+        if summary['export_count'] == 0:
+            QMessageBox.information(self, "No Exports", f"No exports found for {month}. No invoice to send.")
+            return
+
+        try:
+            import smtplib
+            from email.mime.text import MIMEText
+            from email.mime.multipart import MIMEMultipart
+
+            msg = MIMEMultipart()
+            msg['From'] = smtp_user
+            msg['To'] = customer_email
+            if admin_email:
+                msg['Cc'] = admin_email
+            msg['Subject'] = f"TariffMill Invoice - {month}"
+
+            # Build email body
+            body = f"""TariffMill Billing Invoice
+
+Period: {month}
+Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}
+
+SUMMARY
+-------
+Total Exports: {summary['export_count']}
+Total Lines Processed: {summary['total_lines']}
+Total Value Processed: ${summary['total_value']:,.2f}
+Rate per Export: ${rate:.2f}
+
+AMOUNT DUE: ${amount_due:,.2f}
+
+EXPORT DETAILS
+--------------
+"""
+            for record in summary['records']:
+                body += f"File #{record.get('file_number', 'N/A')} - {record.get('export_date', '')} - {record.get('file_name', '')} ({record.get('line_count', 0)} lines, ${record.get('total_value', 0):,.2f})\n"
+
+            body += f"\n\nThank you for using TariffMill."
+
+            msg.attach(MIMEText(body, 'plain'))
+
+            # Send email
+            recipients = [customer_email]
+            if admin_email:
+                recipients.append(admin_email)
+
+            server = smtplib.SMTP(smtp_server, smtp_port)
+            server.starttls()
+            server.login(smtp_user, smtp_password)
+            server.send_message(msg)
+            server.quit()
+
+            # Mark records as invoiced
+            try:
+                conn = sqlite3.connect(str(DB_PATH))
+                c = conn.cursor()
+                c.execute("UPDATE billing_records SET invoice_sent = 1 WHERE invoice_month = ?", (month,))
+                conn.commit()
+                conn.close()
+            except:
+                pass
+
+            QMessageBox.information(self, "Invoice Sent", f"Invoice sent successfully to {customer_email}!")
+            logger.info(f"Sent billing invoice for {month} to {customer_email}")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to send invoice:\n{str(e)}")
+            logger.error(f"Failed to send billing invoice: {e}")
 
     def show_folder_profile_dialog(self):
         """Show dialog to manage folder profiles"""
@@ -10351,10 +11214,45 @@ class TariffMill(QMainWindow):
         # Get current theme for text colors
         theme = self._detect_current_theme()
 
+        # Templates directory for checking AI metadata
+        templates_dir = BASE_DIR / "templates"
+
         for name, info in templates.items():
             status = "Enabled" if info['enabled'] else "Disabled"
-            item = QListWidgetItem(f"{info['name']} [{status}]")
+
+            # Check if this is an AI-generated template
+            ai_metadata_path = templates_dir / f"{name}.ai_meta.json"
+            is_ai_template = ai_metadata_path.exists()
+            ai_provider = ""
+
+            if is_ai_template:
+                try:
+                    import json
+                    with open(ai_metadata_path, 'r', encoding='utf-8') as f:
+                        metadata = json.load(f)
+                        ai_provider = metadata.get('provider', 'AI')
+                except:
+                    ai_provider = "AI"
+
+            # Add AI indicator to display name
+            if is_ai_template:
+                # Use emoji based on provider
+                if 'Anthropic' in ai_provider:
+                    ai_icon = "\U0001F916"  # Robot emoji for Anthropic/Claude
+                elif 'OpenAI' in ai_provider:
+                    ai_icon = "\U0001F4AC"  # Speech bubble for OpenAI
+                elif 'Ollama' in ai_provider:
+                    ai_icon = "\U0001F4BB"  # Computer for local Ollama
+                else:
+                    ai_icon = "\U0001F916"  # Default robot
+                display_name = f"{ai_icon} {info['name']} [{status}]"
+            else:
+                display_name = f"{info['name']} [{status}]"
+
+            item = QListWidgetItem(display_name)
             item.setData(Qt.UserRole, name)  # Store template key
+            item.setData(Qt.UserRole + 1, is_ai_template)  # Store AI flag
+            item.setData(Qt.UserRole + 2, ai_provider)  # Store AI provider
 
             # Use theme-specific colors
             if info['enabled']:
@@ -10496,9 +11394,17 @@ class TariffMill(QMainWindow):
             return
 
         template_key = current_item.data(Qt.UserRole)
+        is_ai_template = current_item.data(Qt.UserRole + 1)
+        logger.debug(f"Edit template - UserRole key: {template_key}, text: {current_item.text()}, is_ai: {is_ai_template}")
+
         if not template_key:
-            # Try to extract from text
-            template_name = current_item.text().split('[')[0].strip().lower().replace(' ', '_')
+            # Try to extract from text (remove emoji if present)
+            text = current_item.text()
+            # Remove emoji prefix if present
+            if text and ord(text[0]) > 127:
+                text = text[1:].strip()
+            template_name = text.split('[')[0].strip().lower().replace(' ', '_')
+            logger.debug(f"No UserRole key, derived name: {template_name}")
         else:
             template_name = template_key
 
@@ -10514,21 +11420,23 @@ class TariffMill(QMainWindow):
 
         template_path = None
         for path in possible_files:
+            logger.debug(f"Checking path: {path} - exists: {path.exists()}")
             if path.exists():
                 template_path = path
                 break
 
         # If not found, list available templates
         if not template_path:
+            logger.debug(f"Template file not found automatically, showing selection dialog")
             # List all .py files in templates dir
             py_files = list(templates_dir.glob("*.py"))
-            file_names = [f.stem for f in py_files if f.stem not in ('__init__', 'base_template')]
+            file_names = [f.stem for f in py_files if f.stem not in ('__init__', 'base_template', 'sample_template')]
 
             if file_names:
                 file_name, ok = QInputDialog.getItem(
                     self, "Select Template File",
-                    "Could not auto-detect template file. Please select:",
-                    file_names, 0, False
+                    f"Could not find template file for '{template_name}'.\nPlease select:",
+                    sorted(file_names), 0, False
                 )
                 if ok and file_name:
                     template_path = templates_dir / f"{file_name}.py"
@@ -10537,9 +11445,45 @@ class TariffMill(QMainWindow):
                 return
 
         if template_path and template_path.exists():
-            self.ocrmill_open_template_file(template_path)
+            # Check if this is an AI-generated template
+            ai_metadata_path = template_path.with_suffix('.ai_meta.json')
+            if ai_metadata_path.exists():
+                # Open AI chat dialog for AI templates
+                self.ocrmill_open_ai_template_editor(template_path, ai_metadata_path)
+            else:
+                # Open regular file editor for non-AI templates
+                self.ocrmill_open_template_file(template_path)
         else:
             QMessageBox.warning(self, "File Not Found", f"Template file not found: {template_path}")
+
+    def ocrmill_open_ai_template_editor(self, template_path, metadata_path):
+        """Open the AI chat dialog for editing AI-generated templates."""
+        try:
+            import json
+            from ai_template_generator import AITemplateChatDialog
+
+            # Load metadata
+            with open(metadata_path, 'r', encoding='utf-8') as f:
+                metadata = json.load(f)
+
+            dialog = AITemplateChatDialog(str(template_path), metadata, self)
+            dialog.template_modified.connect(lambda: self.ocrmill_refresh_templates())
+            dialog.exec_()
+
+        except ImportError as e:
+            QMessageBox.warning(
+                self, "Import Error",
+                f"Failed to load AI Template Editor: {e}\n\n"
+                "Falling back to regular file editor."
+            )
+            self.ocrmill_open_template_file(template_path)
+        except Exception as e:
+            QMessageBox.warning(
+                self, "Error",
+                f"Failed to open AI Template Editor: {e}\n\n"
+                "Falling back to regular file editor."
+            )
+            self.ocrmill_open_template_file(template_path)
 
     def ocrmill_open_template_file(self, file_path):
         """Open a template file in the default editor"""
@@ -10547,14 +11491,27 @@ class TariffMill(QMainWindow):
         import subprocess
         import platform
 
+        file_path = Path(file_path)
+        if not file_path.exists():
+            QMessageBox.warning(self, "File Not Found", f"Template file not found:\n{file_path}")
+            return
+
+        logger.debug(f"Attempting to open template file: {file_path}")
+
         try:
             if platform.system() == 'Windows':
+                # Use os.startfile which opens with the default .py editor
                 os.startfile(str(file_path))
+                self.ocrmill_log(f"Opened template: {file_path.name}")
+                logger.info(f"Opened template file with default editor: {file_path}")
             elif platform.system() == 'Darwin':  # macOS
                 subprocess.run(['open', str(file_path)])
+                self.ocrmill_log(f"Opened template: {file_path.name}")
             else:  # Linux
                 subprocess.run(['xdg-open', str(file_path)])
+                self.ocrmill_log(f"Opened template: {file_path.name}")
         except Exception as e:
+            logger.error(f"Failed to open template file: {e}")
             # Fallback: show path to user
             QMessageBox.information(
                 self, "Open Template",
@@ -13390,8 +14347,8 @@ class TariffMill(QMainWindow):
                 'MID': self.table.item(i, 3).text() if self.table.item(i, 3) else "",
                 'CalcWtNet': round(float(self.table.item(i, 4).text())) if self.table.item(i, 4) and self.table.item(i, 4).text() else 0,
                 'Pcs': int(self.table.item(i, 5).text()) if self.table.item(i, 5) and self.table.item(i, 5).text() else 0,
-                'Qty1': int(qty1_value) if qty1_value else '',
-                'Qty2': int(qty2_value) if qty2_value else '',
+                'Qty1': qty1_value if qty1_value else '',
+                'Qty2': qty2_value if qty2_value else '',
                 'DecTypeCd': self.table.item(i, 7).text() if self.table.item(i, 7) else "CO",
                 'CountryofMelt': self.table.item(i, 8).text() if self.table.item(i, 8) else "",
                 'CountryOfCast': self.table.item(i, 9).text() if self.table.item(i, 9) else "",
@@ -13855,6 +14812,21 @@ class TariffMill(QMainWindow):
 
             # Add "Not Found" parts to the database
             added_parts_count = self.add_not_found_parts_to_db()
+
+            # Record billing event for this export
+            try:
+                hts_codes = [row.get('HTSCode', '') for row in export_data if row.get('HTSCode')]
+                processing_time_ms = int((time.time() - t_start) * 1000) if 't_start' in dir() else 0
+                self.record_billing_event(
+                    file_name=out.name,
+                    line_count=len(export_data),
+                    total_value=running_total,
+                    hts_codes=hts_codes,
+                    processing_time_ms=processing_time_ms
+                )
+                logger.info(f"Recorded billing event for {out.name}: {len(export_data)} lines, ${running_total:,.2f}")
+            except Exception as billing_err:
+                logger.warning(f"Failed to record billing event: {billing_err}")
 
             # Hide progress indicator after brief delay
             QTimer.singleShot(500, self.export_progress_widget.hide)
@@ -14429,6 +15401,41 @@ class TariffMill(QMainWindow):
             # Make sure to unblock signals even on error
             self.input_files_list.blockSignals(False)
 
+    def delete_selected_input_file(self):
+        """Delete the selected input file after confirmation."""
+        current_item = self.input_files_list.currentItem()
+        if not current_item:
+            QMessageBox.warning(self, "No Selection", "Please select a file to delete.")
+            return
+
+        file_name = current_item.text()
+        file_path = INPUT_DIR / file_name
+
+        # Confirm deletion
+        reply = QMessageBox.question(
+            self,
+            "Confirm Delete",
+            f"Are you sure you want to delete:\n\n{file_name}",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+
+        if reply == QMessageBox.Yes:
+            try:
+                if file_path.exists():
+                    file_path.unlink()
+                    logger.info(f"Deleted input file: {file_name}")
+                    # Clear current file if it was the deleted one
+                    if hasattr(self, 'current_csv') and self.current_csv == str(file_path):
+                        self.current_csv = None
+                        self.file_label.setText("No file selected")
+                        self.process_btn.setEnabled(False)
+                    # Refresh the list
+                    self.refresh_input_files()
+            except Exception as e:
+                logger.error(f"Failed to delete file: {e}")
+                QMessageBox.critical(self, "Delete Failed", f"Could not delete file:\n{e}")
+
     def load_selected_input_file(self, item):
         """Load the selected CSV file from Input folder"""
         # Check if a map profile is selected first
@@ -14880,6 +15887,11 @@ if __name__ == "__main__":
             app.processEvents()
             win.load_mapping_profiles()
             win.load_folder_profiles()
+
+            splash_message.setText("Restoring last session...")
+            splash_progress.setValue(65)
+            app.processEvents()
+            win.restore_last_used_settings()
 
             splash_message.setText("Loading export profiles...")
             splash_progress.setValue(70)

@@ -25,7 +25,8 @@ class HimcastInvoiceTemplate(BaseTemplate):
     def can_process(self, text: str) -> bool:
         """Check if this template can process the invoice."""
         text_lower = text.lower()
-        indicators = ['himgiri castings pvt. ltd -g', 'gstin : 30aaach7559j1zj', 'pt', 'as']
+        # Use specific indicators - removed generic 'pt' and 'as' that match too broadly
+        indicators = ['himgiri castings pvt. ltd', 'gstin : 30aaach7559j1zj', 'himgiri castings']
         return any(ind in text_lower for ind in indicators)
 
     def get_confidence_score(self, text: str) -> float:
@@ -36,8 +37,8 @@ class HimcastInvoiceTemplate(BaseTemplate):
         score = 0.5
         text_lower = text.lower()
 
-        # Add confidence based on multiple indicators
-        indicators = ['himgiri castings pvt. ltd -g', 'gstin : 30aaach7559j1zj', 'pt', 'as']
+        # Add confidence based on multiple indicators - use specific ones only
+        indicators = ['himgiri castings pvt. ltd', 'gstin : 30aaach7559j1zj', 'himgiri castings', 'himgiri']
         for ind in indicators:
             if ind in text_lower:
                 score += 0.15
@@ -74,7 +75,7 @@ class HimcastInvoiceTemplate(BaseTemplate):
         seen_items = set()
 
         # Line item pattern
-        pattern = re.compile(r'([A-Z0-9][\\w\\-]+)\\s+(\\d+)\\s+\\$?([\\d,.]+)', re.MULTILINE | re.IGNORECASE)
+        pattern = re.compile(r'([A-Z0-9][\w\-]+)\s+(\d+)\s+\$?([\d,.]+)', re.MULTILINE | re.IGNORECASE)
 
         for match in pattern.finditer(text):
             try:
