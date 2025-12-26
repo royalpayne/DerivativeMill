@@ -1,6 +1,22 @@
+# TariffMill Requirements
+# Core GUI
 PyQt5>=5.15.0
+
+# Data Processing
 pandas>=1.3.0
+numpy>=1.20.0
 openpyxl>=3.0.0
+
+# PDF Processing
 pdfplumber>=0.11.0
 pillow>=12.0.0
+
+# Network/API
 requests>=2.28.0
+
+# OCR Extension (optional - for document OCR)
+# pytesseract>=0.3.10
+# pymupdf>=1.23.0  # or pdf2image>=1.16.0
+
+# Packaging
+pyinstaller>=6.0.0

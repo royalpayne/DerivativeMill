@@ -1,6 +1,6 @@
 """
 AI Provider Interface for OCRMill Template Builder
-Supports multiple LLM backends: Ollama (local), Claude, OpenAI, and OpenRouter.
+Supports multiple LLM backends: Claude, OpenAI, Google Gemini, Mistral, Groq, DeepSeek, xAI (Grok), and OpenRouter.
 """
 
 import json
@@ -119,14 +119,29 @@ IMPORTANT:
                 data = json.loads(json_match.group())
 
                 patterns = {}
-                for field, info in data.get('patterns', {}).items():
-                    patterns[field] = ExtractionPattern(
-                        field_name=field,
-                        pattern=info.get('pattern', ''),
-                        description=info.get('description', ''),
-                        sample_match=info.get('sample_match', ''),
-                        confidence=0.8
-                    )
+                patterns_data = data.get('patterns', {})
+
+                # Handle case where patterns might be a dict of dicts or other format
+                if isinstance(patterns_data, dict):
+                    for field, info in patterns_data.items():
+                        # Handle case where info is a dict with pattern details
+                        if isinstance(info, dict):
+                            patterns[field] = ExtractionPattern(
+                                field_name=field,
+                                pattern=info.get('pattern', ''),
+                                description=info.get('description', ''),
+                                sample_match=info.get('sample_match', ''),
+                                confidence=0.8
+                            )
+                        # Handle case where info is just a string (the pattern itself)
+                        elif isinstance(info, str):
+                            patterns[field] = ExtractionPattern(
+                                field_name=field,
+                                pattern=info,
+                                description='',
+                                sample_match='',
+                                confidence=0.6
+                            )
 
                 return TemplateAnalysis(
                     company_name=data.get('company_name', 'Unknown'),
@@ -138,6 +153,16 @@ IMPORTANT:
                 )
             except json.JSONDecodeError:
                 pass
+            except Exception as e:
+                # Catch any other parsing errors and return a helpful message
+                return TemplateAnalysis(
+                    company_name="Unknown",
+                    invoice_indicators=[],
+                    suggested_patterns={},
+                    line_item_pattern="",
+                    line_item_columns=[],
+                    notes=[f"Error parsing AI response: {str(e)}", "Please try again or use a different AI provider."]
+                )
 
         return TemplateAnalysis(
             company_name="Unknown",
@@ -191,94 +216,6 @@ Do not include any explanation, just the pattern."""
             return [f"Regex error: {e}"]
 
 
-class OllamaProvider(AIProvider):
-    """Local Ollama LLM provider."""
-
-    name = "Ollama (Local)"
-    requires_api_key = False
-
-    DEFAULT_HOST = "http://localhost:11434"
-    PREFERRED_MODELS = ["llama3.2", "llama3.1", "llama3", "mistral", "codellama", "qwen2.5"]
-
-    def __init__(self, host: str = None, model: str = None):
-        self.host = host or self.DEFAULT_HOST
-        self.model = model
-        self._available_models = None
-
-    def is_available(self) -> Tuple[bool, str]:
-        if not HAS_REQUESTS:
-            return False, "requests library not installed"
-
-        try:
-            response = requests.get(f"{self.host}/api/tags", timeout=5)
-            if response.status_code == 200:
-                models = response.json().get('models', [])
-                if models:
-                    return True, f"Ollama running with {len(models)} model(s)"
-                return False, "Ollama running but no models installed"
-            return False, f"Ollama returned status {response.status_code}"
-        except requests.exceptions.ConnectionError:
-            return False, "Ollama not running. Start with: ollama serve"
-        except Exception as e:
-            return False, f"Error: {str(e)}"
-
-    def get_available_models(self) -> List[str]:
-        if self._available_models is not None:
-            return self._available_models
-
-        try:
-            response = requests.get(f"{self.host}/api/tags", timeout=5)
-            if response.status_code == 200:
-                models = response.json().get('models', [])
-                self._available_models = [m['name'] for m in models]
-                return self._available_models
-        except Exception:
-            pass
-        return []
-
-    def get_best_model(self) -> Optional[str]:
-        if self.model:
-            return self.model
-
-        available = self.get_available_models()
-        if not available:
-            return None
-
-        for preferred in self.PREFERRED_MODELS:
-            for available_model in available:
-                if preferred in available_model.lower():
-                    return available_model
-
-        return available[0] if available else None
-
-    def generate(self, prompt: str, system_prompt: str = None) -> str:
-        model = self.get_best_model()
-        if not model:
-            raise RuntimeError("No Ollama models available")
-
-        payload = {
-            "model": model,
-            "prompt": prompt,
-            "stream": False,
-            "options": {
-                "temperature": 0.3,
-                "num_predict": 4096,
-            }
-        }
-
-        if system_prompt:
-            payload["system"] = system_prompt
-
-        response = requests.post(
-            f"{self.host}/api/generate",
-            json=payload,
-            timeout=300  # 5 minutes for slower local models
-        )
-
-        if response.status_code != 200:
-            raise RuntimeError(f"Ollama error: {response.text}")
-
-        return response.json().get('response', '')
 
 
 class ClaudeProvider(AIProvider):
@@ -524,13 +461,396 @@ class OpenRouterProvider(AIProvider):
         return result.get('choices', [{}])[0].get('message', {}).get('content', '')
 
 
+class GoogleGeminiProvider(AIProvider):
+    """Google Gemini API provider."""
+
+    name = "Google Gemini"
+    requires_api_key = True
+
+    MODELS = [
+        "gemini-2.0-flash-exp",
+        "gemini-1.5-pro",
+        "gemini-1.5-flash",
+        "gemini-1.5-flash-8b",
+    ]
+
+    def __init__(self, api_key: str = None, model: str = None):
+        self.api_key = api_key
+        self.model = model or self.MODELS[0]
+        self.base_url = "https://generativelanguage.googleapis.com/v1beta"
+
+    def is_available(self) -> Tuple[bool, str]:
+        if not HAS_REQUESTS:
+            return False, "requests library not installed"
+
+        if not self.api_key:
+            return False, "API key not configured"
+
+        try:
+            response = requests.get(
+                f"{self.base_url}/models?key={self.api_key}",
+                timeout=10
+            )
+            if response.status_code == 200:
+                return True, "Google Gemini API connected"
+            elif response.status_code == 401 or response.status_code == 403:
+                return False, "Invalid API key"
+            else:
+                return False, f"API error: {response.status_code}"
+        except Exception as e:
+            return False, f"Connection error: {str(e)}"
+
+    def get_available_models(self) -> List[str]:
+        return self.MODELS
+
+    def generate(self, prompt: str, system_prompt: str = None) -> str:
+        if not self.api_key:
+            raise RuntimeError("Google Gemini API key not configured")
+
+        contents = []
+        if system_prompt:
+            contents.append({"role": "user", "parts": [{"text": system_prompt}]})
+            contents.append({"role": "model", "parts": [{"text": "I understand. I will follow these instructions."}]})
+        contents.append({"role": "user", "parts": [{"text": prompt}]})
+
+        response = requests.post(
+            f"{self.base_url}/models/{self.model}:generateContent?key={self.api_key}",
+            headers={"Content-Type": "application/json"},
+            json={
+                "contents": contents,
+                "generationConfig": {
+                    "temperature": 0.3,
+                    "maxOutputTokens": 4096
+                }
+            },
+            timeout=120
+        )
+
+        if response.status_code != 200:
+            error_msg = response.json().get('error', {}).get('message', response.text)
+            raise RuntimeError(f"Google Gemini API error: {error_msg}")
+
+        result = response.json()
+        candidates = result.get('candidates', [])
+        if candidates:
+            content = candidates[0].get('content', {})
+            parts = content.get('parts', [])
+            if parts:
+                return parts[0].get('text', '')
+        return ''
+
+
+class MistralProvider(AIProvider):
+    """Mistral AI API provider."""
+
+    name = "Mistral AI"
+    requires_api_key = True
+
+    MODELS = [
+        "mistral-large-latest",
+        "mistral-medium-latest",
+        "mistral-small-latest",
+        "open-mixtral-8x22b",
+        "open-mixtral-8x7b",
+        "codestral-latest",
+    ]
+
+    def __init__(self, api_key: str = None, model: str = None):
+        self.api_key = api_key
+        self.model = model or self.MODELS[0]
+        self.base_url = "https://api.mistral.ai/v1"
+
+    def is_available(self) -> Tuple[bool, str]:
+        if not HAS_REQUESTS:
+            return False, "requests library not installed"
+
+        if not self.api_key:
+            return False, "API key not configured"
+
+        try:
+            response = requests.get(
+                f"{self.base_url}/models",
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                timeout=10
+            )
+            if response.status_code == 200:
+                return True, "Mistral AI API connected"
+            elif response.status_code == 401:
+                return False, "Invalid API key"
+            else:
+                return False, f"API error: {response.status_code}"
+        except Exception as e:
+            return False, f"Connection error: {str(e)}"
+
+    def get_available_models(self) -> List[str]:
+        return self.MODELS
+
+    def generate(self, prompt: str, system_prompt: str = None) -> str:
+        if not self.api_key:
+            raise RuntimeError("Mistral AI API key not configured")
+
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        response = requests.post(
+            f"{self.base_url}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": self.model,
+                "messages": messages,
+                "temperature": 0.3,
+                "max_tokens": 4096
+            },
+            timeout=120
+        )
+
+        if response.status_code != 200:
+            error_msg = response.json().get('error', {}).get('message', response.text)
+            raise RuntimeError(f"Mistral AI API error: {error_msg}")
+
+        result = response.json()
+        return result.get('choices', [{}])[0].get('message', {}).get('content', '')
+
+
+class GroqProvider(AIProvider):
+    """Groq API provider - ultra-fast inference."""
+
+    name = "Groq"
+    requires_api_key = True
+
+    MODELS = [
+        "llama-3.3-70b-versatile",
+        "llama-3.1-70b-versatile",
+        "llama-3.1-8b-instant",
+        "mixtral-8x7b-32768",
+        "gemma2-9b-it",
+    ]
+
+    def __init__(self, api_key: str = None, model: str = None):
+        self.api_key = api_key
+        self.model = model or self.MODELS[0]
+        self.base_url = "https://api.groq.com/openai/v1"
+
+    def is_available(self) -> Tuple[bool, str]:
+        if not HAS_REQUESTS:
+            return False, "requests library not installed"
+
+        if not self.api_key:
+            return False, "API key not configured"
+
+        try:
+            response = requests.get(
+                f"{self.base_url}/models",
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                timeout=10
+            )
+            if response.status_code == 200:
+                return True, "Groq API connected"
+            elif response.status_code == 401:
+                return False, "Invalid API key"
+            else:
+                return False, f"API error: {response.status_code}"
+        except Exception as e:
+            return False, f"Connection error: {str(e)}"
+
+    def get_available_models(self) -> List[str]:
+        return self.MODELS
+
+    def generate(self, prompt: str, system_prompt: str = None) -> str:
+        if not self.api_key:
+            raise RuntimeError("Groq API key not configured")
+
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        response = requests.post(
+            f"{self.base_url}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": self.model,
+                "messages": messages,
+                "temperature": 0.3,
+                "max_tokens": 4096
+            },
+            timeout=120
+        )
+
+        if response.status_code != 200:
+            error_msg = response.json().get('error', {}).get('message', response.text)
+            raise RuntimeError(f"Groq API error: {error_msg}")
+
+        result = response.json()
+        return result.get('choices', [{}])[0].get('message', {}).get('content', '')
+
+
+class DeepSeekProvider(AIProvider):
+    """DeepSeek API provider."""
+
+    name = "DeepSeek"
+    requires_api_key = True
+
+    MODELS = [
+        "deepseek-chat",
+        "deepseek-coder",
+    ]
+
+    def __init__(self, api_key: str = None, model: str = None):
+        self.api_key = api_key
+        self.model = model or self.MODELS[0]
+        self.base_url = "https://api.deepseek.com/v1"
+
+    def is_available(self) -> Tuple[bool, str]:
+        if not HAS_REQUESTS:
+            return False, "requests library not installed"
+
+        if not self.api_key:
+            return False, "API key not configured"
+
+        try:
+            response = requests.get(
+                f"{self.base_url}/models",
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                timeout=10
+            )
+            if response.status_code == 200:
+                return True, "DeepSeek API connected"
+            elif response.status_code == 401:
+                return False, "Invalid API key"
+            else:
+                return False, f"API error: {response.status_code}"
+        except Exception as e:
+            return False, f"Connection error: {str(e)}"
+
+    def get_available_models(self) -> List[str]:
+        return self.MODELS
+
+    def generate(self, prompt: str, system_prompt: str = None) -> str:
+        if not self.api_key:
+            raise RuntimeError("DeepSeek API key not configured")
+
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        response = requests.post(
+            f"{self.base_url}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": self.model,
+                "messages": messages,
+                "temperature": 0.3,
+                "max_tokens": 4096
+            },
+            timeout=120
+        )
+
+        if response.status_code != 200:
+            error_msg = response.json().get('error', {}).get('message', response.text)
+            raise RuntimeError(f"DeepSeek API error: {error_msg}")
+
+        result = response.json()
+        return result.get('choices', [{}])[0].get('message', {}).get('content', '')
+
+
+class XAIProvider(AIProvider):
+    """xAI (Grok) API provider."""
+
+    name = "xAI (Grok)"
+    requires_api_key = True
+
+    MODELS = [
+        "grok-2-latest",
+        "grok-2-vision-latest",
+        "grok-beta",
+    ]
+
+    def __init__(self, api_key: str = None, model: str = None):
+        self.api_key = api_key
+        self.model = model or self.MODELS[0]
+        self.base_url = "https://api.x.ai/v1"
+
+    def is_available(self) -> Tuple[bool, str]:
+        if not HAS_REQUESTS:
+            return False, "requests library not installed"
+
+        if not self.api_key:
+            return False, "API key not configured"
+
+        try:
+            response = requests.get(
+                f"{self.base_url}/models",
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                timeout=10
+            )
+            if response.status_code == 200:
+                return True, "xAI API connected"
+            elif response.status_code == 401:
+                return False, "Invalid API key"
+            else:
+                return False, f"API error: {response.status_code}"
+        except Exception as e:
+            return False, f"Connection error: {str(e)}"
+
+    def get_available_models(self) -> List[str]:
+        return self.MODELS
+
+    def generate(self, prompt: str, system_prompt: str = None) -> str:
+        if not self.api_key:
+            raise RuntimeError("xAI API key not configured")
+
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        response = requests.post(
+            f"{self.base_url}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": self.model,
+                "messages": messages,
+                "temperature": 0.3,
+                "max_tokens": 4096
+            },
+            timeout=120
+        )
+
+        if response.status_code != 200:
+            error_msg = response.json().get('error', {}).get('message', response.text)
+            raise RuntimeError(f"xAI API error: {error_msg}")
+
+        result = response.json()
+        return result.get('choices', [{}])[0].get('message', {}).get('content', '')
+
+
 class AIProviderManager:
     """Manages AI providers and API key storage."""
 
     PROVIDERS = {
-        'ollama': OllamaProvider,
         'claude': ClaudeProvider,
         'openai': OpenAIProvider,
+        'gemini': GoogleGeminiProvider,
+        'mistral': MistralProvider,
+        'groq': GroqProvider,
+        'deepseek': DeepSeekProvider,
+        'xai': XAIProvider,
         'openrouter': OpenRouterProvider,
     }
 
@@ -547,7 +867,7 @@ class AIProviderManager:
             except Exception:
                 pass
         return {
-            'default_provider': 'ollama',
+            'default_provider': 'claude',
             'api_keys': {},
             'selected_models': {}
         }
@@ -581,7 +901,7 @@ class AIProviderManager:
 
     def get_default_provider(self) -> str:
         """Get default provider name."""
-        return self._settings.get('default_provider', 'ollama')
+        return self._settings.get('default_provider', 'claude')
 
     def set_default_provider(self, provider_name: str):
         """Set default provider."""
@@ -599,10 +919,7 @@ class AIProviderManager:
         api_key = self.get_api_key(provider_name)
         model = self.get_selected_model(provider_name)
 
-        if provider_name == 'ollama':
-            return provider_class(model=model)
-        else:
-            return provider_class(api_key=api_key, model=model)
+        return provider_class(api_key=api_key, model=model)
 
     def get_available_providers(self) -> List[Tuple[str, str, bool]]:
         """

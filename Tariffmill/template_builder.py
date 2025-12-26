@@ -1,6 +1,6 @@
 """
 AI-Assisted Template Builder for OCRMill
-Semi-guided template creation using multiple AI providers (Ollama, Claude, OpenAI, OpenRouter).
+Semi-guided template creation using multiple AI providers (Claude, OpenAI, Gemini, Mistral, Groq, DeepSeek, xAI, OpenRouter).
 """
 
 import re
@@ -95,121 +95,6 @@ class PythonHighlighter(QSyntaxHighlighter):
                 self.setFormat(match.start(), match.end() - match.start(), fmt)
 
 
-class OllamaModelWorker(QThread):
-    """Background worker for pulling Ollama models."""
-    finished = pyqtSignal(bool, str)  # success, message
-    progress = pyqtSignal(str)
-
-    def __init__(self, model_name: str):
-        super().__init__()
-        self.model_name = model_name
-
-    def _find_ollama_executable(self):
-        """Find the Ollama executable on the system."""
-        import shutil
-        import os
-
-        # First try PATH
-        ollama_path = shutil.which('ollama')
-        if ollama_path:
-            return ollama_path
-
-        # Common Windows installation paths
-        if os.name == 'nt':
-            # Get username safely
-            try:
-                username = os.getlogin()
-            except OSError:
-                username = os.environ.get('USERNAME', '')
-
-            possible_paths = [
-                # Most common installation location
-                os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Programs', 'Ollama', 'ollama.exe'),
-                # User home directory variations
-                os.path.expanduser(r'~\AppData\Local\Programs\Ollama\ollama.exe'),
-                os.path.join(r'C:\Users', username, 'AppData', 'Local', 'Programs', 'Ollama', 'ollama.exe'),
-                # Program Files locations
-                os.path.join(os.environ.get('PROGRAMFILES', r'C:\Program Files'), 'Ollama', 'ollama.exe'),
-                os.path.join(os.environ.get('PROGRAMFILES(X86)', r'C:\Program Files (x86)'), 'Ollama', 'ollama.exe'),
-                # Fallback hardcoded paths
-                r'C:\Program Files\Ollama\ollama.exe',
-            ]
-
-            for path in possible_paths:
-                if path and os.path.exists(path):
-                    return path
-
-        # macOS/Linux paths
-        else:
-            possible_paths = [
-                '/usr/local/bin/ollama',
-                '/usr/bin/ollama',
-                os.path.expanduser('~/.local/bin/ollama'),
-            ]
-            for path in possible_paths:
-                if os.path.exists(path):
-                    return path
-
-        return None
-
-    def run(self):
-        import subprocess
-        import sys
-        import os
-        try:
-            # Find Ollama executable
-            ollama_exe = self._find_ollama_executable()
-            if not ollama_exe:
-                # Provide helpful error with debug info
-                localappdata = os.environ.get('LOCALAPPDATA', 'not set')
-                expected_path = os.path.join(localappdata, 'Programs', 'Ollama', 'ollama.exe')
-                self.finished.emit(
-                    False,
-                    f"Ollama executable not found.\n"
-                    f"Expected at: {expected_path}\n"
-                    f"Please ensure Ollama is installed from https://ollama.ai"
-                )
-                return
-
-            # Get startupinfo to hide console on Windows
-            startupinfo = None
-            creationflags = 0
-            if sys.platform == 'win32':
-                startupinfo = subprocess.STARTUPINFO()
-                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                startupinfo.wShowWindow = subprocess.SW_HIDE
-                creationflags = subprocess.CREATE_NO_WINDOW
-
-            self.progress.emit(f"Downloading {self.model_name}... This may take several minutes.")
-
-            # Run ollama pull command
-            # Use encoding='utf-8' and errors='replace' to handle special characters in progress output
-            result = subprocess.run(
-                [ollama_exe, 'pull', self.model_name],
-                capture_output=True,
-                text=True,
-                encoding='utf-8',
-                errors='replace',
-                startupinfo=startupinfo,
-                creationflags=creationflags,
-                timeout=1800  # 30 minute timeout for large models
-            )
-
-            if result.returncode == 0:
-                self.finished.emit(True, f"Model '{self.model_name}' downloaded successfully!")
-            else:
-                # Clean up error message - replace any problematic characters
-                error_msg = result.stderr.strip() if result.stderr else "Unknown error"
-                # Remove non-printable characters
-                error_msg = ''.join(c if c.isprintable() or c in '\n\r\t' else '?' for c in error_msg)
-                self.finished.emit(False, f"Failed: {error_msg}")
-
-        except subprocess.TimeoutExpired:
-            self.finished.emit(False, "Download timed out. Try running 'ollama pull' manually.")
-        except FileNotFoundError:
-            self.finished.emit(False, "Ollama not found. Please install from https://ollama.ai")
-        except Exception as e:
-            self.finished.emit(False, f"Error: {str(e)}")
 
 
 class APIKeyDialog(QDialog):
@@ -219,8 +104,8 @@ class APIKeyDialog(QDialog):
         super().__init__(parent)
         self.provider_manager = provider_manager
         self.setWindowTitle("Configure AI Providers")
-        self.setMinimumWidth(550)
-        self.ollama_worker = None
+        self.setMinimumWidth(600)
+        self.setMinimumHeight(700)
         self.setup_ui()
 
     def setup_ui(self):
@@ -229,55 +114,10 @@ class APIKeyDialog(QDialog):
         # Instructions
         instructions = QLabel(
             "Configure AI providers for template generation.\n"
-            "Ollama runs locally (free). Cloud providers require API keys."
+            "Enter your API key for any provider you want to use."
         )
         instructions.setWordWrap(True)
         layout.addWidget(instructions)
-
-        # Ollama (Local) - First since it's free
-        ollama_group = QGroupBox("Ollama (Local - Free)")
-        ollama_layout = QFormLayout(ollama_group)
-
-        # Model selection dropdown
-        self.ollama_model_combo = QComboBox()
-        self.ollama_model_combo.setMinimumWidth(200)
-        self.ollama_model_combo.addItems([
-            "llama3.2:3b",
-            "llama3.2:1b",
-            "llama3.1:8b",
-            "mistral:7b",
-            "qwen2.5:7b",
-            "codellama:7b",
-            "phi3:mini",
-        ])
-        ollama_layout.addRow("Model to Download:", self.ollama_model_combo)
-
-        # Download button and status
-        ollama_btn_layout = QHBoxLayout()
-        self.ollama_download_btn = QPushButton("Download Model")
-        self.ollama_download_btn.clicked.connect(self.download_ollama_model)
-        self.ollama_status = QLabel("")
-        ollama_btn_layout.addWidget(self.ollama_download_btn)
-        ollama_btn_layout.addWidget(self.ollama_status)
-        ollama_btn_layout.addStretch()
-        ollama_layout.addRow("", ollama_btn_layout)
-
-        # Progress bar for download
-        self.ollama_progress = QProgressBar()
-        self.ollama_progress.setRange(0, 0)  # Indeterminate
-        self.ollama_progress.setVisible(False)
-        ollama_layout.addRow("", self.ollama_progress)
-
-        # Installed models display
-        self.ollama_installed = QLabel("")
-        self.refresh_ollama_models()
-        ollama_layout.addRow("Installed:", self.ollama_installed)
-
-        ollama_link = QLabel('<a href="https://ollama.ai">Download Ollama</a> | <a href="https://ollama.ai/library">Browse Models</a>')
-        ollama_link.setOpenExternalLinks(True)
-        ollama_layout.addRow("", ollama_link)
-
-        layout.addWidget(ollama_group)
 
         # Provider API key inputs
         self.key_inputs = {}
@@ -290,20 +130,17 @@ class APIKeyDialog(QDialog):
         self.claude_key.setPlaceholderText("sk-ant-...")
         self.claude_key.setText(self.provider_manager.get_api_key('claude') or '')
         claude_layout.addRow("API Key:", self.claude_key)
-
-        claude_link = QLabel('<a href="https://console.anthropic.com/settings/keys">Get API key from Anthropic Console</a>')
+        claude_link = QLabel('<a href="https://console.anthropic.com/settings/keys">Get API key</a>')
         claude_link.setOpenExternalLinks(True)
-        claude_layout.addRow("", claude_link)
-
-        self.claude_test = QPushButton("Test Connection")
+        self.claude_test = QPushButton("Test")
         self.claude_test.clicked.connect(lambda: self.test_provider('claude', self.claude_key.text()))
         self.claude_status = QLabel("")
         test_layout = QHBoxLayout()
         test_layout.addWidget(self.claude_test)
         test_layout.addWidget(self.claude_status)
+        test_layout.addWidget(claude_link)
         test_layout.addStretch()
         claude_layout.addRow("", test_layout)
-
         layout.addWidget(claude_group)
         self.key_inputs['claude'] = self.claude_key
 
@@ -315,22 +152,129 @@ class APIKeyDialog(QDialog):
         self.openai_key.setPlaceholderText("sk-...")
         self.openai_key.setText(self.provider_manager.get_api_key('openai') or '')
         openai_layout.addRow("API Key:", self.openai_key)
-
-        openai_link = QLabel('<a href="https://platform.openai.com/api-keys">Get API key from OpenAI</a>')
+        openai_link = QLabel('<a href="https://platform.openai.com/api-keys">Get API key</a>')
         openai_link.setOpenExternalLinks(True)
-        openai_layout.addRow("", openai_link)
-
-        self.openai_test = QPushButton("Test Connection")
+        self.openai_test = QPushButton("Test")
         self.openai_test.clicked.connect(lambda: self.test_provider('openai', self.openai_key.text()))
         self.openai_status = QLabel("")
         test_layout2 = QHBoxLayout()
         test_layout2.addWidget(self.openai_test)
         test_layout2.addWidget(self.openai_status)
+        test_layout2.addWidget(openai_link)
         test_layout2.addStretch()
         openai_layout.addRow("", test_layout2)
-
         layout.addWidget(openai_group)
         self.key_inputs['openai'] = self.openai_key
+
+        # Google Gemini
+        gemini_group = QGroupBox("Google Gemini")
+        gemini_layout = QFormLayout(gemini_group)
+        self.gemini_key = QLineEdit()
+        self.gemini_key.setEchoMode(QLineEdit.Password)
+        self.gemini_key.setPlaceholderText("AIza...")
+        self.gemini_key.setText(self.provider_manager.get_api_key('gemini') or '')
+        gemini_layout.addRow("API Key:", self.gemini_key)
+        gemini_link = QLabel('<a href="https://aistudio.google.com/app/apikey">Get API key</a>')
+        gemini_link.setOpenExternalLinks(True)
+        self.gemini_test = QPushButton("Test")
+        self.gemini_test.clicked.connect(lambda: self.test_provider('gemini', self.gemini_key.text()))
+        self.gemini_status = QLabel("")
+        test_layout3 = QHBoxLayout()
+        test_layout3.addWidget(self.gemini_test)
+        test_layout3.addWidget(self.gemini_status)
+        test_layout3.addWidget(gemini_link)
+        test_layout3.addStretch()
+        gemini_layout.addRow("", test_layout3)
+        layout.addWidget(gemini_group)
+        self.key_inputs['gemini'] = self.gemini_key
+
+        # Mistral AI
+        mistral_group = QGroupBox("Mistral AI")
+        mistral_layout = QFormLayout(mistral_group)
+        self.mistral_key = QLineEdit()
+        self.mistral_key.setEchoMode(QLineEdit.Password)
+        self.mistral_key.setPlaceholderText("...")
+        self.mistral_key.setText(self.provider_manager.get_api_key('mistral') or '')
+        mistral_layout.addRow("API Key:", self.mistral_key)
+        mistral_link = QLabel('<a href="https://console.mistral.ai/api-keys">Get API key</a>')
+        mistral_link.setOpenExternalLinks(True)
+        self.mistral_test = QPushButton("Test")
+        self.mistral_test.clicked.connect(lambda: self.test_provider('mistral', self.mistral_key.text()))
+        self.mistral_status = QLabel("")
+        test_layout4 = QHBoxLayout()
+        test_layout4.addWidget(self.mistral_test)
+        test_layout4.addWidget(self.mistral_status)
+        test_layout4.addWidget(mistral_link)
+        test_layout4.addStretch()
+        mistral_layout.addRow("", test_layout4)
+        layout.addWidget(mistral_group)
+        self.key_inputs['mistral'] = self.mistral_key
+
+        # Groq
+        groq_group = QGroupBox("Groq (Ultra-fast)")
+        groq_layout = QFormLayout(groq_group)
+        self.groq_key = QLineEdit()
+        self.groq_key.setEchoMode(QLineEdit.Password)
+        self.groq_key.setPlaceholderText("gsk_...")
+        self.groq_key.setText(self.provider_manager.get_api_key('groq') or '')
+        groq_layout.addRow("API Key:", self.groq_key)
+        groq_link = QLabel('<a href="https://console.groq.com/keys">Get API key</a>')
+        groq_link.setOpenExternalLinks(True)
+        self.groq_test = QPushButton("Test")
+        self.groq_test.clicked.connect(lambda: self.test_provider('groq', self.groq_key.text()))
+        self.groq_status = QLabel("")
+        test_layout5 = QHBoxLayout()
+        test_layout5.addWidget(self.groq_test)
+        test_layout5.addWidget(self.groq_status)
+        test_layout5.addWidget(groq_link)
+        test_layout5.addStretch()
+        groq_layout.addRow("", test_layout5)
+        layout.addWidget(groq_group)
+        self.key_inputs['groq'] = self.groq_key
+
+        # DeepSeek
+        deepseek_group = QGroupBox("DeepSeek")
+        deepseek_layout = QFormLayout(deepseek_group)
+        self.deepseek_key = QLineEdit()
+        self.deepseek_key.setEchoMode(QLineEdit.Password)
+        self.deepseek_key.setPlaceholderText("sk-...")
+        self.deepseek_key.setText(self.provider_manager.get_api_key('deepseek') or '')
+        deepseek_layout.addRow("API Key:", self.deepseek_key)
+        deepseek_link = QLabel('<a href="https://platform.deepseek.com/api_keys">Get API key</a>')
+        deepseek_link.setOpenExternalLinks(True)
+        self.deepseek_test = QPushButton("Test")
+        self.deepseek_test.clicked.connect(lambda: self.test_provider('deepseek', self.deepseek_key.text()))
+        self.deepseek_status = QLabel("")
+        test_layout6 = QHBoxLayout()
+        test_layout6.addWidget(self.deepseek_test)
+        test_layout6.addWidget(self.deepseek_status)
+        test_layout6.addWidget(deepseek_link)
+        test_layout6.addStretch()
+        deepseek_layout.addRow("", test_layout6)
+        layout.addWidget(deepseek_group)
+        self.key_inputs['deepseek'] = self.deepseek_key
+
+        # xAI (Grok)
+        xai_group = QGroupBox("xAI (Grok)")
+        xai_layout = QFormLayout(xai_group)
+        self.xai_key = QLineEdit()
+        self.xai_key.setEchoMode(QLineEdit.Password)
+        self.xai_key.setPlaceholderText("xai-...")
+        self.xai_key.setText(self.provider_manager.get_api_key('xai') or '')
+        xai_layout.addRow("API Key:", self.xai_key)
+        xai_link = QLabel('<a href="https://console.x.ai">Get API key</a>')
+        xai_link.setOpenExternalLinks(True)
+        self.xai_test = QPushButton("Test")
+        self.xai_test.clicked.connect(lambda: self.test_provider('xai', self.xai_key.text()))
+        self.xai_status = QLabel("")
+        test_layout7 = QHBoxLayout()
+        test_layout7.addWidget(self.xai_test)
+        test_layout7.addWidget(self.xai_status)
+        test_layout7.addWidget(xai_link)
+        test_layout7.addStretch()
+        xai_layout.addRow("", test_layout7)
+        layout.addWidget(xai_group)
+        self.key_inputs['xai'] = self.xai_key
 
         # OpenRouter
         openrouter_group = QGroupBox("OpenRouter (Access multiple models)")
@@ -340,20 +284,17 @@ class APIKeyDialog(QDialog):
         self.openrouter_key.setPlaceholderText("sk-or-...")
         self.openrouter_key.setText(self.provider_manager.get_api_key('openrouter') or '')
         openrouter_layout.addRow("API Key:", self.openrouter_key)
-
-        openrouter_link = QLabel('<a href="https://openrouter.ai/keys">Get API key from OpenRouter</a>')
+        openrouter_link = QLabel('<a href="https://openrouter.ai/keys">Get API key</a>')
         openrouter_link.setOpenExternalLinks(True)
-        openrouter_layout.addRow("", openrouter_link)
-
-        self.openrouter_test = QPushButton("Test Connection")
+        self.openrouter_test = QPushButton("Test")
         self.openrouter_test.clicked.connect(lambda: self.test_provider('openrouter', self.openrouter_key.text()))
         self.openrouter_status = QLabel("")
-        test_layout3 = QHBoxLayout()
-        test_layout3.addWidget(self.openrouter_test)
-        test_layout3.addWidget(self.openrouter_status)
-        test_layout3.addStretch()
-        openrouter_layout.addRow("", test_layout3)
-
+        test_layout8 = QHBoxLayout()
+        test_layout8.addWidget(self.openrouter_test)
+        test_layout8.addWidget(self.openrouter_status)
+        test_layout8.addWidget(openrouter_link)
+        test_layout8.addStretch()
+        openrouter_layout.addRow("", test_layout8)
         layout.addWidget(openrouter_group)
         self.key_inputs['openrouter'] = self.openrouter_key
 
@@ -392,64 +333,13 @@ class APIKeyDialog(QDialog):
 
         self.accept()
 
-    def refresh_ollama_models(self):
-        """Refresh the list of installed Ollama models."""
-        try:
-            from ai_providers import OllamaProvider
-            provider = OllamaProvider()
-            models = provider.get_available_models()
-            if models:
-                # Show first 3 models, add "..." if more
-                display = ", ".join(models[:3])
-                if len(models) > 3:
-                    display += f", ... (+{len(models) - 3} more)"
-                self.ollama_installed.setText(display)
-                self.ollama_installed.setStyleSheet("color: green;")
-            else:
-                self.ollama_installed.setText("No models installed")
-                self.ollama_installed.setStyleSheet("color: orange;")
-        except Exception as e:
-            self.ollama_installed.setText(f"Error: {e}")
-            self.ollama_installed.setStyleSheet("color: red;")
-
-    def download_ollama_model(self):
-        """Download the selected Ollama model."""
-        model = self.ollama_model_combo.currentText()
-        if not model:
-            return
-
-        # Disable button and show progress
-        self.ollama_download_btn.setEnabled(False)
-        self.ollama_progress.setVisible(True)
-        self.ollama_status.setText(f"Downloading {model}...")
-        self.ollama_status.setStyleSheet("color: blue;")
-
-        # Start download worker
-        self.ollama_worker = OllamaModelWorker(model)
-        self.ollama_worker.finished.connect(self.on_ollama_download_complete)
-        self.ollama_worker.progress.connect(lambda msg: self.ollama_status.setText(msg))
-        self.ollama_worker.start()
-
-    def on_ollama_download_complete(self, success: bool, message: str):
-        """Handle Ollama model download completion."""
-        self.ollama_download_btn.setEnabled(True)
-        self.ollama_progress.setVisible(False)
-
-        if success:
-            self.ollama_status.setText("✓ " + message)
-            self.ollama_status.setStyleSheet("color: green;")
-            self.refresh_ollama_models()
-        else:
-            self.ollama_status.setText("✗ " + message)
-            self.ollama_status.setStyleSheet("color: red;")
-
 
 class TemplateBuilderDialog(QDialog):
     """
     AI-Assisted Template Builder Dialog.
 
     Guides users through creating invoice templates with AI suggestions.
-    Supports multiple AI providers: Ollama (local), Claude, OpenAI, OpenRouter.
+    Supports multiple AI providers: Claude, OpenAI, Gemini, Mistral, Groq, DeepSeek, xAI, OpenRouter.
     """
 
     template_created = pyqtSignal(str, str)  # template_name, file_path

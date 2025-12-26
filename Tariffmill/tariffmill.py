@@ -79,6 +79,9 @@ import configparser
 import webbrowser
 import urllib.request
 import urllib.error
+import socket
+import getpass
+import hashlib
 import xml.etree.ElementTree as ET
 from xml.dom import minidom
 from pathlib import Path
@@ -939,6 +942,354 @@ def is_widget_valid(widget):
         except RuntimeError:
             return False
 
+# ==============================================================================
+# File Processing Counter Functions
+# ==============================================================================
+
+def get_system_identifier():
+    """
+    Get unique system name and username for file tracking.
+
+    Returns:
+        tuple: (system_name, username)
+    """
+    system_name = socket.gethostname()
+    username = getpass.getuser()
+    return system_name, username
+
+def generate_file_identifier(filepath):
+    """
+    Generate unique file identifier in format: SYSTEM_user_timestamp_hash
+
+    Args:
+        filepath: Path to the file being processed
+
+    Returns:
+        str: Unique file identifier
+    """
+    system_name, username = get_system_identifier()
+    file_hash = hashlib.md5(str(filepath).encode()).hexdigest()[:8]
+    timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+    return f"{system_name}_{username}_{timestamp}_{file_hash}"
+
+def log_processed_file(filepath, output_path, record_count, processing_type='export'):
+    """
+    Log a processed file to the database and update user statistics.
+
+    Args:
+        filepath: Source file path
+        output_path: Output file path
+        record_count: Number of records processed
+        processing_type: Type of processing ('export' or 'reprocess')
+    """
+    try:
+        system_name, username = get_system_identifier()
+        file_identifier = generate_file_identifier(filepath)
+        original_filename = Path(filepath).name if filepath else ''
+        output_filename = Path(output_path).name if output_path else ''
+        processed_date = datetime.now().isoformat()
+
+        conn = sqlite3.connect(get_db_path())
+        c = conn.cursor()
+
+        # Insert into processed_file_log
+        c.execute("""
+            INSERT INTO processed_file_log
+            (file_identifier, system_name, username, original_filename,
+             output_filename, record_count, processed_date, processing_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (file_identifier, system_name, username, original_filename,
+              output_filename, record_count, processed_date, processing_type))
+
+        # Update or insert user_processing_stats
+        c.execute("""
+            INSERT INTO user_processing_stats
+            (system_name, username, total_files_processed, total_records_processed,
+             first_processed_date, last_processed_date)
+            VALUES (?, ?, 1, ?, ?, ?)
+            ON CONFLICT(system_name, username) DO UPDATE SET
+                total_files_processed = total_files_processed + 1,
+                total_records_processed = total_records_processed + excluded.total_records_processed,
+                last_processed_date = excluded.last_processed_date
+        """, (system_name, username, record_count, processed_date, processed_date))
+
+        conn.commit()
+        conn.close()
+
+        logger.info(f"[COUNTER] Logged file: {file_identifier} ({record_count} records)")
+
+        # Check if end of month and send stats email
+        check_and_send_monthly_stats()
+
+        return file_identifier
+
+    except Exception as e:
+        logger.error(f"[COUNTER] Failed to log processed file: {e}")
+        return None
+
+def get_user_processing_stats():
+    """
+    Get current user's processing statistics.
+
+    Returns:
+        dict: Statistics including total_files, total_records, first_date, last_date
+    """
+    try:
+        system_name, username = get_system_identifier()
+        conn = sqlite3.connect(get_db_path())
+        c = conn.cursor()
+
+        c.execute("""
+            SELECT total_files_processed, total_records_processed,
+                   first_processed_date, last_processed_date
+            FROM user_processing_stats
+            WHERE system_name = ? AND username = ?
+        """, (system_name, username))
+
+        row = c.fetchone()
+        conn.close()
+
+        if row:
+            return {
+                'system_name': system_name,
+                'username': username,
+                'total_files': row[0],
+                'total_records': row[1],
+                'first_date': row[2],
+                'last_date': row[3]
+            }
+        else:
+            return {
+                'system_name': system_name,
+                'username': username,
+                'total_files': 0,
+                'total_records': 0,
+                'first_date': None,
+                'last_date': None
+            }
+
+    except Exception as e:
+        logger.error(f"[COUNTER] Failed to get user stats: {e}")
+        return None
+
+def get_processing_history(limit=100):
+    """
+    Get recent processing history for current user.
+
+    Args:
+        limit: Maximum number of records to return
+
+    Returns:
+        list: List of processing log entries
+    """
+    try:
+        system_name, username = get_system_identifier()
+        conn = sqlite3.connect(get_db_path())
+        c = conn.cursor()
+
+        c.execute("""
+            SELECT file_identifier, original_filename, output_filename,
+                   record_count, processed_date, processing_type
+            FROM processed_file_log
+            WHERE system_name = ? AND username = ?
+            ORDER BY processed_date DESC
+            LIMIT ?
+        """, (system_name, username, limit))
+
+        rows = c.fetchall()
+        conn.close()
+
+        return [{
+            'file_identifier': row[0],
+            'original_filename': row[1],
+            'output_filename': row[2],
+            'record_count': row[3],
+            'processed_date': row[4],
+            'processing_type': row[5]
+        } for row in rows]
+
+    except Exception as e:
+        logger.error(f"[COUNTER] Failed to get processing history: {e}")
+        return []
+
+def get_all_user_stats():
+    """
+    Get processing statistics for all users (for monthly report).
+
+    Returns:
+        list: List of all user statistics
+    """
+    try:
+        conn = sqlite3.connect(get_db_path())
+        c = conn.cursor()
+
+        c.execute("""
+            SELECT system_name, username, total_files_processed,
+                   total_records_processed, first_processed_date, last_processed_date
+            FROM user_processing_stats
+            ORDER BY total_files_processed DESC
+        """)
+
+        rows = c.fetchall()
+        conn.close()
+
+        return [{
+            'system_name': row[0],
+            'username': row[1],
+            'total_files': row[2],
+            'total_records': row[3],
+            'first_date': row[4],
+            'last_date': row[5]
+        } for row in rows]
+
+    except Exception as e:
+        logger.error(f"[COUNTER] Failed to get all user stats: {e}")
+        return []
+
+def check_and_send_monthly_stats():
+    """
+    Check if it's the last day of the month and send stats email if so.
+    Only sends once per month (tracks last sent date in app_config).
+    """
+    try:
+        from calendar import monthrange
+        today = datetime.now()
+        _, last_day = monthrange(today.year, today.month)
+
+        # Check if today is the last day of the month
+        if today.day != last_day:
+            return
+
+        # Check if we already sent this month
+        month_key = f"monthly_stats_sent_{today.year}_{today.month:02d}"
+        already_sent = get_user_setting(month_key, 'false')
+
+        if already_sent == 'true':
+            return
+
+        # Send the monthly stats email
+        send_monthly_stats_email()
+
+        # Mark as sent
+        set_user_setting(month_key, 'true')
+        logger.info(f"[COUNTER] Monthly stats email sent for {today.year}-{today.month:02d}")
+
+    except Exception as e:
+        logger.error(f"[COUNTER] Failed to check/send monthly stats: {e}")
+
+def send_monthly_stats_email():
+    """
+    Send monthly processing statistics email to paynehl@gmail.com.
+    Uses SMTP to send email with user statistics.
+    """
+    try:
+        import smtplib
+        from email.mime.text import MIMEText
+        from email.mime.multipart import MIMEMultipart
+
+        # Get all user stats
+        all_stats = get_all_user_stats()
+
+        if not all_stats:
+            logger.info("[COUNTER] No stats to send")
+            return
+
+        # Build email content
+        today = datetime.now()
+        month_name = today.strftime('%B %Y')
+
+        # Create HTML email body
+        html_body = f"""
+        <html>
+        <head>
+            <style>
+                body {{ font-family: Arial, sans-serif; }}
+                table {{ border-collapse: collapse; width: 100%; }}
+                th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+                th {{ background-color: #6366f1; color: white; }}
+                tr:nth-child(even) {{ background-color: #f2f2f2; }}
+                h2 {{ color: #6366f1; }}
+            </style>
+        </head>
+        <body>
+            <h2>TariffMill Monthly Processing Report - {month_name}</h2>
+            <p>Generated: {today.strftime('%Y-%m-%d %H:%M:%S')}</p>
+
+            <h3>User Statistics Summary</h3>
+            <table>
+                <tr>
+                    <th>System Name</th>
+                    <th>Username</th>
+                    <th>Files Processed</th>
+                    <th>Records Processed</th>
+                    <th>First Activity</th>
+                    <th>Last Activity</th>
+                </tr>
+        """
+
+        total_files = 0
+        total_records = 0
+
+        for stat in all_stats:
+            html_body += f"""
+                <tr>
+                    <td>{stat['system_name']}</td>
+                    <td>{stat['username']}</td>
+                    <td>{stat['total_files']:,}</td>
+                    <td>{stat['total_records']:,}</td>
+                    <td>{stat['first_date'][:10] if stat['first_date'] else 'N/A'}</td>
+                    <td>{stat['last_date'][:10] if stat['last_date'] else 'N/A'}</td>
+                </tr>
+            """
+            total_files += stat['total_files']
+            total_records += stat['total_records']
+
+        html_body += f"""
+            </table>
+
+            <h3>Totals</h3>
+            <p><strong>Total Files Processed:</strong> {total_files:,}</p>
+            <p><strong>Total Records Processed:</strong> {total_records:,}</p>
+            <p><strong>Active Users:</strong> {len(all_stats)}</p>
+
+            <hr>
+            <p style="color: #666; font-size: 12px;">
+                This is an automated report from TariffMill.
+            </p>
+        </body>
+        </html>
+        """
+
+        # Create message
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = f'TariffMill Monthly Stats Report - {month_name}'
+        msg['From'] = 'tariffmill@noreply.local'
+        msg['To'] = 'paynehl@gmail.com'
+
+        # Attach HTML
+        msg.attach(MIMEText(html_body, 'html'))
+
+        # Try to send via localhost SMTP (for systems with mail server)
+        # If fails, log the stats instead
+        try:
+            with smtplib.SMTP('localhost', 25, timeout=10) as server:
+                server.send_message(msg)
+                logger.info("[COUNTER] Monthly stats email sent successfully")
+        except Exception as smtp_error:
+            # Fallback: Save report to file in app data directory
+            report_dir = Path(get_db_path()).parent / "reports"
+            report_dir.mkdir(exist_ok=True)
+            report_file = report_dir / f"monthly_report_{today.strftime('%Y%m')}.html"
+
+            with open(report_file, 'w', encoding='utf-8') as f:
+                f.write(html_body)
+
+            logger.info(f"[COUNTER] Monthly stats saved to: {report_file}")
+            logger.warning(f"[COUNTER] Could not send email (no SMTP server): {smtp_error}")
+
+    except Exception as e:
+        logger.error(f"[COUNTER] Failed to send monthly stats email: {e}")
+
 def get_232_info(hts_code):
     """
     Lookup Section 232 tariff information for an HTS code.
@@ -1096,6 +1447,31 @@ def init_database():
             input_folder TEXT,
             output_folder TEXT,
             created_date TEXT
+        )""")
+
+        # Create processed_file_log table for tracking processed files per user
+        c.execute("""CREATE TABLE IF NOT EXISTS processed_file_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_identifier TEXT NOT NULL UNIQUE,
+            system_name TEXT NOT NULL,
+            username TEXT NOT NULL,
+            original_filename TEXT,
+            output_filename TEXT,
+            record_count INTEGER DEFAULT 0,
+            processed_date TEXT NOT NULL,
+            processing_type TEXT DEFAULT 'export'
+        )""")
+
+        # Create user_processing_stats table for aggregate user statistics
+        c.execute("""CREATE TABLE IF NOT EXISTS user_processing_stats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            system_name TEXT NOT NULL,
+            username TEXT NOT NULL,
+            total_files_processed INTEGER DEFAULT 0,
+            total_records_processed INTEGER DEFAULT 0,
+            first_processed_date TEXT,
+            last_processed_date TEXT,
+            UNIQUE(system_name, username)
         )""")
 
         # Migration: Add manufacturer_name and customer_id columns to mid_table if they don't exist
@@ -2268,13 +2644,21 @@ class TariffMill(QMainWindow):
         help_menu.addAction(update_action)
 
         help_menu.addSeparator()
-        
+
+        # Processing Statistics action
+        stats_icon = self.style().standardIcon(QStyle.SP_FileDialogInfoView)
+        stats_action = QAction(stats_icon, "Processing Statistics...", self)
+        stats_action.triggered.connect(self.show_processing_stats)
+        help_menu.addAction(stats_action)
+
+        help_menu.addSeparator()
+
         # About action
         about_icon = self.style().standardIcon(QStyle.SP_MessageBoxInformation)
         about_action = QAction(about_icon, "About", self)
         about_action.triggered.connect(self.show_about_dialog)
         help_menu.addAction(about_action)
-        
+
         layout.setMenuBar(menubar)
         self.settings_action = settings_action
 
@@ -5055,6 +5439,151 @@ class TariffMill(QMainWindow):
 
         self.center_dialog(dialog)
         dialog.exec_()
+
+    def show_processing_stats(self):
+        """Show the Processing Statistics dialog with user's file processing history."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Processing Statistics")
+        dialog.resize(900, 600)
+        layout = QVBoxLayout(dialog)
+
+        # Get current user stats
+        stats = get_user_processing_stats()
+
+        # Header section with user info and totals
+        header_frame = QFrame()
+        header_frame.setStyleSheet("""
+            QFrame {
+                background-color: #6366f1;
+                border-radius: 8px;
+                padding: 10px;
+            }
+            QLabel {
+                color: white;
+            }
+        """)
+        header_layout = QVBoxLayout(header_frame)
+
+        # User info row
+        user_info = QLabel(f"<b>System:</b> {stats['system_name']}  |  <b>User:</b> {stats['username']}")
+        user_info.setStyleSheet("font-size: 14px; color: white;")
+        header_layout.addWidget(user_info)
+
+        # Stats row
+        stats_row = QHBoxLayout()
+
+        total_files_label = QLabel(f"<h2 style='margin: 0;'>{stats['total_files']:,}</h2><p style='margin: 0; font-size: 11px;'>Files Processed</p>")
+        total_files_label.setAlignment(Qt.AlignCenter)
+        stats_row.addWidget(total_files_label)
+
+        total_records_label = QLabel(f"<h2 style='margin: 0;'>{stats['total_records']:,}</h2><p style='margin: 0; font-size: 11px;'>Records Processed</p>")
+        total_records_label.setAlignment(Qt.AlignCenter)
+        stats_row.addWidget(total_records_label)
+
+        first_date = stats['first_date'][:10] if stats['first_date'] else 'N/A'
+        first_date_label = QLabel(f"<h3 style='margin: 0;'>{first_date}</h3><p style='margin: 0; font-size: 11px;'>First Activity</p>")
+        first_date_label.setAlignment(Qt.AlignCenter)
+        stats_row.addWidget(first_date_label)
+
+        last_date = stats['last_date'][:10] if stats['last_date'] else 'N/A'
+        last_date_label = QLabel(f"<h3 style='margin: 0;'>{last_date}</h3><p style='margin: 0; font-size: 11px;'>Last Activity</p>")
+        last_date_label.setAlignment(Qt.AlignCenter)
+        stats_row.addWidget(last_date_label)
+
+        header_layout.addLayout(stats_row)
+        layout.addWidget(header_frame)
+
+        layout.addSpacing(15)
+
+        # History table
+        history_label = QLabel("<b>Processing History</b> (Most Recent)")
+        layout.addWidget(history_label)
+
+        history_table = QTableWidget()
+        history_table.setColumnCount(5)
+        history_table.setHorizontalHeaderLabels([
+            "File Identifier", "Source File", "Output File", "Records", "Date"
+        ])
+        history_table.horizontalHeader().setStretchLastSection(True)
+        history_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        history_table.setSelectionBehavior(QTableWidget.SelectRows)
+        history_table.setAlternatingRowColors(True)
+
+        # Get history
+        history = get_processing_history(100)
+
+        history_table.setRowCount(len(history))
+        for row_idx, record in enumerate(history):
+            history_table.setItem(row_idx, 0, QTableWidgetItem(record['file_identifier']))
+            history_table.setItem(row_idx, 1, QTableWidgetItem(record['original_filename']))
+            history_table.setItem(row_idx, 2, QTableWidgetItem(record['output_filename']))
+            history_table.setItem(row_idx, 3, QTableWidgetItem(str(record['record_count'])))
+
+            # Format date nicely
+            date_str = record['processed_date']
+            if date_str:
+                try:
+                    dt = datetime.fromisoformat(date_str)
+                    date_str = dt.strftime('%Y-%m-%d %H:%M')
+                except:
+                    pass
+            history_table.setItem(row_idx, 4, QTableWidgetItem(date_str))
+
+        layout.addWidget(history_table)
+
+        # Button row
+        btn_layout = QHBoxLayout()
+
+        # Export history button
+        export_btn = QPushButton("Export History to CSV")
+        export_btn.clicked.connect(lambda: self._export_processing_history(history))
+        btn_layout.addWidget(export_btn)
+
+        btn_layout.addStretch()
+
+        # Close button
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dialog.accept)
+        btn_layout.addWidget(close_btn)
+
+        layout.addLayout(btn_layout)
+
+        self.center_dialog(dialog)
+        dialog.exec_()
+
+    def _export_processing_history(self, history):
+        """Export processing history to CSV file."""
+        if not history:
+            QMessageBox.information(self, "No Data", "No processing history to export.")
+            return
+
+        # Ask user for save location
+        filepath, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Processing History",
+            str(OUTPUT_DIR / f"processing_history_{datetime.now():%Y%m%d}.csv"),
+            "CSV Files (*.csv)"
+        )
+
+        if not filepath:
+            return
+
+        try:
+            import csv
+            with open(filepath, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(f, fieldnames=[
+                    'file_identifier', 'original_filename', 'output_filename',
+                    'record_count', 'processed_date', 'processing_type'
+                ])
+                writer.writeheader()
+                writer.writerows(history)
+
+            QMessageBox.information(self, "Export Complete", f"History exported to:\n{filepath}")
+            logger.info(f"[COUNTER] Exported processing history to: {filepath}")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Export Failed", f"Failed to export history:\n{e}")
+            logger.error(f"[COUNTER] Failed to export history: {e}")
 
     def update_file_label_style(self):
         """Update file label background based on current theme"""
@@ -9309,17 +9838,18 @@ class TariffMill(QMainWindow):
         # Template buttons
         template_buttons_layout = QHBoxLayout()
 
-        btn_create_template = QPushButton("Create Template (AI)")
-        btn_create_template.setStyleSheet(self.get_button_style("success"))
-        btn_create_template.setToolTip("Create a new invoice template using AI (Claude, OpenAI, Ollama, or OpenRouter)")
-        btn_create_template.clicked.connect(self.ocrmill_open_template_builder)
-        template_buttons_layout.addWidget(btn_create_template)
+        btn_create_wizard = QPushButton("Create Template (Wizard)")
+        btn_create_wizard.setStyleSheet(self.get_button_style("success"))
+        btn_create_wizard.setToolTip("Create a new invoice template using the step-by-step Pattern Wizard")
+        btn_create_wizard.clicked.connect(self.ocrmill_open_template_wizard)
+        template_buttons_layout.addWidget(btn_create_wizard)
 
-        btn_auto_builder = QPushButton("Quick Template (No AI)")
-        btn_auto_builder.setStyleSheet(self.get_button_style("info"))
-        btn_auto_builder.setToolTip("Create template using pattern detection - no AI or API key required")
-        btn_auto_builder.clicked.connect(self.ocrmill_open_auto_template_builder)
-        template_buttons_layout.addWidget(btn_auto_builder)
+        btn_create_ai = QPushButton("Create (AI)")
+        btn_create_ai.setStyleSheet(self.get_button_style("info"))
+        btn_create_ai.setToolTip("Create template using AI analysis (requires API key)")
+        btn_create_ai.clicked.connect(self.ocrmill_open_template_builder)
+        template_buttons_layout.addWidget(btn_create_ai)
+
 
         btn_edit_template = QPushButton("Edit Selected")
         btn_edit_template.setStyleSheet(self.get_button_style("default"))
@@ -9780,6 +10310,21 @@ Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                 item.setForeground(Qt.gray)
             self.ocrmill_templates_list.addItem(item)
 
+    def ocrmill_open_template_wizard(self):
+        """Open the step-by-step template pattern wizard."""
+        try:
+            from template_wizard import TemplateWizard
+            wizard = TemplateWizard(self)
+            wizard.template_created.connect(self.ocrmill_on_template_created)
+            wizard.exec_()
+        except ImportError as e:
+            QMessageBox.warning(
+                self, "Import Error",
+                f"Failed to load Template Wizard: {e}. Make sure template_wizard.py exists."
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to open Template Wizard: {e}")
+
     def ocrmill_open_template_builder(self):
         """Open the AI-assisted template builder dialog."""
         try:
@@ -9791,26 +10336,10 @@ Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             QMessageBox.warning(
                 self, "Import Error",
                 f"Failed to load Template Builder: {e}\n\n"
-                "Make sure template_builder.py and ollama_helper.py exist."
+                "Make sure template_builder.py and ai_providers.py exist."
             )
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to open Template Builder: {e}")
-
-    def ocrmill_open_auto_template_builder(self):
-        """Open the automated template builder dialog."""
-        try:
-            from auto_template_builder import AutoTemplateBuilderDialog
-            dialog = AutoTemplateBuilderDialog(self)
-            dialog.template_created.connect(self.ocrmill_on_template_created)
-            dialog.exec_()
-        except ImportError as e:
-            QMessageBox.warning(
-                self, "Import Error",
-                f"Failed to load Auto Template Builder: {e}\n\n"
-                "Make sure auto_template_builder.py exists."
-            )
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to open Auto Template Builder: {e}")
 
     def ocrmill_on_template_created(self, template_name: str, file_path: str):
         """Handle new template creation."""
@@ -12387,6 +12916,11 @@ Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
                 QMessageBox.information(self, "Success", success_msg)
                 logger.success(f"Split export complete: {len(exported_files)} files created" + (f" ({added_parts_count} parts added to DB)" if added_parts_count > 0 else ""))
+
+                # Log processed file for tracking
+                total_records = sum(1 for _ in range(self.table.rowCount()))
+                log_processed_file(self.current_csv, str(OUTPUT_DIR / exported_files[0]), total_records, 'export')
+
                 self.clear_all()
                 return
 
@@ -12654,6 +13188,10 @@ Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
             QMessageBox.information(self, "Success", success_msg)
             logger.success(f"Export complete: {out.name}" + (f" ({added_parts_count} parts added to DB)" if added_parts_count > 0 else ""))
+
+            # Log processed file for tracking
+            log_processed_file(self.current_csv, str(out), self.table.rowCount(), 'export')
+
         except Exception as e:
             self.export_progress_widget.hide()
             QMessageBox.critical(self, "Export Failed", str(e))
