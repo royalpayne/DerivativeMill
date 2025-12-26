@@ -16,10 +16,14 @@ from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QGroupBox, QFormLayout, QLineEdit, QTextEdit, QPlainTextEdit,
     QComboBox, QSpinBox, QCheckBox, QFileDialog, QMessageBox,
-    QTabWidget, QWidget, QProgressBar, QApplication
+    QTabWidget, QWidget, QProgressBar, QApplication, QSplitter,
+    QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QThread
 from PyQt5.QtGui import QFont
+
+# Base directory for templates
+BASE_DIR = Path(__file__).parent
 
 # Try to import AI libraries
 try:
@@ -504,11 +508,13 @@ class AITemplateGeneratorDialog(QDialog):
         super().__init__(parent)
         self.generator_thread = None
         self.invoice_text = ""
+        self.templates_data = []  # Store template info
 
         self.setWindowTitle("AI Template Generator")
-        self.setMinimumSize(900, 700)
+        self.setMinimumSize(1100, 850)
         self.setup_ui()
         self.load_settings()
+        self._load_templates()  # Load existing templates
 
     def setup_ui(self):
         """Build the dialog UI."""
@@ -522,12 +528,52 @@ class AITemplateGeneratorDialog(QDialog):
         layout.addWidget(header)
 
         desc = QLabel(
-            "Use AI to automatically generate invoice templates from sample invoices. "
-            "Load a PDF or paste invoice text, then let AI create the extraction patterns."
+            "Manage OCR templates. Select an existing template to edit, or use AI to generate new templates from sample invoices."
         )
         desc.setWordWrap(True)
         desc.setStyleSheet("color: #7f8c8d; margin-bottom: 15px;")
         layout.addWidget(desc)
+
+        # Existing Templates Grid
+        templates_group = QGroupBox("Existing Templates")
+        templates_layout = QVBoxLayout()
+
+        self.templates_table = QTableWidget()
+        self.templates_table.setColumnCount(4)
+        self.templates_table.setHorizontalHeaderLabels([
+            "Template Name", "Supplier Name", "Client", "Country of Origin"
+        ])
+        self.templates_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.templates_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.templates_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.templates_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.templates_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.templates_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.templates_table.setAlternatingRowColors(True)
+        self.templates_table.doubleClicked.connect(self._edit_selected_template)
+        self.templates_table.setMinimumHeight(120)
+        self.templates_table.setMaximumHeight(180)
+        templates_layout.addWidget(self.templates_table)
+
+        # Template action buttons
+        template_buttons = QHBoxLayout()
+        self.btn_edit_template = QPushButton("Edit Selected")
+        self.btn_edit_template.clicked.connect(self._edit_selected_template)
+        template_buttons.addWidget(self.btn_edit_template)
+
+        self.btn_refresh_templates = QPushButton("Refresh")
+        self.btn_refresh_templates.clicked.connect(self._load_templates)
+        template_buttons.addWidget(self.btn_refresh_templates)
+
+        self.btn_delete_template = QPushButton("Delete")
+        self.btn_delete_template.clicked.connect(self._delete_selected_template)
+        template_buttons.addWidget(self.btn_delete_template)
+
+        template_buttons.addStretch()
+        templates_layout.addLayout(template_buttons)
+
+        templates_group.setLayout(templates_layout)
+        layout.addWidget(templates_group)
 
         # AI Provider Settings
         provider_group = QGroupBox("AI Provider")
@@ -1162,6 +1208,141 @@ class AITemplateGeneratorDialog(QDialog):
         """Save settings for next time."""
         # Could save to a config file, but for now just keep in memory
         pass
+
+    def _load_templates(self):
+        """Load all templates from the templates directory and populate the grid."""
+        self.templates_table.setRowCount(0)
+        self.templates_data = []
+
+        templates_dir = BASE_DIR / "templates"
+        if not templates_dir.exists():
+            return
+
+        # Excluded files
+        excluded = {'__init__.py', 'base_template.py', 'sample_template.py', '__pycache__'}
+
+        for file_path in sorted(templates_dir.glob("*.py")):
+            if file_path.name in excluded:
+                continue
+
+            template_info = self._extract_template_info(file_path)
+            if template_info:
+                self.templates_data.append(template_info)
+                row = self.templates_table.rowCount()
+                self.templates_table.insertRow(row)
+
+                self.templates_table.setItem(row, 0, QTableWidgetItem(template_info['name']))
+                self.templates_table.setItem(row, 1, QTableWidgetItem(template_info['supplier']))
+                self.templates_table.setItem(row, 2, QTableWidgetItem(template_info['client']))
+                self.templates_table.setItem(row, 3, QTableWidgetItem(template_info['country']))
+
+    def _extract_template_info(self, file_path: Path) -> dict:
+        """Extract template metadata from a template file."""
+        try:
+            content = file_path.read_text(encoding='utf-8')
+
+            info = {
+                'file_path': str(file_path),
+                'file_name': file_path.stem,
+                'name': file_path.stem.replace('_', ' ').title(),
+                'supplier': '',
+                'client': '',
+                'country': ''
+            }
+
+            # Extract name
+            name_match = re.search(r'^\s*name\s*=\s*["\'](.+?)["\']', content, re.MULTILINE)
+            if name_match:
+                info['name'] = name_match.group(1)
+
+            # Extract description (often contains supplier info)
+            desc_match = re.search(r'^\s*description\s*=\s*["\'](.+?)["\']', content, re.MULTILINE)
+            if desc_match:
+                info['supplier'] = desc_match.group(1)
+
+            # Extract client
+            client_match = re.search(r'^\s*client\s*=\s*["\'](.+?)["\']', content, re.MULTILINE)
+            if client_match:
+                info['client'] = client_match.group(1)
+
+            # Try to extract country from docstring or content
+            docstring_match = re.search(r'"""[\s\S]*?"""', content)
+            if docstring_match:
+                docstring = docstring_match.group(0).lower()
+                for pattern in ['china', 'india', 'usa', 'mexico', 'brazil', 'czech republic',
+                               'el salvador', 'taiwan', 'japan', 'korea', 'vietnam']:
+                    if pattern in docstring:
+                        info['country'] = pattern.upper()
+                        break
+
+            return info
+
+        except Exception:
+            return None
+
+    def _edit_selected_template(self):
+        """Load the selected template for editing."""
+        selected_rows = self.templates_table.selectedItems()
+        if not selected_rows:
+            QMessageBox.warning(self, "No Selection", "Please select a template to edit.")
+            return
+
+        row = self.templates_table.currentRow()
+        if row < 0 or row >= len(self.templates_data):
+            return
+
+        template_info = self.templates_data[row]
+        file_path = Path(template_info['file_path'])
+
+        if not file_path.exists():
+            QMessageBox.warning(self, "File Not Found", f"Template file not found:\n{file_path}")
+            return
+
+        try:
+            # Load the template code
+            code = file_path.read_text(encoding='utf-8')
+
+            # Populate the form fields
+            self.template_name_edit.setText(template_info['file_name'])
+            self.supplier_name_edit.setText(template_info['name'])
+            self.client_edit.setText(template_info['client'])
+            self.country_edit.setText(template_info['country'])
+
+            # Load the code into the preview
+            self.code_preview.setPlainText(code)
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to load template:\n{e}")
+
+    def _delete_selected_template(self):
+        """Delete the selected template."""
+        selected_rows = self.templates_table.selectedItems()
+        if not selected_rows:
+            QMessageBox.warning(self, "No Selection", "Please select a template to delete.")
+            return
+
+        row = self.templates_table.currentRow()
+        if row < 0 or row >= len(self.templates_data):
+            return
+
+        template_info = self.templates_data[row]
+        file_path = Path(template_info['file_path'])
+
+        reply = QMessageBox.question(
+            self, "Confirm Delete",
+            f"Are you sure you want to delete the template:\n\n{template_info['name']}\n\n"
+            f"File: {file_path.name}\n\nThis cannot be undone.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+
+        if reply == QMessageBox.Yes:
+            try:
+                file_path.unlink()
+                self._load_templates()
+                QMessageBox.information(self, "Deleted", "Template deleted successfully.")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to delete template:\n{e}")
 
 
 class AITemplateChatThread(QThread):
