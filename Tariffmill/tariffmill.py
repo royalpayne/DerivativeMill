@@ -690,16 +690,17 @@ if getattr(sys, 'frozen', False):
     # Running as compiled executable (PyInstaller)
     BASE_DIR = Path(sys.executable).parent
     if hasattr(sys, '_MEIPASS'):
-        TEMP_RESOURCES_DIR = Path(sys._MEIPASS) / "Resources"
+        # PyInstaller stores data files in _MEIPASS (_internal folder)
+        RESOURCES_DIR = Path(sys._MEIPASS) / "Resources"
     else:
-        TEMP_RESOURCES_DIR = BASE_DIR / "Resources"
+        RESOURCES_DIR = BASE_DIR / "Resources"
 else:
     # Running as Python script
     BASE_DIR = Path(__file__).parent
-    TEMP_RESOURCES_DIR = BASE_DIR / "Resources"
+    RESOURCES_DIR = BASE_DIR / "Resources"
 
-# Directory structure for application data
-RESOURCES_DIR = BASE_DIR / "Resources"
+# Backward compatibility alias
+TEMP_RESOURCES_DIR = RESOURCES_DIR
 INPUT_DIR = BASE_DIR / "Tariffmill_Input"
 OUTPUT_DIR = BASE_DIR / "Tariffmill_Output"
 
@@ -11591,7 +11592,7 @@ EXPORT DETAILS
         Returns:
             Number of parts updated, or -1 if hts.db not found
         """
-        hts_db_path = BASE_DIR / "Resources" / "References" / "hts.db"
+        hts_db_path = RESOURCES_DIR / "References" / "hts.db"
 
         if not hts_db_path.exists():
             logger.debug("hts.db not found, skipping HTS units import")
@@ -11649,7 +11650,7 @@ EXPORT DETAILS
 
     def export_missing_hts_codes(self):
         """Export HTS codes that are missing from hts.db or missing Qty Unit values, including part numbers."""
-        hts_db_path = BASE_DIR / "Resources" / "References" / "hts.db"
+        hts_db_path = RESOURCES_DIR / "References" / "hts.db"
 
         try:
             def normalize_hts(hts):
@@ -12966,7 +12967,7 @@ EXPORT DETAILS
         """
         search_term = self.hts_db_search.text().strip()
 
-        hts_db_path = BASE_DIR / "Resources" / "References" / "hts.db"
+        hts_db_path = RESOURCES_DIR / "References" / "hts.db"
         logger.info(f"HTS search: term='{search_term}', db_path={hts_db_path}, exists={hts_db_path.exists()}")
         if not hts_db_path.exists():
             QMessageBox.warning(self, "Database Not Found", f"hts.db not found at: {hts_db_path}")
@@ -13121,7 +13122,7 @@ EXPORT DETAILS
         QApplication.processEvents()
 
         try:
-            hts_db_path = BASE_DIR / "Resources" / "References" / "hts.db"
+            hts_db_path = RESOURCES_DIR / "References" / "hts.db"
 
             # Backup current database
             backup_path = None
