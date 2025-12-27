@@ -721,15 +721,18 @@ del "%~f0"
 
 if getattr(sys, 'frozen', False):
     # Running as compiled executable (PyInstaller)
-    BASE_DIR = Path(sys.executable).parent
+    INSTALL_DIR = Path(sys.executable).parent
     if hasattr(sys, '_MEIPASS'):
         # PyInstaller stores data files in _MEIPASS (_internal folder)
         RESOURCES_DIR = Path(sys._MEIPASS) / "Resources"
     else:
-        RESOURCES_DIR = BASE_DIR / "Resources"
+        RESOURCES_DIR = INSTALL_DIR / "Resources"
+    # Use user's AppData for writable data (not Program Files)
+    BASE_DIR = Path(os.environ.get('LOCALAPPDATA', Path.home())) / "TariffMill"
 else:
     # Running as Python script
-    BASE_DIR = Path(__file__).parent
+    INSTALL_DIR = Path(__file__).parent
+    BASE_DIR = INSTALL_DIR
     RESOURCES_DIR = BASE_DIR / "Resources"
 
 # Backward compatibility alias
@@ -751,16 +754,17 @@ PROCESSED_DIR = get_processed_dir(INPUT_DIR)
 MAPPING_FILE = BASE_DIR / "column_mapping.json"
 SHIPMENT_MAPPING_FILE = BASE_DIR / "shipment_mapping.json"
 
-# Create required directories
-for p in (RESOURCES_DIR, INPUT_DIR, OUTPUT_DIR, PROCESSED_DIR):
-    p.mkdir(exist_ok=True)
+# Create required directories (user data directories only, not RESOURCES_DIR)
+for p in (BASE_DIR, INPUT_DIR, OUTPUT_DIR, PROCESSED_DIR):
+    p.mkdir(parents=True, exist_ok=True)
 
 # Copy bundled database to user location on first run (for frozen exe)
 # This ensures the pre-populated tariff_232 and sec_232_actions tables are available
+# Database is copied to AppData folder (BASE_DIR) which is user-writable
 if getattr(sys, 'frozen', False):
     import shutil
     bundled_db = TEMP_RESOURCES_DIR / DB_NAME
-    local_db = RESOURCES_DIR / DB_NAME
+    local_db = BASE_DIR / DB_NAME  # Store in AppData, not Program Files
     if bundled_db.exists() and not local_db.exists():
         try:
             shutil.copy2(bundled_db, local_db)
@@ -813,8 +817,8 @@ def get_database_path():
         if custom_path and Path(custom_path).exists():
             return Path(custom_path)
 
-    # Default to local Resources folder
-    return RESOURCES_DIR / DB_NAME
+    # Default to user data folder (AppData on Windows when frozen)
+    return BASE_DIR / DB_NAME
 
 def set_database_path(path, platform=None):
     """

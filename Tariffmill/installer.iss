@@ -2,7 +2,7 @@
 ; Build with: iscc installer.iss
 
 #define MyAppName "TariffMill"
-#define MyAppVersion "0.96.6"
+#define MyAppVersion "0.96.7"
 #define MyAppPublisher "TariffMill"
 #define MyAppExeName "TariffMill.exe"
 
