@@ -511,10 +511,9 @@ class AITemplateGeneratorDialog(QDialog):
         self.templates_data = []  # Store template info
 
         self.setWindowTitle("AI Template Generator")
-        self.setMinimumSize(1100, 850)
+        self.setMinimumSize(1100, 750)
         self.setup_ui()
         self.load_settings()
-        self._load_templates()  # Load existing templates
 
     def setup_ui(self):
         """Build the dialog UI."""
@@ -528,52 +527,11 @@ class AITemplateGeneratorDialog(QDialog):
         layout.addWidget(header)
 
         desc = QLabel(
-            "Manage OCR templates. Select an existing template to edit, or use AI to generate new templates from sample invoices."
+            "Use AI to generate new OCR templates from sample invoices."
         )
         desc.setWordWrap(True)
         desc.setStyleSheet("color: #7f8c8d; margin-bottom: 15px;")
         layout.addWidget(desc)
-
-        # Existing Templates Grid
-        templates_group = QGroupBox("Existing Templates")
-        templates_layout = QVBoxLayout()
-
-        self.templates_table = QTableWidget()
-        self.templates_table.setColumnCount(4)
-        self.templates_table.setHorizontalHeaderLabels([
-            "Template Name", "Supplier Name", "Client", "Country of Origin"
-        ])
-        self.templates_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.templates_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.templates_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.templates_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.templates_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.templates_table.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.templates_table.setAlternatingRowColors(True)
-        self.templates_table.doubleClicked.connect(self._edit_selected_template)
-        self.templates_table.setMinimumHeight(120)
-        self.templates_table.setMaximumHeight(180)
-        templates_layout.addWidget(self.templates_table)
-
-        # Template action buttons
-        template_buttons = QHBoxLayout()
-        self.btn_edit_template = QPushButton("Edit Selected")
-        self.btn_edit_template.clicked.connect(self._edit_selected_template)
-        template_buttons.addWidget(self.btn_edit_template)
-
-        self.btn_refresh_templates = QPushButton("Refresh")
-        self.btn_refresh_templates.clicked.connect(self._load_templates)
-        template_buttons.addWidget(self.btn_refresh_templates)
-
-        self.btn_delete_template = QPushButton("Delete")
-        self.btn_delete_template.clicked.connect(self._delete_selected_template)
-        template_buttons.addWidget(self.btn_delete_template)
-
-        template_buttons.addStretch()
-        templates_layout.addLayout(template_buttons)
-
-        templates_group.setLayout(templates_layout)
-        layout.addWidget(templates_group)
 
         # AI Provider Settings
         provider_group = QGroupBox("AI Provider")
@@ -1209,140 +1167,6 @@ class AITemplateGeneratorDialog(QDialog):
         # Could save to a config file, but for now just keep in memory
         pass
 
-    def _load_templates(self):
-        """Load all templates from the templates directory and populate the grid."""
-        self.templates_table.setRowCount(0)
-        self.templates_data = []
-
-        templates_dir = BASE_DIR / "templates"
-        if not templates_dir.exists():
-            return
-
-        # Excluded files
-        excluded = {'__init__.py', 'base_template.py', 'sample_template.py', '__pycache__'}
-
-        for file_path in sorted(templates_dir.glob("*.py")):
-            if file_path.name in excluded:
-                continue
-
-            template_info = self._extract_template_info(file_path)
-            if template_info:
-                self.templates_data.append(template_info)
-                row = self.templates_table.rowCount()
-                self.templates_table.insertRow(row)
-
-                self.templates_table.setItem(row, 0, QTableWidgetItem(template_info['name']))
-                self.templates_table.setItem(row, 1, QTableWidgetItem(template_info['supplier']))
-                self.templates_table.setItem(row, 2, QTableWidgetItem(template_info['client']))
-                self.templates_table.setItem(row, 3, QTableWidgetItem(template_info['country']))
-
-    def _extract_template_info(self, file_path: Path) -> dict:
-        """Extract template metadata from a template file."""
-        try:
-            content = file_path.read_text(encoding='utf-8')
-
-            info = {
-                'file_path': str(file_path),
-                'file_name': file_path.stem,
-                'name': file_path.stem.replace('_', ' ').title(),
-                'supplier': '',
-                'client': '',
-                'country': ''
-            }
-
-            # Extract name
-            name_match = re.search(r'^\s*name\s*=\s*["\'](.+?)["\']', content, re.MULTILINE)
-            if name_match:
-                info['name'] = name_match.group(1)
-
-            # Extract description (often contains supplier info)
-            desc_match = re.search(r'^\s*description\s*=\s*["\'](.+?)["\']', content, re.MULTILINE)
-            if desc_match:
-                info['supplier'] = desc_match.group(1)
-
-            # Extract client
-            client_match = re.search(r'^\s*client\s*=\s*["\'](.+?)["\']', content, re.MULTILINE)
-            if client_match:
-                info['client'] = client_match.group(1)
-
-            # Try to extract country from docstring or content
-            docstring_match = re.search(r'"""[\s\S]*?"""', content)
-            if docstring_match:
-                docstring = docstring_match.group(0).lower()
-                for pattern in ['china', 'india', 'usa', 'mexico', 'brazil', 'czech republic',
-                               'el salvador', 'taiwan', 'japan', 'korea', 'vietnam']:
-                    if pattern in docstring:
-                        info['country'] = pattern.upper()
-                        break
-
-            return info
-
-        except Exception:
-            return None
-
-    def _edit_selected_template(self):
-        """Load the selected template for editing."""
-        selected_rows = self.templates_table.selectedItems()
-        if not selected_rows:
-            QMessageBox.warning(self, "No Selection", "Please select a template to edit.")
-            return
-
-        row = self.templates_table.currentRow()
-        if row < 0 or row >= len(self.templates_data):
-            return
-
-        template_info = self.templates_data[row]
-        file_path = Path(template_info['file_path'])
-
-        if not file_path.exists():
-            QMessageBox.warning(self, "File Not Found", f"Template file not found:\n{file_path}")
-            return
-
-        try:
-            # Load the template code
-            code = file_path.read_text(encoding='utf-8')
-
-            # Populate the form fields
-            self.template_name_edit.setText(template_info['file_name'])
-            self.supplier_name_edit.setText(template_info['name'])
-            self.client_edit.setText(template_info['client'])
-            self.country_edit.setText(template_info['country'])
-
-            # Load the code into the preview
-            self.code_preview.setPlainText(code)
-
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to load template:\n{e}")
-
-    def _delete_selected_template(self):
-        """Delete the selected template."""
-        selected_rows = self.templates_table.selectedItems()
-        if not selected_rows:
-            QMessageBox.warning(self, "No Selection", "Please select a template to delete.")
-            return
-
-        row = self.templates_table.currentRow()
-        if row < 0 or row >= len(self.templates_data):
-            return
-
-        template_info = self.templates_data[row]
-        file_path = Path(template_info['file_path'])
-
-        reply = QMessageBox.question(
-            self, "Confirm Delete",
-            f"Are you sure you want to delete the template:\n\n{template_info['name']}\n\n"
-            f"File: {file_path.name}\n\nThis cannot be undone.",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
-        )
-
-        if reply == QMessageBox.Yes:
-            try:
-                file_path.unlink()
-                self._load_templates()
-                QMessageBox.information(self, "Deleted", "Template deleted successfully.")
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to delete template:\n{e}")
 
 
 class AITemplateChatThread(QThread):
@@ -1945,6 +1769,577 @@ class AITemplateChatDialog(QDialog):
             # Update metadata with conversation history
             self.metadata['conversation_history'] = self.conversation_history
             self.metadata['last_modified'] = datetime.now().isoformat()
+
+            metadata_path = self.template_path.with_suffix('.ai_meta.json')
+            with open(metadata_path, 'w', encoding='utf-8') as f:
+                json.dump(self.metadata, f, indent=2)
+
+            QMessageBox.information(self, "Saved", "Template saved successfully!")
+            self.template_modified.emit(str(self.template_path))
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to save template: {e}")
+
+
+class AITemplateEditorDialog(QDialog):
+    """
+    Unified AI Template Editor for editing both AI-generated and regular templates.
+    Features a code editor on the left and AI chat assistant on the right.
+    """
+    template_modified = pyqtSignal(str)  # Emitted when template is saved
+
+    def __init__(self, template_path: str, metadata: dict, parent=None):
+        super().__init__(parent)
+        self.template_path = Path(template_path)
+        self.metadata = metadata
+        self.conversation_history = metadata.get('conversation_history', [])
+        self.chat_thread = None
+        self.is_ai_template = bool(metadata.get('provider'))
+
+        self.setWindowTitle(f"Template Editor - {self.template_path.stem}")
+        self.setMinimumSize(1200, 800)
+        self.resize(1400, 900)
+        self.setup_ui()
+        self.load_template()
+
+        # Show welcome message for templates without conversation history
+        if not self.conversation_history:
+            self._show_welcome_message()
+
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+        layout.setContentsMargins(10, 10, 10, 10)
+
+        # Header bar with template info and AI provider selection
+        header_widget = QWidget()
+        header_widget.setStyleSheet("background-color: #2d2d30; border-radius: 6px; padding: 5px;")
+        header_layout = QHBoxLayout(header_widget)
+        header_layout.setContentsMargins(10, 8, 10, 8)
+
+        # Template name
+        name_label = QLabel(f"<b style='color: #dcdcdc; font-size: 14px;'>{self.template_path.stem}</b>")
+        header_layout.addWidget(name_label)
+
+        # AI indicator
+        if self.is_ai_template:
+            provider = self.metadata.get('provider', '')
+            ai_badge = QLabel(f"🤖 AI Generated ({provider})")
+            ai_badge.setStyleSheet("color: #4ec9b0; font-size: 11px; padding: 2px 8px; background-color: #1e3a1e; border-radius: 4px;")
+            header_layout.addWidget(ai_badge)
+
+        header_layout.addStretch()
+
+        # AI Provider selection
+        header_layout.addWidget(QLabel("<span style='color: #9cdcfe;'>AI Provider:</span>"))
+        self.provider_combo = QComboBox()
+        self.provider_combo.addItems(["Anthropic", "OpenAI", "Ollama (Local)"])
+        self.provider_combo.setFixedWidth(140)
+        if self.is_ai_template:
+            idx = self.provider_combo.findText(self.metadata.get('provider', ''))
+            if idx >= 0:
+                self.provider_combo.setCurrentIndex(idx)
+        self.provider_combo.currentTextChanged.connect(self._on_provider_changed)
+        header_layout.addWidget(self.provider_combo)
+
+        self.model_combo = QComboBox()
+        self.model_combo.setFixedWidth(200)
+        self._on_provider_changed(self.provider_combo.currentText())
+        if self.is_ai_template:
+            idx = self.model_combo.findText(self.metadata.get('model', ''))
+            if idx >= 0:
+                self.model_combo.setCurrentIndex(idx)
+        header_layout.addWidget(self.model_combo)
+
+        layout.addWidget(header_widget)
+
+        # Main splitter - code editor on left, chat on right
+        main_splitter = QSplitter(Qt.Horizontal)
+
+        # === LEFT SIDE: Code Editor ===
+        code_widget = QWidget()
+        code_layout = QVBoxLayout(code_widget)
+        code_layout.setContentsMargins(0, 0, 0, 0)
+        code_layout.setSpacing(5)
+
+        # Code editor header
+        code_header = QHBoxLayout()
+        code_label = QLabel("<b style='color: #dcdcdc;'>Template Code</b>")
+        code_header.addWidget(code_label)
+        code_header.addStretch()
+
+        # Syntax validation indicator
+        self.syntax_indicator = QLabel("✓ Valid")
+        self.syntax_indicator.setStyleSheet("color: #4ec9b0; font-size: 10px;")
+        code_header.addWidget(self.syntax_indicator)
+        code_layout.addLayout(code_header)
+
+        # Code editor with dark theme
+        self.code_edit = QPlainTextEdit()
+        self.code_edit.setFont(QFont("Consolas", 11))
+        self.code_edit.setStyleSheet("""
+            QPlainTextEdit {
+                background-color: #1e1e1e;
+                color: #d4d4d4;
+                border: 1px solid #3c3c3c;
+                border-radius: 4px;
+                padding: 8px;
+                selection-background-color: #264f78;
+            }
+        """)
+        self.code_edit.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self.code_edit.textChanged.connect(self._validate_syntax)
+        code_layout.addWidget(self.code_edit, 1)
+
+        main_splitter.addWidget(code_widget)
+
+        # === RIGHT SIDE: AI Chat Panel ===
+        chat_widget = QWidget()
+        chat_widget.setStyleSheet("background-color: #252526; border-radius: 6px;")
+        chat_layout = QVBoxLayout(chat_widget)
+        chat_layout.setContentsMargins(10, 10, 10, 10)
+        chat_layout.setSpacing(8)
+
+        # Chat header
+        chat_label = QLabel("<b style='color: #dcdcdc;'>AI Assistant</b>")
+        chat_layout.addWidget(chat_label)
+
+        # Chat display
+        self.chat_display = QTextEdit()
+        self.chat_display.setReadOnly(True)
+        self.chat_display.setFont(QFont("Segoe UI", 10))
+        self.chat_display.setStyleSheet("""
+            QTextEdit {
+                background-color: #1e1e1e;
+                color: #cccccc;
+                border: 1px solid #3c3c3c;
+                border-radius: 4px;
+                padding: 8px;
+            }
+            QScrollBar:vertical {
+                background-color: #1e1e1e;
+                width: 10px;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #5a5a5a;
+                border-radius: 5px;
+                min-height: 20px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background-color: #787878;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+        """)
+        chat_layout.addWidget(self.chat_display, 1)
+
+        # Message input
+        self.message_input = QPlainTextEdit()
+        self.message_input.setMaximumHeight(80)
+        self.message_input.setPlaceholderText("Ask the AI to modify the template...\n(e.g., 'Add support for a new date format' or 'Fix the regex for invoice numbers')")
+        self.message_input.setStyleSheet("""
+            QPlainTextEdit {
+                background-color: #3c3c3c;
+                color: #cccccc;
+                border: 1px solid #5a5a5a;
+                border-radius: 4px;
+                padding: 8px;
+                font-family: "Segoe UI", sans-serif;
+                font-size: 10pt;
+            }
+            QPlainTextEdit:focus {
+                border: 1px solid #007acc;
+            }
+        """)
+        chat_layout.addWidget(self.message_input)
+
+        # Chat buttons
+        chat_btn_layout = QHBoxLayout()
+        chat_btn_layout.setSpacing(8)
+
+        self.send_btn = QPushButton("Send")
+        self.send_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #0e639c;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 8px 20px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #1177bb; }
+            QPushButton:pressed { background-color: #0d5a8c; }
+            QPushButton:disabled { background-color: #3c3c3c; color: #6e6e6e; }
+        """)
+        self.send_btn.clicked.connect(self.send_message)
+        chat_btn_layout.addWidget(self.send_btn)
+
+        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3c3c3c;
+                color: #cccccc;
+                border: 1px solid #5a5a5a;
+                border-radius: 4px;
+                padding: 8px 16px;
+            }
+            QPushButton:hover { background-color: #4a4a4a; }
+            QPushButton:disabled { background-color: #2d2d2d; color: #5a5a5a; }
+        """)
+        self.cancel_btn.setEnabled(False)
+        self.cancel_btn.clicked.connect(self.cancel_request)
+        chat_btn_layout.addWidget(self.cancel_btn)
+
+        chat_btn_layout.addStretch()
+
+        self.apply_btn = QPushButton("Apply Changes")
+        self.apply_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #388a34;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 8px 16px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #45a340; }
+            QPushButton:disabled { background-color: #2d2d2d; color: #5a5a5a; }
+        """)
+        self.apply_btn.setEnabled(False)
+        self.apply_btn.clicked.connect(self.apply_changes)
+        chat_btn_layout.addWidget(self.apply_btn)
+
+        chat_layout.addLayout(chat_btn_layout)
+
+        main_splitter.addWidget(chat_widget)
+
+        # Set splitter proportions (60% code, 40% chat)
+        main_splitter.setSizes([700, 500])
+        layout.addWidget(main_splitter, 1)
+
+        # Bottom button bar
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(10)
+
+        # Left side buttons
+        self.test_btn = QPushButton("Test Template")
+        self.test_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #6c5ce7;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 10px 20px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #7d6ee8; }
+        """)
+        self.test_btn.clicked.connect(self._test_template)
+        btn_layout.addWidget(self.test_btn)
+
+        btn_layout.addStretch()
+
+        # Right side buttons
+        save_btn = QPushButton("Save Template")
+        save_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #388a34;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 10px 24px;
+                font-weight: bold;
+                font-size: 11pt;
+            }
+            QPushButton:hover { background-color: #45a340; }
+        """)
+        save_btn.clicked.connect(self.save_template)
+        btn_layout.addWidget(save_btn)
+
+        close_btn = QPushButton("Close")
+        close_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3c3c3c;
+                color: #cccccc;
+                border: 1px solid #5a5a5a;
+                border-radius: 4px;
+                padding: 10px 24px;
+            }
+            QPushButton:hover { background-color: #4a4a4a; }
+        """)
+        close_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(close_btn)
+
+        layout.addLayout(btn_layout)
+
+    def _on_provider_changed(self, provider: str):
+        """Update model list when provider changes."""
+        self.model_combo.clear()
+        if provider == "OpenAI":
+            self.model_combo.addItems(["gpt-4o", "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo"])
+        elif provider == "Anthropic":
+            self.model_combo.addItems(["claude-sonnet-4-20250514", "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022"])
+        elif provider == "Ollama (Local)":
+            self.model_combo.addItems(["llama3.1", "llama3", "codellama", "mistral"])
+
+    def _get_api_key(self, provider: str) -> str:
+        """Get API key for the provider."""
+        try:
+            import sqlite3
+            db_path = Path(__file__).parent / "tariffmill.db"
+            conn = sqlite3.connect(str(db_path))
+            c = conn.cursor()
+            key_name = 'openai' if provider == "OpenAI" else 'anthropic'
+            c.execute("SELECT value FROM app_config WHERE key = ?", (f'api_key_{key_name}',))
+            row = c.fetchone()
+            conn.close()
+            if row and row[0]:
+                return row[0]
+        except:
+            pass
+
+        if provider == "OpenAI":
+            return os.environ.get('OPENAI_API_KEY', '')
+        elif provider == "Anthropic":
+            return os.environ.get('ANTHROPIC_API_KEY', '')
+        return ""
+
+    def load_template(self):
+        """Load the template code."""
+        try:
+            with open(self.template_path, 'r', encoding='utf-8') as f:
+                self.code_edit.setPlainText(f.read())
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to load template: {e}")
+
+    def _show_welcome_message(self):
+        """Show a welcome message in the chat for new templates."""
+        welcome_html = '''
+        <div style="font-family: Segoe UI, sans-serif; padding: 10px;">
+            <div style="background-color: #2d2d2d; border-radius: 8px; padding: 15px; margin-bottom: 15px;">
+                <div style="color: #4ec9b0; font-size: 14px; font-weight: bold; margin-bottom: 10px;">
+                    👋 Welcome to the AI Template Editor
+                </div>
+                <div style="color: #cccccc; line-height: 1.6;">
+                    <p>You can ask me to help you modify this template. Here are some things I can do:</p>
+                    <ul style="margin: 10px 0; padding-left: 20px;">
+                        <li>Fix regex patterns for extracting data</li>
+                        <li>Add support for new invoice formats</li>
+                        <li>Improve error handling</li>
+                        <li>Add new extraction fields</li>
+                        <li>Explain how the template works</li>
+                    </ul>
+                    <p style="color: #9cdcfe; margin-top: 10px;">
+                        💡 <b>Tip:</b> Be specific about what you want to change. For example:<br>
+                        <i>"Change the invoice number regex to match format INV-2024-XXXXX"</i>
+                    </p>
+                </div>
+            </div>
+        </div>
+        '''
+        self.chat_display.setHtml(welcome_html)
+
+    def _validate_syntax(self):
+        """Validate Python syntax of the template code."""
+        code = self.code_edit.toPlainText()
+        try:
+            compile(code, '<template>', 'exec')
+            self.syntax_indicator.setText("✓ Valid")
+            self.syntax_indicator.setStyleSheet("color: #4ec9b0; font-size: 10px;")
+        except SyntaxError as e:
+            self.syntax_indicator.setText(f"✗ Line {e.lineno}: {e.msg}")
+            self.syntax_indicator.setStyleSheet("color: #f48771; font-size: 10px;")
+
+    def _test_template(self):
+        """Test the template by attempting to import it."""
+        code = self.code_edit.toPlainText()
+        try:
+            compile(code, '<template>', 'exec')
+            exec(code, {'__name__': '__main__'})
+            QMessageBox.information(self, "Test Passed", "Template syntax is valid and can be imported!")
+        except Exception as e:
+            QMessageBox.warning(self, "Test Failed", f"Template has errors:\n\n{e}")
+
+    def _format_message_html(self, role: str, content: str) -> str:
+        """Format a chat message as styled HTML."""
+        import html as html_module
+
+        # Process code blocks
+        def replace_code_block(match):
+            code = html_module.escape(match.group(1))
+            return f'</p><pre style="background-color: #0d0d0d; color: #d4d4d4; padding: 12px; border-radius: 6px; font-family: Consolas, monospace; font-size: 11px; margin: 8px 0; border-left: 3px solid #007acc; overflow-x: auto; white-space: pre-wrap;">{code}</pre><p style="margin: 0; line-height: 1.6;">'
+
+        formatted = re.sub(r'```(?:python)?\s*(.*?)\s*```', replace_code_block, content, flags=re.DOTALL)
+
+        # Escape remaining HTML
+        parts = re.split(r'(<pre.*?</pre>)', formatted, flags=re.DOTALL)
+        escaped_parts = []
+        for part in parts:
+            if part.startswith('<pre'):
+                escaped_parts.append(part)
+            else:
+                escaped_parts.append(html_module.escape(part))
+        formatted = ''.join(escaped_parts)
+
+        # Inline code
+        formatted = re.sub(r'`([^`]+)`', r'<code style="background-color: #3c3c3c; color: #ce9178; padding: 2px 6px; border-radius: 3px; font-family: Consolas;">\1</code>', formatted)
+
+        # Newlines
+        parts = re.split(r'(<pre.*?</pre>)', formatted, flags=re.DOTALL)
+        for i, part in enumerate(parts):
+            if not part.startswith('<pre'):
+                parts[i] = part.replace('\n', '<br>')
+        formatted = ''.join(parts)
+
+        if role == 'user':
+            return f'''
+            <div style="margin: 12px 0; text-align: right;">
+                <div style="display: inline-block; max-width: 85%; text-align: left;">
+                    <div style="color: #808080; font-size: 9px; margin-bottom: 4px;">You</div>
+                    <div style="background-color: #264f78; color: #ffffff; padding: 10px 14px; border-radius: 12px 12px 4px 12px;">
+                        <p style="margin: 0; line-height: 1.6;">{formatted}</p>
+                    </div>
+                </div>
+            </div>
+            '''
+        else:
+            return f'''
+            <div style="margin: 12px 0; text-align: left;">
+                <div style="display: inline-block; max-width: 85%; text-align: left;">
+                    <div style="color: #808080; font-size: 9px; margin-bottom: 4px;">🤖 AI Assistant</div>
+                    <div style="background-color: #2d2d2d; color: #e0e0e0; padding: 10px 14px; border-radius: 12px 12px 12px 4px; border: 1px solid #404040;">
+                        <p style="margin: 0; line-height: 1.6;">{formatted}</p>
+                    </div>
+                </div>
+            </div>
+            '''
+
+    def _display_chat_history(self):
+        """Display chat history."""
+        if not self.conversation_history:
+            self._show_welcome_message()
+            return
+
+        html_content = '<div style="font-family: Segoe UI, sans-serif;">'
+        for msg in self.conversation_history:
+            role = msg.get('role', 'user')
+            content = msg.get('content', '')
+            html_content += self._format_message_html(role, content)
+        html_content += '</div>'
+        self.chat_display.setHtml(html_content)
+
+    def send_message(self):
+        """Send a message to the AI."""
+        message = self.message_input.toPlainText().strip()
+        if not message:
+            return
+
+        provider = self.provider_combo.currentText()
+        api_key = self._get_api_key(provider)
+
+        if provider in ["OpenAI", "Anthropic"] and not api_key:
+            QMessageBox.warning(self, "Missing API Key",
+                              f"No API key found for {provider}.\n\n"
+                              "Please configure it in Configuration > Billing tab or set environment variable.")
+            return
+
+        # Add user message to history
+        self.conversation_history.append({"role": "user", "content": message})
+        self._display_chat_history()
+        self.message_input.clear()
+
+        # Scroll to bottom
+        scrollbar = self.chat_display.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
+        # Disable send, enable cancel
+        self.send_btn.setEnabled(False)
+        self.cancel_btn.setEnabled(True)
+
+        # Start AI request
+        self.chat_thread = AITemplateChatThread(
+            provider=provider,
+            model=self.model_combo.currentText(),
+            api_key=api_key,
+            current_code=self.code_edit.toPlainText(),
+            user_message=message,
+            conversation_history=self.conversation_history[:-1],  # Exclude the message we just added
+            invoice_text=self.metadata.get('invoice_text', '')
+        )
+        self.chat_thread.finished.connect(self._on_response)
+        self.chat_thread.error.connect(self._on_error)
+        self.chat_thread.start()
+
+    def cancel_request(self):
+        """Cancel the current AI request."""
+        if self.chat_thread:
+            self.chat_thread.cancel()
+            self.chat_thread = None
+        self.send_btn.setEnabled(True)
+        self.cancel_btn.setEnabled(False)
+
+    def _on_response(self, response: str):
+        """Handle AI response."""
+        self.send_btn.setEnabled(True)
+        self.cancel_btn.setEnabled(False)
+
+        # Add to history and redisplay
+        self.conversation_history.append({"role": "assistant", "content": response})
+        self._display_chat_history()
+
+        # Scroll to bottom
+        scrollbar = self.chat_display.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
+        # Extract code if present
+        code_match = re.search(r'```python\s*(.*?)\s*```', response, re.DOTALL)
+        if code_match:
+            self.pending_code = code_match.group(1)
+            self.apply_btn.setEnabled(True)
+        else:
+            self.pending_code = None
+
+    def _on_error(self, error: str):
+        """Handle AI error."""
+        self.send_btn.setEnabled(True)
+        self.cancel_btn.setEnabled(False)
+        QMessageBox.warning(self, "AI Error", f"Error communicating with AI:\n\n{error}")
+
+    def apply_changes(self):
+        """Apply the AI-suggested code changes."""
+        if hasattr(self, 'pending_code') and self.pending_code:
+            self.code_edit.setPlainText(self.pending_code)
+            self.apply_btn.setEnabled(False)
+            QMessageBox.information(self, "Applied", "Code changes applied to the editor.")
+
+    def save_template(self):
+        """Save the modified template."""
+        code = self.code_edit.toPlainText()
+
+        # Validate syntax before saving
+        try:
+            compile(code, '<template>', 'exec')
+        except SyntaxError as e:
+            reply = QMessageBox.question(
+                self, "Syntax Error",
+                f"The template has syntax errors:\n\nLine {e.lineno}: {e.msg}\n\nSave anyway?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
+
+        try:
+            # Save template code
+            with open(self.template_path, 'w', encoding='utf-8') as f:
+                f.write(code)
+
+            # Update metadata with conversation history
+            self.metadata['conversation_history'] = self.conversation_history
+            self.metadata['last_modified'] = datetime.now().isoformat()
+            self.metadata['provider'] = self.provider_combo.currentText()
+            self.metadata['model'] = self.model_combo.currentText()
 
             metadata_path = self.template_path.with_suffix('.ai_meta.json')
             with open(metadata_path, 'w', encoding='utf-8') as f:

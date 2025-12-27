@@ -88,7 +88,7 @@ import pandas as pd
 import sqlite3
 from PyQt5.QtWidgets import *
 from PyQt5.QtCore import Qt, QMimeData, pyqtSignal, QTimer, QSize, QEventLoop, QRect, QSettings, QThread, QThreadPool, QRunnable, QObject
-from PyQt5.QtGui import QColor, QFont, QDrag, QKeySequence, QIcon, QPixmap, QPainter, QDoubleValidator, QCursor, QPen, QTextCursor, QTextCharFormat
+from PyQt5.QtGui import QColor, QFont, QDrag, QKeySequence, QIcon, QPixmap, QPainter, QDoubleValidator, QCursor, QPen, QTextCursor, QTextCharFormat, QSyntaxHighlighter, QTextFormat
 from PyQt5.QtSvg import QSvgRenderer
 from openpyxl.styles import Font as ExcelFont, Alignment
 import tempfile
@@ -2197,6 +2197,362 @@ class PDFDropZone(QLabel):
     def set_browse_folder(self, folder):
         """Update the default browse folder"""
         self.browse_folder = str(folder)
+
+
+# ----------------------------------------------------------------------
+# PYTHON CODE EDITOR WITH SYNTAX HIGHLIGHTING
+# ----------------------------------------------------------------------
+class PythonSyntaxHighlighter(QSyntaxHighlighter):
+    """Syntax highlighter for Python code, similar to VS Code's dark theme."""
+
+    def __init__(self, document):
+        super().__init__(document)
+        self._init_formats()
+        self._init_rules()
+
+    def _init_formats(self):
+        """Initialize text formats for different syntax elements."""
+        # Keywords (purple/magenta) - control flow
+        self.keyword_format = QTextCharFormat()
+        self.keyword_format.setForeground(QColor("#c586c0"))
+        self.keyword_format.setFontWeight(QFont.Bold)
+
+        # Built-in functions (yellow)
+        self.builtin_format = QTextCharFormat()
+        self.builtin_format.setForeground(QColor("#dcdcaa"))
+
+        # Class/function definitions (blue)
+        self.definition_format = QTextCharFormat()
+        self.definition_format.setForeground(QColor("#4ec9b0"))
+
+        # Strings (orange/brown)
+        self.string_format = QTextCharFormat()
+        self.string_format.setForeground(QColor("#ce9178"))
+
+        # Comments (green)
+        self.comment_format = QTextCharFormat()
+        self.comment_format.setForeground(QColor("#6a9955"))
+        self.comment_format.setFontItalic(True)
+
+        # Numbers (light green)
+        self.number_format = QTextCharFormat()
+        self.number_format.setForeground(QColor("#b5cea8"))
+
+        # Decorators (yellow)
+        self.decorator_format = QTextCharFormat()
+        self.decorator_format.setForeground(QColor("#dcdcaa"))
+
+        # Self/cls (blue)
+        self.self_format = QTextCharFormat()
+        self.self_format.setForeground(QColor("#9cdcfe"))
+
+        # Operators
+        self.operator_format = QTextCharFormat()
+        self.operator_format.setForeground(QColor("#d4d4d4"))
+
+    def _init_rules(self):
+        """Initialize highlighting rules."""
+        self.rules = []
+
+        # Keywords
+        keywords = [
+            'and', 'as', 'assert', 'async', 'await', 'break', 'class', 'continue',
+            'def', 'del', 'elif', 'else', 'except', 'finally', 'for', 'from',
+            'global', 'if', 'import', 'in', 'is', 'lambda', 'nonlocal', 'not',
+            'or', 'pass', 'raise', 'return', 'try', 'while', 'with', 'yield',
+            'True', 'False', 'None'
+        ]
+        for word in keywords:
+            self.rules.append((rf'\b{word}\b', self.keyword_format))
+
+        # Built-in functions
+        builtins = [
+            'abs', 'all', 'any', 'bin', 'bool', 'bytes', 'callable', 'chr',
+            'classmethod', 'compile', 'complex', 'dict', 'dir', 'divmod',
+            'enumerate', 'eval', 'exec', 'filter', 'float', 'format', 'frozenset',
+            'getattr', 'globals', 'hasattr', 'hash', 'help', 'hex', 'id', 'input',
+            'int', 'isinstance', 'issubclass', 'iter', 'len', 'list', 'locals',
+            'map', 'max', 'min', 'next', 'object', 'oct', 'open', 'ord', 'pow',
+            'print', 'property', 'range', 'repr', 'reversed', 'round', 'set',
+            'setattr', 'slice', 'sorted', 'staticmethod', 'str', 'sum', 'super',
+            'tuple', 'type', 'vars', 'zip', 're', 'Dict', 'List', 'Optional', 'Tuple'
+        ]
+        for word in builtins:
+            self.rules.append((rf'\b{word}\b', self.builtin_format))
+
+        # Self and cls
+        self.rules.append((r'\bself\b', self.self_format))
+        self.rules.append((r'\bcls\b', self.self_format))
+
+        # Class and function definitions
+        self.rules.append((r'\bclass\s+(\w+)', self.definition_format))
+        self.rules.append((r'\bdef\s+(\w+)', self.definition_format))
+
+        # Decorators
+        self.rules.append((r'@\w+', self.decorator_format))
+
+        # Numbers
+        self.rules.append((r'\b[0-9]+\.?[0-9]*\b', self.number_format))
+
+        # Single-line strings
+        self.rules.append((r'"[^"\\]*(\\.[^"\\]*)*"', self.string_format))
+        self.rules.append((r"'[^'\\]*(\\.[^'\\]*)*'", self.string_format))
+
+        # Comments
+        self.rules.append((r'#[^\n]*', self.comment_format))
+
+    def highlightBlock(self, text):
+        """Apply syntax highlighting to a block of text."""
+        import re
+
+        for pattern, fmt in self.rules:
+            for match in re.finditer(pattern, text):
+                start = match.start()
+                length = match.end() - start
+                # For class/def, highlight the name part
+                if match.lastindex:
+                    start = match.start(1)
+                    length = match.end(1) - start
+                self.setFormat(start, length, fmt)
+
+        # Handle multi-line strings (triple quotes)
+        self._highlight_multiline_strings(text)
+
+    def _highlight_multiline_strings(self, text):
+        """Handle multi-line string highlighting."""
+        import re
+
+        # Triple double quotes
+        in_multiline = self.previousBlockState() == 1
+
+        start_index = 0
+        if not in_multiline:
+            match = re.search(r'"""', text)
+            if match:
+                start_index = match.start()
+            else:
+                start_index = -1
+
+        while start_index >= 0:
+            end_match = re.search(r'"""', text[start_index + 3:])
+            if end_match:
+                end_index = start_index + 3 + end_match.end()
+                self.setCurrentBlockState(0)
+            else:
+                end_index = len(text)
+                self.setCurrentBlockState(1)
+
+            self.setFormat(start_index, end_index - start_index, self.string_format)
+
+            match = re.search(r'"""', text[end_index:])
+            if match:
+                start_index = end_index + match.start()
+            else:
+                start_index = -1
+
+
+class LineNumberArea(QWidget):
+    """Line number area for the code editor."""
+
+    def __init__(self, editor):
+        super().__init__(editor)
+        self.editor = editor
+
+    def sizeHint(self):
+        return QSize(self.editor.line_number_area_width(), 0)
+
+    def paintEvent(self, event):
+        self.editor.line_number_area_paint_event(event)
+
+
+class PythonCodeEditor(QPlainTextEdit):
+    """Enhanced code editor with line numbers and auto-indentation."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        # Line number area
+        self.line_number_area = LineNumberArea(self)
+
+        # Connect signals
+        self.blockCountChanged.connect(self.update_line_number_area_width)
+        self.updateRequest.connect(self.update_line_number_area)
+        self.cursorPositionChanged.connect(self.highlight_current_line)
+
+        self.update_line_number_area_width(0)
+        self.highlight_current_line()
+
+        # Apply syntax highlighter
+        self.highlighter = PythonSyntaxHighlighter(self.document())
+
+        # Set tab width
+        font_metrics = self.fontMetrics()
+        self.setTabStopDistance(4 * font_metrics.horizontalAdvance(' '))
+
+    def line_number_area_width(self):
+        """Calculate the width needed for line numbers."""
+        digits = len(str(max(1, self.blockCount())))
+        space = 10 + self.fontMetrics().horizontalAdvance('9') * digits
+        return space
+
+    def update_line_number_area_width(self, _):
+        """Update the viewport margins to make room for line numbers."""
+        self.setViewportMargins(self.line_number_area_width(), 0, 0, 0)
+
+    def update_line_number_area(self, rect, dy):
+        """Update the line number area when scrolling."""
+        if dy:
+            self.line_number_area.scroll(0, dy)
+        else:
+            self.line_number_area.update(0, rect.y(), self.line_number_area.width(), rect.height())
+
+        if rect.contains(self.viewport().rect()):
+            self.update_line_number_area_width(0)
+
+    def resizeEvent(self, event):
+        """Handle resize to adjust line number area."""
+        super().resizeEvent(event)
+        cr = self.contentsRect()
+        self.line_number_area.setGeometry(QRect(cr.left(), cr.top(), self.line_number_area_width(), cr.height()))
+
+    def line_number_area_paint_event(self, event):
+        """Paint line numbers."""
+        painter = QPainter(self.line_number_area)
+        painter.fillRect(event.rect(), QColor("#1e1e1e"))
+
+        block = self.firstVisibleBlock()
+        block_number = block.blockNumber()
+        top = round(self.blockBoundingGeometry(block).translated(self.contentOffset()).top())
+        bottom = top + round(self.blockBoundingRect(block).height())
+
+        while block.isValid() and top <= event.rect().bottom():
+            if block.isVisible() and bottom >= event.rect().top():
+                number = str(block_number + 1)
+                painter.setPen(QColor("#858585"))
+                painter.drawText(0, top, self.line_number_area.width() - 5,
+                               self.fontMetrics().height(), Qt.AlignRight, number)
+
+            block = block.next()
+            top = bottom
+            bottom = top + round(self.blockBoundingRect(block).height())
+            block_number += 1
+
+    def highlight_current_line(self):
+        """Highlight the current line."""
+        extra_selections = []
+
+        if not self.isReadOnly():
+            selection = QTextEdit.ExtraSelection()
+            line_color = QColor("#2d2d2d")
+            selection.format.setBackground(line_color)
+            selection.format.setProperty(QTextFormat.FullWidthSelection, True)
+            selection.cursor = self.textCursor()
+            selection.cursor.clearSelection()
+            extra_selections.append(selection)
+
+        self.setExtraSelections(extra_selections)
+
+    def keyPressEvent(self, event):
+        """Handle key presses for auto-indentation."""
+        if event.key() == Qt.Key_Return or event.key() == Qt.Key_Enter:
+            # Auto-indent on Enter
+            cursor = self.textCursor()
+            line = cursor.block().text()
+
+            # Get current indentation
+            indent = ""
+            for char in line:
+                if char in (' ', '\t'):
+                    indent += char
+                else:
+                    break
+
+            # Add extra indent after colon
+            stripped = line.rstrip()
+            if stripped.endswith(':'):
+                indent += "    "
+
+            # Insert newline with indent
+            super().keyPressEvent(event)
+            self.insertPlainText(indent)
+
+        elif event.key() == Qt.Key_Tab:
+            # Insert 4 spaces instead of tab
+            self.insertPlainText("    ")
+
+        elif event.key() == Qt.Key_Backtab:
+            # Shift+Tab - decrease indentation
+            cursor = self.textCursor()
+            cursor.movePosition(QTextCursor.StartOfLine)
+            cursor.movePosition(QTextCursor.Right, QTextCursor.KeepAnchor, 4)
+            if cursor.selectedText() == "    ":
+                cursor.removeSelectedText()
+
+        else:
+            super().keyPressEvent(event)
+
+    def format_code(self):
+        """Auto-format the Python code (basic formatting)."""
+        code = self.toPlainText()
+        try:
+            # Try to use black if available
+            import black
+            formatted = black.format_str(code, mode=black.Mode())
+            self.setPlainText(formatted)
+            return True, "Code formatted successfully"
+        except ImportError:
+            # Fall back to basic formatting
+            return self._basic_format(code)
+        except Exception as e:
+            return False, f"Format error: {e}"
+
+    def _basic_format(self, code):
+        """Basic code formatting without external dependencies."""
+        import re
+        lines = code.split('\n')
+        formatted_lines = []
+        indent_level = 0
+
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                formatted_lines.append("")
+                continue
+
+            # Decrease indent for these keywords
+            if stripped.startswith(('else:', 'elif ', 'except:', 'except ', 'finally:', 'elif:')):
+                indent_level = max(0, indent_level - 1)
+
+            # Apply current indent
+            formatted_lines.append("    " * indent_level + stripped)
+
+            # Increase indent after colon (but not for comments)
+            if stripped.endswith(':') and not stripped.startswith('#'):
+                indent_level += 1
+
+            # Decrease indent after return/break/continue/pass/raise
+            if stripped.startswith(('return ', 'return', 'break', 'continue', 'pass', 'raise ')):
+                indent_level = max(0, indent_level - 1)
+
+        self.setPlainText('\n'.join(formatted_lines))
+        return True, "Basic formatting applied"
+
+
+class ChatMessageInput(QPlainTextEdit):
+    """Message input that sends on Enter, newline on Shift+Enter."""
+
+    sendRequested = pyqtSignal()
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            if event.modifiers() & Qt.ShiftModifier:
+                # Shift+Enter: insert newline
+                super().keyPressEvent(event)
+            else:
+                # Enter: send message
+                self.sendRequested.emit()
+        else:
+            super().keyPressEvent(event)
 
 
 # ----------------------------------------------------------------------
@@ -4666,10 +5022,9 @@ class TariffMill(QMainWindow):
         # Apply saved highlight color for this theme
         self.apply_highlight_color()
 
-        # Refresh OCRMill templates table styling for new theme
-        if hasattr(self, 'ocrmill_templates_table'):
-            self._apply_templates_list_style()
-            self.ocrmill_refresh_templates()
+        # Refresh AI template tab styling for new theme
+        if hasattr(self, 'ocrmill_templates_list'):
+            self._update_ai_template_styles()
 
         # Update logo for theme
         self.update_logo_for_theme(is_dark)
@@ -10734,77 +11089,9 @@ EXPORT DETAILS
 
         self.ocrmill_tabs.addTab(history_widget, "Parts History")
 
-        # ===== TAB 3: AI TEMPLATE GENERATOR (replaces old Templates tab) =====
-        templates_widget = QWidget()
-        templates_layout = QVBoxLayout(templates_widget)
-
-        # Header
-        templates_label = QLabel("AI Template Generator")
-        templates_label.setStyleSheet("font-weight: bold; font-size: 14px; padding: 5px;")
-        templates_layout.addWidget(templates_label)
-
-        desc_label = QLabel("Manage OCR templates. Select a template to edit, or use AI to generate new templates from sample invoices.")
-        desc_label.setWordWrap(True)
-        desc_label.setStyleSheet("color: #666; padding: 0 5px 10px 5px;")
-        templates_layout.addWidget(desc_label)
-
-        # Template grid/table
-        self.ocrmill_templates_table = QTableWidget()
-        self.ocrmill_templates_table.setColumnCount(5)
-        self.ocrmill_templates_table.setHorizontalHeaderLabels([
-            "Template Name", "Supplier Name", "Client", "Country of Origin", "AI Agent"
-        ])
-        self.ocrmill_templates_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.ocrmill_templates_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.ocrmill_templates_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.ocrmill_templates_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.ocrmill_templates_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        self.ocrmill_templates_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.ocrmill_templates_table.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.ocrmill_templates_table.setAlternatingRowColors(True)
-        self.ocrmill_templates_table.doubleClicked.connect(self.ocrmill_edit_template)
-        templates_layout.addWidget(self.ocrmill_templates_table, 1)
-
-        # Store template data for reference
-        self.ocrmill_templates_data = []
-
-        # Template buttons - Row 1
-        template_buttons_layout = QHBoxLayout()
-
-        btn_smart_extractor = QPushButton("Smart Extractor")
-        btn_smart_extractor.setStyleSheet(self.get_button_style("success"))
-        btn_smart_extractor.setToolTip("Extract line items and create templates using data shape recognition")
-        btn_smart_extractor.clicked.connect(self.ocrmill_open_smart_extractor)
-        template_buttons_layout.addWidget(btn_smart_extractor)
-
-        btn_ai_generator = QPushButton("AI Generator")
-        btn_ai_generator.setStyleSheet(self.get_button_style("info"))
-        btn_ai_generator.setToolTip("Use AI (OpenAI, Anthropic, or Ollama) to generate templates from sample invoices")
-        btn_ai_generator.clicked.connect(self.ocrmill_open_ai_generator)
-        template_buttons_layout.addWidget(btn_ai_generator)
-
-        btn_edit_template = QPushButton("Edit Selected")
-        btn_edit_template.setStyleSheet(self.get_button_style("default"))
-        btn_edit_template.clicked.connect(self.ocrmill_edit_template)
-        template_buttons_layout.addWidget(btn_edit_template)
-
-        btn_delete_template = QPushButton("Delete Selected")
-        btn_delete_template.setStyleSheet(self.get_button_style("danger"))
-        btn_delete_template.clicked.connect(self.ocrmill_delete_template)
-        template_buttons_layout.addWidget(btn_delete_template)
-
-        btn_refresh_templates = QPushButton("Refresh")
-        btn_refresh_templates.setStyleSheet(self.get_button_style("default"))
-        btn_refresh_templates.clicked.connect(self.ocrmill_refresh_templates)
-        template_buttons_layout.addWidget(btn_refresh_templates)
-
-        template_buttons_layout.addStretch()
-        templates_layout.addLayout(template_buttons_layout)
-
-        # Populate templates
-        self.ocrmill_refresh_templates()
-
-        self.ocrmill_tabs.addTab(templates_widget, "Templates")
+        # ===== TAB 3: AI TEMPLATE GENERATOR (integrated editor) =====
+        self.setup_ai_template_tab()
+        self.ocrmill_tabs.addTab(self.ai_template_widget, "AI Templates")
 
         layout.addWidget(self.ocrmill_tabs, 1)
 
@@ -10822,6 +11109,1411 @@ EXPORT DETAILS
         """Add a message to the OCRMill activity log."""
         timestamp = datetime.now().strftime("%H:%M:%S")
         self.ocrmill_log_text.appendPlainText(f"[{timestamp}] {message}")
+
+    def setup_ai_template_tab(self):
+        """Setup the integrated AI Template Generator tab with template list, editor, and chat."""
+        self.ai_template_widget = QWidget()
+        layout = QVBoxLayout(self.ai_template_widget)
+        layout.setSpacing(8)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        # Main horizontal splitter: Left (template list) | Right (editor + chat)
+        main_splitter = QSplitter(Qt.Horizontal)
+
+        # === LEFT PANEL: Template List ===
+        left_panel = QWidget()
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(5)
+
+        # Template list header
+        self.ai_templates_header = QLabel("Templates")
+        self.ai_templates_header.setStyleSheet("font-weight: bold; font-size: 12px;")
+        left_layout.addWidget(self.ai_templates_header)
+
+        # Template list
+        self.ocrmill_templates_list = QListWidget()
+        self.ocrmill_templates_list.setStyleSheet("""
+            QListWidget {
+                background-color: #252526;
+                color: #cccccc;
+                border: 1px solid #3c3c3c;
+                border-radius: 4px;
+                padding: 4px;
+            }
+            QListWidget::item {
+                padding: 8px 10px;
+                border-bottom: 1px solid #3c3c3c;
+            }
+            QListWidget::item:selected {
+                background-color: #094771;
+                color: white;
+            }
+            QListWidget::item:hover {
+                background-color: #2a2d2e;
+            }
+        """)
+        self.ocrmill_templates_list.itemClicked.connect(self._on_template_selected)
+        self.ocrmill_templates_list.itemDoubleClicked.connect(self._on_template_double_clicked)
+        left_layout.addWidget(self.ocrmill_templates_list, 1)
+
+        # Template list buttons
+        list_btn_layout = QHBoxLayout()
+        list_btn_layout.setSpacing(5)
+
+        btn_new = QPushButton("New")
+        btn_new.setToolTip("Create a new template using AI")
+        btn_new.setStyleSheet(self._get_small_button_style("success"))
+        btn_new.clicked.connect(self._ai_template_new)
+        list_btn_layout.addWidget(btn_new)
+
+        btn_delete = QPushButton("Delete")
+        btn_delete.setToolTip("Delete selected template")
+        btn_delete.setStyleSheet(self._get_small_button_style("danger"))
+        btn_delete.clicked.connect(self.ocrmill_delete_template)
+        list_btn_layout.addWidget(btn_delete)
+
+        btn_refresh = QPushButton()
+        btn_refresh.setToolTip("Refresh template list")
+        btn_refresh.setFixedWidth(30)
+        btn_refresh.setIcon(self.style().standardIcon(QStyle.SP_BrowserReload))
+        btn_refresh.setStyleSheet(self._get_small_button_style("default"))
+        btn_refresh.clicked.connect(self.ocrmill_refresh_templates)
+        list_btn_layout.addWidget(btn_refresh)
+
+        left_layout.addLayout(list_btn_layout)
+
+        # Store template data
+        self.ocrmill_templates_data = []
+
+        main_splitter.addWidget(left_panel)
+
+        # === RIGHT PANEL: Stacked Widget (Edit Mode / Create Mode) ===
+        right_panel = QWidget()
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(5)
+
+        # Header bar with template info and AI provider
+        self.ai_template_header = QWidget()
+        self.ai_template_header.setStyleSheet("background-color: #2d2d30; border-radius: 4px;")
+        header_layout = QHBoxLayout(self.ai_template_header)
+        header_layout.setContentsMargins(10, 6, 10, 6)
+
+        self.ai_template_name_label = QLabel("Select a template")
+        self.ai_template_name_label.setStyleSheet("font-weight: bold; color: #dcdcdc;")
+        header_layout.addWidget(self.ai_template_name_label)
+
+        header_layout.addStretch()
+
+        # AI Provider selection
+        self.ai_provider_label = QLabel("AI:")
+        header_layout.addWidget(self.ai_provider_label)
+        self.ai_provider_combo = QComboBox()
+        self.ai_provider_combo.addItems(["Anthropic", "OpenAI", "Ollama (Local)"])
+        self.ai_provider_combo.setFixedWidth(120)
+        self.ai_provider_combo.currentTextChanged.connect(self._on_ai_provider_changed)
+        header_layout.addWidget(self.ai_provider_combo)
+
+        self.ai_model_combo = QComboBox()
+        self.ai_model_combo.setFixedWidth(180)
+        self._on_ai_provider_changed(self.ai_provider_combo.currentText())
+        header_layout.addWidget(self.ai_model_combo)
+
+        right_layout.addWidget(self.ai_template_header)
+
+        # Stacked widget for Edit/Create modes
+        self.ai_mode_stack = QStackedWidget()
+
+        # === PAGE 0: EDIT MODE (Editor + Chat) ===
+        edit_mode_widget = QWidget()
+        edit_mode_layout = QVBoxLayout(edit_mode_widget)
+        edit_mode_layout.setContentsMargins(0, 0, 0, 0)
+        edit_mode_layout.setSpacing(5)
+
+        # Splitter for code editor and chat
+        editor_chat_splitter = QSplitter(Qt.Horizontal)
+
+        # Code editor
+        code_widget = QWidget()
+        code_layout = QVBoxLayout(code_widget)
+        code_layout.setContentsMargins(0, 0, 0, 0)
+        code_layout.setSpacing(3)
+
+        code_header = QHBoxLayout()
+        self.ai_code_label = QLabel("Template Code")
+        code_header.addWidget(self.ai_code_label)
+        code_header.addStretch()
+        self.ai_syntax_indicator = QLabel("✓ Valid")
+        self.ai_syntax_indicator.setStyleSheet("color: #4ec9b0; font-size: 10px;")
+        code_header.addWidget(self.ai_syntax_indicator)
+        code_layout.addLayout(code_header)
+
+        self.ai_code_edit = PythonCodeEditor()
+        self.ai_code_edit.setFont(QFont("Consolas", 10))
+        self.ai_code_edit.setStyleSheet("""
+            QPlainTextEdit {
+                background-color: #1e1e1e;
+                color: #d4d4d4;
+                border: 1px solid #3c3c3c;
+                border-radius: 4px;
+                padding: 6px;
+                selection-background-color: #264f78;
+            }
+        """)
+        self.ai_code_edit.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self.ai_code_edit.textChanged.connect(self._ai_validate_syntax)
+        self.ai_code_edit.setPlaceholderText("Select a template from the list to edit, or click 'New' to create one...")
+        code_layout.addWidget(self.ai_code_edit, 1)
+
+        editor_chat_splitter.addWidget(code_widget)
+
+        # Chat panel
+        self.ai_chat_widget = QWidget()
+        self.ai_chat_widget.setStyleSheet("background-color: #252526; border-radius: 4px;")
+        chat_layout = QVBoxLayout(self.ai_chat_widget)
+        chat_layout.setContentsMargins(8, 8, 8, 8)
+        chat_layout.setSpacing(5)
+
+        self.ai_chat_label = QLabel("AI Assistant")
+        chat_layout.addWidget(self.ai_chat_label)
+
+        self.ai_chat_display = QTextEdit()
+        self.ai_chat_display.setReadOnly(True)
+        self.ai_chat_display.setFont(QFont("Segoe UI", 9))
+        self.ai_chat_display.setStyleSheet("""
+            QTextEdit {
+                background-color: #1e1e1e;
+                color: #cccccc;
+                border: 1px solid #3c3c3c;
+                border-radius: 4px;
+                padding: 6px;
+            }
+            QScrollBar:vertical {
+                background-color: #1e1e1e;
+                width: 8px;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #5a5a5a;
+                border-radius: 4px;
+            }
+        """)
+        self._show_ai_welcome_message()
+        chat_layout.addWidget(self.ai_chat_display, 1)
+
+        # Message input (Enter to send, Shift+Enter for newline)
+        self.ai_message_input = ChatMessageInput()
+        self.ai_message_input.setMaximumHeight(60)
+        self.ai_message_input.setPlaceholderText("Ask the AI to modify the template... (Enter to send)")
+        self.ai_message_input.sendRequested.connect(self._ai_send_message)
+        self.ai_message_input.setStyleSheet("""
+            QPlainTextEdit {
+                background-color: #3c3c3c;
+                color: #cccccc;
+                border: 1px solid #5a5a5a;
+                border-radius: 4px;
+                padding: 6px;
+                font-size: 10pt;
+            }
+            QPlainTextEdit:focus {
+                border: 1px solid #007acc;
+            }
+        """)
+        chat_layout.addWidget(self.ai_message_input)
+
+        # Chat buttons
+        chat_btn_layout = QHBoxLayout()
+        chat_btn_layout.setSpacing(5)
+
+        self.ai_send_btn = QPushButton("Send")
+        self.ai_send_btn.setStyleSheet(self._get_small_button_style("primary"))
+        self.ai_send_btn.clicked.connect(self._ai_send_message)
+        chat_btn_layout.addWidget(self.ai_send_btn)
+
+        self.ai_cancel_btn = QPushButton("Cancel")
+        self.ai_cancel_btn.setStyleSheet(self._get_small_button_style("default"))
+        self.ai_cancel_btn.setEnabled(False)
+        self.ai_cancel_btn.clicked.connect(self._ai_cancel_request)
+        chat_btn_layout.addWidget(self.ai_cancel_btn)
+
+        chat_btn_layout.addStretch()
+
+        self.ai_apply_btn = QPushButton("Apply Code")
+        self.ai_apply_btn.setStyleSheet(self._get_small_button_style("success"))
+        self.ai_apply_btn.setEnabled(False)
+        self.ai_apply_btn.clicked.connect(self._ai_apply_changes)
+        chat_btn_layout.addWidget(self.ai_apply_btn)
+
+        chat_layout.addLayout(chat_btn_layout)
+
+        editor_chat_splitter.addWidget(self.ai_chat_widget)
+        editor_chat_splitter.setSizes([500, 350])
+
+        edit_mode_layout.addWidget(editor_chat_splitter, 1)
+
+        # Bottom action bar for edit mode
+        action_layout = QHBoxLayout()
+        action_layout.setSpacing(8)
+
+        btn_test = QPushButton("Test Template")
+        btn_test.setStyleSheet(self._get_small_button_style("info"))
+        btn_test.clicked.connect(self._ai_test_template)
+        action_layout.addWidget(btn_test)
+
+        btn_format = QPushButton("Format Code")
+        btn_format.setStyleSheet(self._get_small_button_style("default"))
+        btn_format.clicked.connect(self._ai_format_code)
+        action_layout.addWidget(btn_format)
+
+        action_layout.addStretch()
+
+        self.ai_save_btn = QPushButton("Save Template")
+        self.ai_save_btn.setStyleSheet(self._get_small_button_style("success"))
+        self.ai_save_btn.clicked.connect(self._ai_save_template)
+        action_layout.addWidget(self.ai_save_btn)
+
+        edit_mode_layout.addLayout(action_layout)
+
+        self.ai_mode_stack.addWidget(edit_mode_widget)  # Index 0: Edit mode
+
+        # === PAGE 1: CREATE MODE (New Template from Sample) ===
+        create_mode_widget = QWidget()
+        create_mode_layout = QVBoxLayout(create_mode_widget)
+        create_mode_layout.setContentsMargins(0, 0, 0, 0)
+        create_mode_layout.setSpacing(8)
+
+        # Sample Invoice Input
+        sample_group = QGroupBox("Sample Invoice")
+        sample_layout = QVBoxLayout()
+
+        # File selection row
+        file_row = QHBoxLayout()
+        self.ai_new_pdf_path = QLineEdit()
+        self.ai_new_pdf_path.setPlaceholderText("Select a PDF invoice or paste text below...")
+        self.ai_new_pdf_path.setReadOnly(True)
+        file_row.addWidget(self.ai_new_pdf_path, stretch=1)
+
+        btn_browse_pdf = QPushButton("Browse PDF...")
+        btn_browse_pdf.setStyleSheet(self._get_small_button_style("primary"))
+        btn_browse_pdf.clicked.connect(self._ai_browse_sample_pdf)
+        file_row.addWidget(btn_browse_pdf)
+
+        sample_layout.addLayout(file_row)
+
+        self.ai_new_invoice_text = QPlainTextEdit()
+        self.ai_new_invoice_text.setPlaceholderText(
+            "Paste invoice text here, or load from PDF above.\n\n"
+            "The AI will analyze this text to create extraction patterns."
+        )
+        self.ai_new_invoice_text.setFont(QFont("Consolas", 9))
+        sample_layout.addWidget(self.ai_new_invoice_text)
+
+        sample_group.setLayout(sample_layout)
+        create_mode_layout.addWidget(sample_group, 1)
+
+        # Template Settings
+        settings_group = QGroupBox("Template Settings")
+        settings_layout = QFormLayout()
+
+        self.ai_new_template_name = QLineEdit()
+        self.ai_new_template_name.setPlaceholderText("e.g., acme_corp (lowercase with underscores)")
+        settings_layout.addRow("Template Name:", self.ai_new_template_name)
+
+        self.ai_new_supplier_name = QLineEdit()
+        self.ai_new_supplier_name.setPlaceholderText("e.g., Acme Corporation")
+        settings_layout.addRow("Supplier Name:", self.ai_new_supplier_name)
+
+        self.ai_new_client = QLineEdit()
+        self.ai_new_client.setPlaceholderText("e.g., Sigma Corporation")
+        settings_layout.addRow("Client:", self.ai_new_client)
+
+        self.ai_new_country = QLineEdit()
+        self.ai_new_country.setPlaceholderText("e.g., CHINA, INDIA, USA")
+        settings_layout.addRow("Country of Origin:", self.ai_new_country)
+
+        settings_group.setLayout(settings_layout)
+        create_mode_layout.addWidget(settings_group)
+
+        # Progress bar
+        self.ai_new_progress = QProgressBar()
+        self.ai_new_progress.setVisible(False)
+        self.ai_new_progress.setTextVisible(True)
+        create_mode_layout.addWidget(self.ai_new_progress)
+
+        # Generated Code Preview
+        preview_group = QGroupBox("Generated Template (Preview)")
+        preview_layout = QVBoxLayout()
+
+        self.ai_new_code_preview = QPlainTextEdit()
+        self.ai_new_code_preview.setReadOnly(True)
+        self.ai_new_code_preview.setFont(QFont("Consolas", 9))
+        self.ai_new_code_preview.setPlaceholderText("Generated template code will appear here...")
+        preview_layout.addWidget(self.ai_new_code_preview)
+
+        preview_group.setLayout(preview_layout)
+        create_mode_layout.addWidget(preview_group, 1)
+
+        # Create mode action buttons
+        create_action_layout = QHBoxLayout()
+        create_action_layout.setSpacing(8)
+
+        self.ai_generate_btn = QPushButton("Generate Template")
+        self.ai_generate_btn.setStyleSheet(self._get_small_button_style("primary"))
+        self.ai_generate_btn.clicked.connect(self._ai_generate_new_template)
+        create_action_layout.addWidget(self.ai_generate_btn)
+
+        self.ai_cancel_gen_btn = QPushButton("Cancel")
+        self.ai_cancel_gen_btn.setStyleSheet(self._get_small_button_style("danger"))
+        self.ai_cancel_gen_btn.setVisible(False)
+        self.ai_cancel_gen_btn.clicked.connect(self._ai_cancel_generation)
+        create_action_layout.addWidget(self.ai_cancel_gen_btn)
+
+        self.ai_save_new_btn = QPushButton("Save Template")
+        self.ai_save_new_btn.setStyleSheet(self._get_small_button_style("success"))
+        self.ai_save_new_btn.setEnabled(False)
+        self.ai_save_new_btn.clicked.connect(self._ai_save_new_template)
+        create_action_layout.addWidget(self.ai_save_new_btn)
+
+        create_action_layout.addStretch()
+
+        btn_back_to_edit = QPushButton("Back to Templates")
+        btn_back_to_edit.setStyleSheet(self._get_small_button_style("default"))
+        btn_back_to_edit.clicked.connect(self._ai_switch_to_edit_mode)
+        create_action_layout.addWidget(btn_back_to_edit)
+
+        create_mode_layout.addLayout(create_action_layout)
+
+        self.ai_mode_stack.addWidget(create_mode_widget)  # Index 1: Create mode
+
+        right_layout.addWidget(self.ai_mode_stack, 1)
+
+        main_splitter.addWidget(right_panel)
+
+        # Set splitter proportions (20% list, 80% editor+chat)
+        main_splitter.setSizes([200, 800])
+
+        layout.addWidget(main_splitter, 1)
+
+        # Initialize state
+        self.ai_current_template_path = None
+        self.ai_conversation_history = []
+        self.ai_chat_thread = None
+        self.ai_pending_code = None
+
+        # Load templates
+        self.ocrmill_refresh_templates()
+
+        # Apply theme-aware styles
+        self._update_ai_template_styles()
+
+    def _get_ai_theme_colors(self) -> dict:
+        """Get theme-aware colors for the AI template tab."""
+        theme = getattr(self, 'current_theme', 'System Default')
+
+        if theme == "Ocean":
+            return {
+                'bg_primary': '#1a3050',
+                'bg_secondary': '#243d5c',
+                'bg_input': '#152a42',
+                'bg_code': '#0d1f30',
+                'border': '#3a6a9a',
+                'border_focus': '#00a8cc',
+                'text': '#e0f0ff',
+                'text_muted': '#8ac4e0',
+                'text_header': '#7ec8e3',
+                'accent': '#00a8cc',
+                'success': '#2e8b57',
+                'danger': '#c44536',
+                'warning': '#d4a574',
+                'selection': '#0096b4',
+                'user_bubble': '#1a5a7a',
+                'user_bubble_text': '#ffffff',
+                'ai_bubble': '#0d2840',
+                'ai_bubble_text': '#e0f0ff',
+            }
+        elif theme == "Fusion (Dark)":
+            return {
+                'bg_primary': '#2d2d2d',
+                'bg_secondary': '#353535',
+                'bg_input': '#3c3c3c',
+                'bg_code': '#1e1e1e',
+                'border': '#555555',
+                'border_focus': '#0078d4',
+                'text': '#e0e0e0',
+                'text_muted': '#a0a0a0',
+                'text_header': '#ffffff',
+                'accent': '#0078d4',
+                'success': '#388a34',
+                'danger': '#c42b1c',
+                'warning': '#ce9178',
+                'selection': '#264f78',
+                'user_bubble': '#264f78',
+                'user_bubble_text': '#ffffff',
+                'ai_bubble': '#2d2d2d',
+                'ai_bubble_text': '#e0e0e0',
+            }
+        else:  # Light themes
+            return {
+                'bg_primary': '#ffffff',
+                'bg_secondary': '#f5f5f5',
+                'bg_input': '#ffffff',
+                'bg_code': '#fafafa',
+                'border': '#d0d0d0',
+                'border_focus': '#0078d4',
+                'text': '#1a1a1a',
+                'text_muted': '#666666',
+                'text_header': '#333333',
+                'accent': '#0078d4',
+                'success': '#107c10',
+                'danger': '#d13438',
+                'warning': '#b85c00',
+                'selection': '#cce8ff',
+                'user_bubble': '#0078d4',
+                'user_bubble_text': '#ffffff',
+                'ai_bubble': '#f0f0f0',
+                'ai_bubble_text': '#1a1a1a',
+            }
+
+    def _get_small_button_style(self, style_type: str) -> str:
+        """Get button stylesheet for the AI template tab."""
+        colors = self._get_ai_theme_colors()
+        is_dark = getattr(self, 'current_theme', '') in ["Fusion (Dark)", "Ocean"]
+
+        button_colors = {
+            "primary": (colors['accent'], self._lighten_color(colors['accent']), self._darken_color(colors['accent'])),
+            "success": (colors['success'], self._lighten_color(colors['success']), self._darken_color(colors['success'])),
+            "danger": (colors['danger'], self._lighten_color(colors['danger']), self._darken_color(colors['danger'])),
+            "info": ("#6c5ce7", "#7d6ee8", "#5b4ccc"),
+            "default": (colors['bg_input'], colors['bg_secondary'], colors['bg_primary']),
+        }
+        bg, hover, pressed = button_colors.get(style_type, button_colors["default"])
+        text_color = "#ffffff" if style_type != "default" else colors['text']
+        disabled_bg = colors['bg_primary'] if is_dark else "#e0e0e0"
+        disabled_text = colors['text_muted']
+
+        return f"""
+            QPushButton {{
+                background-color: {bg};
+                color: {text_color};
+                border: 1px solid {colors['border']};
+                border-radius: 4px;
+                padding: 6px 14px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{ background-color: {hover}; }}
+            QPushButton:pressed {{ background-color: {pressed}; }}
+            QPushButton:disabled {{ background-color: {disabled_bg}; color: {disabled_text}; }}
+        """
+
+    def _lighten_color(self, hex_color: str) -> str:
+        """Lighten a hex color by 15%."""
+        hex_color = hex_color.lstrip('#')
+        r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+        r = min(255, int(r + (255 - r) * 0.15))
+        g = min(255, int(g + (255 - g) * 0.15))
+        b = min(255, int(b + (255 - b) * 0.15))
+        return f"#{r:02x}{g:02x}{b:02x}"
+
+    def _darken_color(self, hex_color: str) -> str:
+        """Darken a hex color by 15%."""
+        hex_color = hex_color.lstrip('#')
+        r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+        r = max(0, int(r * 0.85))
+        g = max(0, int(g * 0.85))
+        b = max(0, int(b * 0.85))
+        return f"#{r:02x}{g:02x}{b:02x}"
+
+    def _show_ai_welcome_message(self):
+        """Show welcome message in AI chat."""
+        colors = self._get_ai_theme_colors()
+        self.ai_chat_display.setHtml(f'''
+        <div style="font-family: Segoe UI; padding: 8px;">
+            <div style="background-color: {colors['bg_secondary']}; border-radius: 6px; padding: 12px; border: 1px solid {colors['border']};">
+                <div style="color: {colors['accent']}; font-size: 12px; font-weight: bold; margin-bottom: 8px;">
+                    👋 AI Template Assistant
+                </div>
+                <div style="color: {colors['text']}; line-height: 1.5; font-size: 10px;">
+                    <p>Select a template to edit, or create a new one.</p>
+                    <p>I can help you:</p>
+                    <ul style="margin: 5px 0; padding-left: 15px;">
+                        <li>Fix regex patterns</li>
+                        <li>Add new extraction fields</li>
+                        <li>Handle new invoice formats</li>
+                        <li>Explain template logic</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+        ''')
+
+    def _update_ai_template_styles(self):
+        """Update AI template tab styles based on current theme."""
+        colors = self._get_ai_theme_colors()
+
+        # Template list
+        self.ocrmill_templates_list.setStyleSheet(f"""
+            QListWidget {{
+                background-color: {colors['bg_primary']};
+                color: {colors['text']};
+                border: 1px solid {colors['border']};
+                border-radius: 4px;
+                padding: 4px;
+            }}
+            QListWidget::item {{
+                padding: 8px 10px;
+                border-bottom: 1px solid {colors['border']};
+            }}
+            QListWidget::item:selected {{
+                background-color: {colors['selection']};
+                color: {colors['text_header']};
+            }}
+            QListWidget::item:hover {{
+                background-color: {colors['bg_secondary']};
+            }}
+        """)
+
+        # Templates list header
+        if hasattr(self, 'ai_templates_header'):
+            self.ai_templates_header.setStyleSheet(f"font-weight: bold; font-size: 12px; color: {colors['text_header']};")
+
+        # Header widget
+        if hasattr(self, 'ai_template_header'):
+            self.ai_template_header.setStyleSheet(f"background-color: {colors['bg_secondary']}; border-radius: 4px;")
+
+        # Template name label (bold header)
+        if hasattr(self, 'ai_template_name_label'):
+            self.ai_template_name_label.setStyleSheet(f"font-weight: bold; color: {colors['text_header']};")
+
+        # AI provider label
+        if hasattr(self, 'ai_provider_label'):
+            self.ai_provider_label.setStyleSheet(f"color: {colors['text_header']};")
+
+        # Template Code label
+        if hasattr(self, 'ai_code_label'):
+            self.ai_code_label.setStyleSheet(f"color: {colors['text_header']};")
+
+        # AI Assistant label
+        if hasattr(self, 'ai_chat_label'):
+            self.ai_chat_label.setStyleSheet(f"color: {colors['text_header']};")
+
+        # Chat panel background
+        if hasattr(self, 'ai_chat_widget'):
+            self.ai_chat_widget.setStyleSheet(f"background-color: {colors['bg_secondary']}; border-radius: 4px;")
+
+        # Code editor
+        self.ai_code_edit.setStyleSheet(f"""
+            QPlainTextEdit {{
+                background-color: {colors['bg_code']};
+                color: {colors['text']};
+                border: 1px solid {colors['border']};
+                border-radius: 4px;
+                padding: 6px;
+                selection-background-color: {colors['selection']};
+            }}
+        """)
+
+        # Chat display
+        self.ai_chat_display.setStyleSheet(f"""
+            QTextEdit {{
+                background-color: {colors['bg_code']};
+                color: {colors['text']};
+                border: 1px solid {colors['border']};
+                border-radius: 4px;
+                padding: 6px;
+            }}
+            QScrollBar:vertical {{
+                background-color: {colors['bg_primary']};
+                width: 8px;
+            }}
+            QScrollBar::handle:vertical {{
+                background-color: {colors['border']};
+                border-radius: 4px;
+            }}
+        """)
+
+        # Message input
+        self.ai_message_input.setStyleSheet(f"""
+            QPlainTextEdit {{
+                background-color: {colors['bg_input']};
+                color: {colors['text']};
+                border: 1px solid {colors['border']};
+                border-radius: 4px;
+                padding: 6px;
+                font-size: 10pt;
+            }}
+            QPlainTextEdit:focus {{
+                border: 1px solid {colors['border_focus']};
+            }}
+        """)
+
+        # Update syntax indicator color
+        self.ai_syntax_indicator.setStyleSheet(f"color: {colors['success']}; font-size: 10px;")
+
+        # Update buttons
+        self.ai_send_btn.setStyleSheet(self._get_small_button_style("primary"))
+        self.ai_cancel_btn.setStyleSheet(self._get_small_button_style("default"))
+        self.ai_apply_btn.setStyleSheet(self._get_small_button_style("success"))
+        self.ai_save_btn.setStyleSheet(self._get_small_button_style("success"))
+
+        # Create mode widgets styling
+        if hasattr(self, 'ai_new_invoice_text'):
+            self.ai_new_invoice_text.setStyleSheet(f"""
+                QPlainTextEdit {{
+                    background-color: {colors['bg_code']};
+                    color: {colors['text']};
+                    border: 1px solid {colors['border']};
+                    border-radius: 4px;
+                    padding: 6px;
+                }}
+            """)
+
+        if hasattr(self, 'ai_new_code_preview'):
+            self.ai_new_code_preview.setStyleSheet(f"""
+                QPlainTextEdit {{
+                    background-color: {colors['bg_code']};
+                    color: {colors['text']};
+                    border: 1px solid {colors['border']};
+                    border-radius: 4px;
+                    padding: 6px;
+                }}
+            """)
+
+        if hasattr(self, 'ai_generate_btn'):
+            self.ai_generate_btn.setStyleSheet(self._get_small_button_style("primary"))
+        if hasattr(self, 'ai_cancel_gen_btn'):
+            self.ai_cancel_gen_btn.setStyleSheet(self._get_small_button_style("danger"))
+        if hasattr(self, 'ai_save_new_btn'):
+            self.ai_save_new_btn.setStyleSheet(self._get_small_button_style("success"))
+
+        # Update welcome message if showing
+        if not self.ai_conversation_history:
+            self._show_ai_welcome_message()
+
+    def _on_ai_provider_changed(self, provider: str):
+        """Update model list when AI provider changes."""
+        self.ai_model_combo.clear()
+        if provider == "OpenAI":
+            self.ai_model_combo.addItems(["gpt-4o", "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo"])
+        elif provider == "Anthropic":
+            self.ai_model_combo.addItems(["claude-sonnet-4-20250514", "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022"])
+        elif provider == "Ollama (Local)":
+            self.ai_model_combo.addItems(["llama3.1", "llama3", "codellama", "mistral"])
+
+    def _on_template_selected(self, item):
+        """Handle template selection from list."""
+        if not item:
+            return
+
+        # Switch to edit mode if in create mode
+        if hasattr(self, 'ai_mode_stack') and self.ai_mode_stack.currentIndex() == 1:
+            self.ai_mode_stack.setCurrentIndex(0)
+
+        # Find template data - use row index for reliable matching
+        row = self.ocrmill_templates_list.row(item)
+        if 0 <= row < len(self.ocrmill_templates_data):
+            self._load_template_for_editing(self.ocrmill_templates_data[row])
+
+    def _on_template_double_clicked(self, item):
+        """Handle double-click on template (same as single click for now)."""
+        self._on_template_selected(item)
+
+    def _load_template_for_editing(self, template_info):
+        """Load a template into the editor."""
+        template_path = Path(template_info['file_path'])
+        if not template_path.exists():
+            QMessageBox.warning(self, "Error", f"Template file not found: {template_path}")
+            return
+
+        try:
+            with open(template_path, 'r', encoding='utf-8') as f:
+                code = f.read()
+
+            self.ai_code_edit.setPlainText(code)
+            self.ai_current_template_path = template_path
+            self.ai_template_name_label.setText(template_info['name'])
+
+            # Load AI metadata if exists
+            ai_metadata_path = template_path.with_suffix('.ai_meta.json')
+            if ai_metadata_path.exists():
+                import json
+                with open(ai_metadata_path, 'r', encoding='utf-8') as f:
+                    metadata = json.load(f)
+                self.ai_conversation_history = metadata.get('conversation_history', [])
+                # Set provider/model if saved
+                provider = metadata.get('provider', '')
+                if provider:
+                    idx = self.ai_provider_combo.findText(provider)
+                    if idx >= 0:
+                        self.ai_provider_combo.setCurrentIndex(idx)
+            else:
+                self.ai_conversation_history = []
+
+            # Update chat display
+            self._ai_display_chat_history()
+
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to load template: {e}")
+
+    def _ai_template_new(self):
+        """Create a new template using AI - switch to create mode."""
+        # Clear the create mode fields
+        self.ai_new_pdf_path.clear()
+        self.ai_new_invoice_text.clear()
+        self.ai_new_template_name.clear()
+        self.ai_new_supplier_name.clear()
+        self.ai_new_client.clear()
+        self.ai_new_country.clear()
+        self.ai_new_code_preview.clear()
+        self.ai_new_progress.setVisible(False)
+        self.ai_generate_btn.setVisible(True)
+        self.ai_cancel_gen_btn.setVisible(False)
+        self.ai_save_new_btn.setEnabled(False)
+
+        # Update header
+        self.ai_template_name_label.setText("New Template")
+
+        # Switch to create mode
+        self.ai_mode_stack.setCurrentIndex(1)
+
+    def _ai_switch_to_edit_mode(self):
+        """Switch back to edit mode from create mode."""
+        self.ai_mode_stack.setCurrentIndex(0)
+        # Reset header if no template is selected
+        if not self.ai_current_template_path:
+            self.ai_template_name_label.setText("Select a template")
+
+    def _ai_browse_sample_pdf(self):
+        """Browse for a sample PDF invoice."""
+        try:
+            import pdfplumber
+        except ImportError:
+            QMessageBox.warning(
+                self, "Missing Dependency",
+                "pdfplumber is required to load PDFs.\n\n"
+                "Install with: pip install pdfplumber"
+            )
+            return
+
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select Invoice PDF",
+            str(Path.home()),
+            "PDF Files (*.pdf);;All Files (*.*)"
+        )
+
+        if not path:
+            return
+
+        try:
+            self.ai_new_pdf_path.setText(path)
+
+            # Extract text from PDF
+            text_parts = []
+            with pdfplumber.open(path) as pdf:
+                for page in pdf.pages[:5]:  # First 5 pages
+                    page_text = page.extract_text()
+                    if page_text:
+                        text_parts.append(page_text)
+
+            full_text = '\n\n'.join(text_parts)
+            self.ai_new_invoice_text.setPlainText(full_text)
+
+            # Auto-detect supplier name
+            self._ai_auto_detect_supplier(full_text)
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to extract PDF text:\n{e}")
+
+    def _ai_auto_detect_supplier(self, text: str):
+        """Try to auto-detect supplier name from invoice text."""
+        import re
+        lines = text.split('\n')
+
+        for line in lines[:10]:
+            line = line.strip()
+            if len(line) > 5 and len(line) < 60:
+                if re.match(r'^[\d\s\-/]+$', line):
+                    continue
+                if re.search(r'\d{4}', line):
+                    continue
+                if '@' in line or 'www.' in line.lower():
+                    continue
+
+                if not self.ai_new_supplier_name.text():
+                    self.ai_new_supplier_name.setText(line)
+                    template_name = re.sub(r'[^a-z0-9]+', '_', line.lower()).strip('_')
+                    self.ai_new_template_name.setText(template_name[:30])
+                break
+
+    def _ai_generate_new_template(self):
+        """Generate a new template from sample invoice using AI."""
+        import re
+
+        # Validate inputs
+        invoice_text = self.ai_new_invoice_text.toPlainText().strip()
+        if not invoice_text:
+            QMessageBox.warning(self, "Missing Input", "Please provide invoice text or load a PDF.")
+            return
+
+        template_name = self.ai_new_template_name.text().strip()
+        if not template_name:
+            QMessageBox.warning(self, "Missing Input", "Please enter a template name.")
+            return
+
+        if not re.match(r'^[a-z][a-z0-9_]*$', template_name):
+            QMessageBox.warning(
+                self, "Invalid Name",
+                "Template name must be lowercase, start with a letter, "
+                "and contain only letters, numbers, and underscores."
+            )
+            return
+
+        supplier_name = self.ai_new_supplier_name.text().strip()
+        if not supplier_name:
+            QMessageBox.warning(self, "Missing Input", "Please enter a supplier name.")
+            return
+
+        provider = self.ai_provider_combo.currentText()
+        api_key = self._ai_get_api_key(provider)
+
+        if provider in ["OpenAI", "Anthropic"] and not api_key:
+            QMessageBox.warning(
+                self, "Missing API Key",
+                f"No API key found for {provider}.\n"
+                "Configure it in Configuration > Billing tab."
+            )
+            return
+
+        # Show progress
+        self.ai_new_progress.setVisible(True)
+        self.ai_new_progress.setRange(0, 0)
+        self.ai_new_progress.setFormat("Generating template...")
+        self.ai_generate_btn.setVisible(False)
+        self.ai_cancel_gen_btn.setVisible(True)
+        self.ai_save_new_btn.setEnabled(False)
+
+        # Start generation thread
+        from ai_template_generator import AIGeneratorThread
+        self.ai_generator_thread = AIGeneratorThread(
+            provider=provider,
+            model=self.ai_model_combo.currentText(),
+            api_key=api_key,
+            invoice_text=invoice_text,
+            template_name=template_name,
+            supplier_name=supplier_name,
+            country=self.ai_new_country.text().strip() or "UNKNOWN",
+            client=self.ai_new_client.text().strip() or "Universal"
+        )
+        self.ai_generator_thread.finished.connect(self._ai_on_generation_complete)
+        self.ai_generator_thread.error.connect(self._ai_on_generation_error)
+        self.ai_generator_thread.progress.connect(self._ai_on_generation_progress)
+        self.ai_generator_thread.stream_update.connect(self._ai_on_stream_update)
+        self.ai_generator_thread.cancelled.connect(self._ai_on_generation_cancelled)
+        self.ai_generator_thread.start()
+
+    def _ai_on_generation_progress(self, message: str):
+        """Update progress message during generation."""
+        self.ai_new_progress.setFormat(message)
+
+    def _ai_on_stream_update(self, text: str):
+        """Update preview with streaming text."""
+        self.ai_new_code_preview.setPlainText(text)
+        scrollbar = self.ai_new_code_preview.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
+    def _ai_on_generation_complete(self, code: str):
+        """Handle successful template generation."""
+        self.ai_new_progress.setVisible(False)
+        self.ai_generate_btn.setVisible(True)
+        self.ai_cancel_gen_btn.setVisible(False)
+        self.ai_save_new_btn.setEnabled(True)
+
+        self.ai_new_code_preview.setPlainText(code)
+
+        QMessageBox.information(
+            self, "Generation Complete",
+            "Template generated successfully!\n\n"
+            "Review the code in the preview, then click 'Save Template' to save it."
+        )
+
+    def _ai_on_generation_error(self, error: str):
+        """Handle generation error."""
+        self.ai_new_progress.setVisible(False)
+        self.ai_generate_btn.setVisible(True)
+        self.ai_cancel_gen_btn.setVisible(False)
+
+        QMessageBox.critical(
+            self, "Generation Error",
+            f"Failed to generate template:\n\n{error}"
+        )
+
+    def _ai_cancel_generation(self):
+        """Cancel the ongoing template generation."""
+        if hasattr(self, 'ai_generator_thread') and self.ai_generator_thread.isRunning():
+            self.ai_new_progress.setFormat("Cancelling...")
+            self.ai_cancel_gen_btn.setEnabled(False)
+            self.ai_generator_thread.cancel()
+            if not self.ai_generator_thread.wait(2000):
+                self.ai_generator_thread.terminate()
+                self.ai_generator_thread.wait()
+            self._ai_on_generation_cancelled()
+
+    def _ai_on_generation_cancelled(self):
+        """Handle cancelled generation."""
+        self.ai_new_progress.setVisible(False)
+        self.ai_generate_btn.setVisible(True)
+        self.ai_cancel_gen_btn.setVisible(False)
+        self.ai_cancel_gen_btn.setEnabled(True)
+
+    def _ai_save_new_template(self):
+        """Save the newly generated template."""
+        code = self.ai_new_code_preview.toPlainText().strip()
+        if not code:
+            QMessageBox.warning(self, "No Code", "No template code to save.")
+            return
+
+        template_name = self.ai_new_template_name.text().strip()
+
+        # Determine templates directory
+        templates_dir = Path(__file__).parent / 'templates'
+        if not templates_dir.exists():
+            templates_dir.mkdir(parents=True, exist_ok=True)
+
+        file_path = templates_dir / f"{template_name}.py"
+
+        # Check if file already exists
+        if file_path.exists():
+            reply = QMessageBox.question(
+                self, "File Exists",
+                f"Template '{template_name}' already exists.\n\nOverwrite?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
+
+        # Save the file
+        try:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(code)
+
+            # Save AI metadata alongside the template
+            import json
+            from datetime import datetime
+            metadata_path = file_path.with_suffix('.ai_meta.json')
+            metadata = {
+                'provider': self.ai_provider_combo.currentText(),
+                'model': self.ai_model_combo.currentText(),
+                'template_name': template_name,
+                'supplier_name': self.ai_new_supplier_name.text().strip(),
+                'country': self.ai_new_country.text().strip(),
+                'client': self.ai_new_client.text().strip(),
+                'invoice_text': self.ai_new_invoice_text.toPlainText().strip()[:5000],
+                'created_at': datetime.now().isoformat(),
+                'conversation_history': []
+            }
+            with open(metadata_path, 'w', encoding='utf-8') as f:
+                json.dump(metadata, f, indent=2)
+
+            QMessageBox.information(
+                self, "Template Saved",
+                f"Template saved successfully!\n\n"
+                f"File: {file_path}"
+            )
+
+            # Refresh templates list and switch to edit mode
+            self.ocrmill_refresh_templates()
+            self._ai_switch_to_edit_mode()
+
+            # Select the new template in the list
+            for i in range(self.ocrmill_templates_list.count()):
+                item = self.ocrmill_templates_list.item(i)
+                if item and item.text() == template_name.replace('_', ' ').title():
+                    self.ocrmill_templates_list.setCurrentItem(item)
+                    self._on_template_selected(item)
+                    break
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to save template:\n{e}")
+
+    def _ai_validate_syntax(self):
+        """Validate Python syntax of the template code."""
+        colors = self._get_ai_theme_colors()
+        code = self.ai_code_edit.toPlainText()
+        if not code.strip():
+            self.ai_syntax_indicator.setText("")
+            return
+        try:
+            compile(code, '<template>', 'exec')
+            self.ai_syntax_indicator.setText("✓ Valid")
+            self.ai_syntax_indicator.setStyleSheet(f"color: {colors['success']}; font-size: 10px;")
+        except SyntaxError as e:
+            self.ai_syntax_indicator.setText(f"✗ Line {e.lineno}")
+            self.ai_syntax_indicator.setStyleSheet(f"color: {colors['danger']}; font-size: 10px;")
+
+    def _ai_test_template(self):
+        """Test the current template."""
+        code = self.ai_code_edit.toPlainText()
+        if not code.strip():
+            QMessageBox.warning(self, "No Code", "Please enter or load a template first.")
+            return
+
+        try:
+            # First check syntax
+            compile(code, '<template>', 'exec')
+
+            # Convert relative imports to absolute imports for testing
+            # Replace "from .base_template" with "from templates.base_template"
+            test_code = code.replace('from .base_template', 'from templates.base_template')
+            test_code = test_code.replace('from .', 'from templates.')
+
+            # Add templates directory to path if needed
+            import sys
+            templates_dir = str(Path(__file__).parent / 'templates')
+            if templates_dir not in sys.path:
+                sys.path.insert(0, templates_dir)
+
+            # Execute with proper context
+            exec(test_code, {'__name__': '__main__'})
+            QMessageBox.information(self, "Test Passed", "Template syntax is valid and imports work correctly!")
+        except SyntaxError as e:
+            QMessageBox.warning(self, "Syntax Error", f"Template syntax error:\n\nLine {e.lineno}: {e.msg}")
+        except Exception as e:
+            QMessageBox.warning(self, "Test Failed", f"Template error:\n\n{e}")
+
+    def _ai_format_code(self):
+        """Format the template code."""
+        if not self.ai_code_edit.toPlainText().strip():
+            return
+        success, message = self.ai_code_edit.format_code()
+        if not success:
+            QMessageBox.warning(self, "Format Error", message)
+
+    def _ai_get_api_key(self, provider: str) -> str:
+        """Get API key for the provider."""
+        try:
+            import sqlite3
+            db_path = Path(__file__).parent / "tariffmill.db"
+            conn = sqlite3.connect(str(db_path))
+            c = conn.cursor()
+            key_name = 'openai' if provider == "OpenAI" else 'anthropic'
+            c.execute("SELECT value FROM app_config WHERE key = ?", (f'api_key_{key_name}',))
+            row = c.fetchone()
+            conn.close()
+            if row and row[0]:
+                return row[0]
+        except:
+            pass
+        if provider == "OpenAI":
+            return os.environ.get('OPENAI_API_KEY', '')
+        elif provider == "Anthropic":
+            return os.environ.get('ANTHROPIC_API_KEY', '')
+        return ""
+
+    def _ai_format_message_html(self, role: str, content: str) -> str:
+        """Format a chat message as HTML with theme-aware colors."""
+        import html as html_module
+        import re
+
+        # Get theme colors
+        colors = self._get_ai_theme_colors()
+        code_bg = colors['bg_code']
+        code_text = colors['text']
+        code_accent = colors['accent']
+        inline_code_bg = colors['bg_secondary']
+        inline_code_text = colors['warning']
+
+        def replace_code_block(match):
+            code = html_module.escape(match.group(1))
+            return f'</p><pre style="background-color: {code_bg}; color: {code_text}; padding: 8px; border-radius: 4px; font-family: Consolas; font-size: 9px; margin: 5px 0; border-left: 2px solid {code_accent}; white-space: pre-wrap;">{code}</pre><p style="margin: 0;">'
+
+        formatted = re.sub(r'```(?:python)?\s*(.*?)\s*```', replace_code_block, content, flags=re.DOTALL)
+
+        parts = re.split(r'(<pre.*?</pre>)', formatted, flags=re.DOTALL)
+        escaped_parts = []
+        for part in parts:
+            if part.startswith('<pre'):
+                escaped_parts.append(part)
+            else:
+                escaped_parts.append(html_module.escape(part))
+        formatted = ''.join(escaped_parts)
+
+        formatted = re.sub(r'`([^`]+)`', rf'<code style="background-color: {inline_code_bg}; color: {inline_code_text}; padding: 1px 4px; border-radius: 2px;">\1</code>', formatted)
+
+        parts = re.split(r'(<pre.*?</pre>)', formatted, flags=re.DOTALL)
+        for i, part in enumerate(parts):
+            if not part.startswith('<pre'):
+                parts[i] = part.replace('\n', '<br>')
+        formatted = ''.join(parts)
+
+        # Theme-aware message bubble colors
+        user_bubble_bg = colors['user_bubble']
+        user_bubble_text = colors['user_bubble_text']
+        ai_bubble_bg = colors['ai_bubble']
+        ai_bubble_text = colors['ai_bubble_text']
+        ai_bubble_border = colors['border']
+        label_color = colors['text_muted']
+
+        if role == 'user':
+            return f'''<div style="margin: 8px 0; text-align: right;">
+                <div style="display: inline-block; max-width: 80%; text-align: left;">
+                    <div style="color: {label_color}; font-size: 8px;">You</div>
+                    <div style="background-color: {user_bubble_bg}; color: {user_bubble_text}; padding: 8px 10px; border-radius: 8px 8px 2px 8px;">
+                        <p style="margin: 0; font-size: 10px;">{formatted}</p>
+                    </div>
+                </div>
+            </div>'''
+        else:
+            return f'''<div style="margin: 8px 0;">
+                <div style="display: inline-block; max-width: 80%;">
+                    <div style="color: {label_color}; font-size: 8px;">🤖 AI</div>
+                    <div style="background-color: {ai_bubble_bg}; color: {ai_bubble_text}; padding: 8px 10px; border-radius: 8px 8px 8px 2px; border: 1px solid {ai_bubble_border};">
+                        <p style="margin: 0; font-size: 10px;">{formatted}</p>
+                    </div>
+                </div>
+            </div>'''
+
+    def _ai_display_chat_history(self, show_thinking: bool = False):
+        """Display chat history with optional thinking indicator."""
+        if not self.ai_conversation_history:
+            self._show_ai_welcome_message()
+            return
+
+        colors = self._get_ai_theme_colors()
+        html = '<div style="font-family: Segoe UI;">'
+        for msg in self.ai_conversation_history:
+            html += self._ai_format_message_html(msg.get('role', 'user'), msg.get('content', ''))
+
+        # Add thinking indicator if AI is processing
+        if show_thinking:
+            thinking_dots = getattr(self, '_ai_thinking_dots', 1)
+            dots = '.' * thinking_dots
+            html += f'''<div style="margin: 8px 0;">
+                <div style="display: inline-block; max-width: 80%;">
+                    <div style="color: {colors['text_muted']}; font-size: 8px;">🤖 AI</div>
+                    <div style="background-color: {colors['ai_bubble']}; color: {colors['text_muted']}; padding: 8px 10px; border-radius: 8px 8px 8px 2px; border: 1px solid {colors['border']};">
+                        <p style="margin: 0; font-size: 10px; font-style: italic;">Thinking{dots}</p>
+                    </div>
+                </div>
+            </div>'''
+
+        html += '</div>'
+        self.ai_chat_display.setHtml(html)
+
+    def _ai_start_thinking_animation(self):
+        """Start the thinking dots animation."""
+        self._ai_thinking_dots = 1
+        if not hasattr(self, '_ai_thinking_timer'):
+            self._ai_thinking_timer = QTimer()
+            self._ai_thinking_timer.timeout.connect(self._ai_update_thinking_animation)
+        self._ai_thinking_timer.start(400)  # Update every 400ms
+        self._ai_display_chat_history(show_thinking=True)
+
+    def _ai_update_thinking_animation(self):
+        """Update the thinking dots animation."""
+        self._ai_thinking_dots = (self._ai_thinking_dots % 3) + 1
+        self._ai_display_chat_history(show_thinking=True)
+        # Scroll to bottom
+        sb = self.ai_chat_display.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def _ai_stop_thinking_animation(self):
+        """Stop the thinking dots animation."""
+        if hasattr(self, '_ai_thinking_timer'):
+            self._ai_thinking_timer.stop()
+        self._ai_display_chat_history(show_thinking=False)
+
+    def _ai_send_message(self):
+        """Send a message to the AI."""
+        message = self.ai_message_input.toPlainText().strip()
+        if not message:
+            return
+
+        provider = self.ai_provider_combo.currentText()
+        api_key = self._ai_get_api_key(provider)
+
+        if provider in ["OpenAI", "Anthropic"] and not api_key:
+            QMessageBox.warning(self, "Missing API Key",
+                              f"No API key found for {provider}.\n"
+                              "Configure it in Configuration > Billing tab.")
+            return
+
+        # Check for PDF file paths in the message and extract text automatically
+        invoice_text = ""
+        enhanced_message = message
+        pdf_paths = self._ai_extract_pdf_paths(message)
+        if pdf_paths:
+            extracted_texts = []
+            for pdf_path in pdf_paths:
+                text = self._ai_extract_pdf_text(pdf_path)
+                if text:
+                    extracted_texts.append(f"--- Content from {Path(pdf_path).name} ---\n{text}")
+            if extracted_texts:
+                invoice_text = "\n\n".join(extracted_texts)
+                enhanced_message = f"{message}\n\n[PDF text extracted automatically - {len(extracted_texts)} file(s)]"
+
+        # Add to history and display (show enhanced message to user)
+        self.ai_conversation_history.append({"role": "user", "content": enhanced_message})
+        self._ai_display_chat_history()
+        self.ai_message_input.clear()
+
+        # Scroll to bottom
+        sb = self.ai_chat_display.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+        # Disable send, enable cancel, start thinking animation
+        self.ai_send_btn.setEnabled(False)
+        self.ai_cancel_btn.setEnabled(True)
+        self._ai_start_thinking_animation()
+
+        # Build the actual message to send to AI (with full PDF content)
+        ai_message = message
+        if invoice_text:
+            ai_message = f"{message}\n\nHere is the extracted text from the PDF file(s):\n\n{invoice_text}"
+
+        # Start AI request
+        from ai_template_generator import AITemplateChatThread
+        self.ai_chat_thread = AITemplateChatThread(
+            provider=provider,
+            model=self.ai_model_combo.currentText(),
+            api_key=api_key,
+            current_code=self.ai_code_edit.toPlainText(),
+            user_message=ai_message,
+            conversation_history=self.ai_conversation_history[:-1],
+            invoice_text=invoice_text
+        )
+        self.ai_chat_thread.finished.connect(self._ai_on_response)
+        self.ai_chat_thread.error.connect(self._ai_on_error)
+        self.ai_chat_thread.start()
+
+    def _ai_extract_pdf_paths(self, message: str) -> list:
+        """Extract PDF file paths from a message."""
+        import re
+        paths = []
+
+        # Pattern to match Windows paths (with or without quotes)
+        # Matches: C:\path\to\file.pdf, "C:\path\to\file.pdf", 'C:\path\to\file.pdf'
+        patterns = [
+            r'["\']([A-Za-z]:\\[^"\']+\.pdf)["\']',  # Quoted paths
+            r'([A-Za-z]:\\(?:[^\s<>:"|?*]+\\)*[^\s<>:"|?*]+\.pdf)',  # Unquoted paths
+        ]
+
+        for pattern in patterns:
+            matches = re.findall(pattern, message, re.IGNORECASE)
+            for match in matches:
+                path = match.strip('"\'')
+                if path not in paths and Path(path).exists():
+                    paths.append(path)
+
+        return paths
+
+    def _ai_extract_pdf_text(self, pdf_path: str) -> str:
+        """Extract text from a PDF file."""
+        try:
+            import pdfplumber
+            text_parts = []
+            with pdfplumber.open(pdf_path) as pdf:
+                for i, page in enumerate(pdf.pages[:10]):  # Limit to first 10 pages
+                    page_text = page.extract_text()
+                    if page_text:
+                        text_parts.append(f"[Page {i+1}]\n{page_text}")
+            return "\n\n".join(text_parts)
+        except ImportError:
+            self.ocrmill_log("pdfplumber not installed - cannot extract PDF text")
+            return ""
+        except Exception as e:
+            self.ocrmill_log(f"Error extracting PDF text: {e}")
+            return ""
+
+    def _ai_cancel_request(self):
+        """Cancel the current AI request."""
+        self._ai_stop_thinking_animation()
+        if self.ai_chat_thread:
+            self.ai_chat_thread.cancel()
+            self.ai_chat_thread = None
+        self.ai_send_btn.setEnabled(True)
+        self.ai_cancel_btn.setEnabled(False)
+
+    def _ai_on_response(self, response: str):
+        """Handle AI response."""
+        self._ai_stop_thinking_animation()
+        self.ai_send_btn.setEnabled(True)
+        self.ai_cancel_btn.setEnabled(False)
+
+        self.ai_conversation_history.append({"role": "assistant", "content": response})
+        self._ai_display_chat_history()
+
+        sb = self.ai_chat_display.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+        # Check for code block and auto-apply like VS Code
+        import re
+        code_match = re.search(r'```python\s*(.*?)\s*```', response, re.DOTALL)
+        if code_match:
+            new_code = code_match.group(1).strip()
+            # Auto-apply the code to the editor (VS Code style)
+            self.ai_code_edit.setPlainText(new_code)
+            self.ai_pending_code = None
+            self.ai_apply_btn.setEnabled(False)
+
+    def _ai_on_error(self, error: str):
+        """Handle AI error."""
+        self._ai_stop_thinking_animation()
+        self.ai_send_btn.setEnabled(True)
+        self.ai_cancel_btn.setEnabled(False)
+        QMessageBox.warning(self, "AI Error", f"Error: {error}")
+
+    def _ai_apply_changes(self):
+        """Apply AI-suggested code changes."""
+        if self.ai_pending_code:
+            self.ai_code_edit.setPlainText(self.ai_pending_code)
+            self.ai_apply_btn.setEnabled(False)
+            self.ai_pending_code = None
+
+    def _ai_save_template(self):
+        """Save the current template."""
+        if not self.ai_current_template_path:
+            QMessageBox.warning(self, "No Template", "No template selected. Create a new one first.")
+            return
+
+        code = self.ai_code_edit.toPlainText()
+        if not code.strip():
+            QMessageBox.warning(self, "Empty Code", "Cannot save empty template.")
+            return
+
+        # Validate syntax
+        try:
+            compile(code, '<template>', 'exec')
+        except SyntaxError as e:
+            reply = QMessageBox.question(
+                self, "Syntax Error",
+                f"Template has syntax errors:\nLine {e.lineno}: {e.msg}\n\nSave anyway?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
+
+        try:
+            import json
+            # Save code
+            with open(self.ai_current_template_path, 'w', encoding='utf-8') as f:
+                f.write(code)
+
+            # Save metadata
+            metadata = {
+                'provider': self.ai_provider_combo.currentText(),
+                'model': self.ai_model_combo.currentText(),
+                'conversation_history': self.ai_conversation_history,
+                'last_modified': datetime.now().isoformat()
+            }
+            metadata_path = self.ai_current_template_path.with_suffix('.ai_meta.json')
+            with open(metadata_path, 'w', encoding='utf-8') as f:
+                json.dump(metadata, f, indent=2)
+
+            QMessageBox.information(self, "Saved", "Template saved successfully!")
+            self.ocrmill_refresh_templates()
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to save: {e}")
 
     def ocrmill_browse_input_folder(self):
         """Browse for input folder."""
@@ -11241,7 +12933,7 @@ EXPORT DETAILS
                 self.ocrmill_send_to_tariffmill()
 
     def ocrmill_refresh_templates(self):
-        """Refresh the templates table by re-scanning the templates directory."""
+        """Refresh the templates list by re-scanning the templates directory."""
         import re as regex_module
 
         # Re-discover templates from disk
@@ -11254,8 +12946,8 @@ EXPORT DETAILS
         # Reload processor's template list
         self.ocrmill_processor.reload_templates()
 
-        # Clear table and data
-        self.ocrmill_templates_table.setRowCount(0)
+        # Clear list and data
+        self.ocrmill_templates_list.clear()
         self.ocrmill_templates_data = []
 
         # Templates directory
@@ -11273,14 +12965,15 @@ EXPORT DETAILS
             template_info = self._extract_template_info_from_file(file_path)
             if template_info:
                 self.ocrmill_templates_data.append(template_info)
-                row = self.ocrmill_templates_table.rowCount()
-                self.ocrmill_templates_table.insertRow(row)
 
-                self.ocrmill_templates_table.setItem(row, 0, QTableWidgetItem(template_info['name']))
-                self.ocrmill_templates_table.setItem(row, 1, QTableWidgetItem(template_info['supplier']))
-                self.ocrmill_templates_table.setItem(row, 2, QTableWidgetItem(template_info['client']))
-                self.ocrmill_templates_table.setItem(row, 3, QTableWidgetItem(template_info['country']))
-                self.ocrmill_templates_table.setItem(row, 4, QTableWidgetItem(template_info['ai_agent']))
+                # Create list item with template name and AI indicator
+                display_text = template_info['name']
+                if template_info.get('ai_agent'):
+                    display_text = f"🤖 {display_text}"
+
+                item = QListWidgetItem(display_text)
+                item.setToolTip(f"Supplier: {template_info['supplier']}\nClient: {template_info['client']}\nCountry: {template_info['country']}")
+                self.ocrmill_templates_list.addItem(item)
 
     def _extract_template_info_from_file(self, file_path: Path) -> dict:
         """Extract template metadata from a template file."""
@@ -11340,22 +13033,6 @@ EXPORT DETAILS
 
         except Exception:
             return None
-
-    def ocrmill_open_smart_extractor(self):
-        """Open the Smart Extractor dialog for extraction and template building."""
-        try:
-            from smart_extractor_dialog import SmartExtractorDialog
-            dialog = SmartExtractorDialog(self)
-            dialog.template_created.connect(self.ocrmill_on_template_created)
-            dialog.exec_()
-        except ImportError as e:
-            QMessageBox.warning(
-                self, "Import Error",
-                f"Failed to load Smart Extractor: {e}\n\n"
-                "Make sure smart_extractor.py and smart_extractor_dialog.py exist."
-            )
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to open Smart Extractor: {e}")
 
     def ocrmill_open_ai_generator(self):
         """Open the AI Template Generator dialog."""
@@ -11456,7 +13133,7 @@ EXPORT DETAILS
             QMessageBox.critical(self, "Error", f"Failed to create template: {e}")
 
     def ocrmill_edit_template(self):
-        """Edit the selected template file"""
+        """Edit the selected template file using AI Template Editor"""
         current_row = self.ocrmill_templates_table.currentRow()
         if current_row < 0:
             QMessageBox.information(self, "No Selection", "Please select a template to edit.")
@@ -11473,28 +13150,39 @@ EXPORT DETAILS
         logger.debug(f"Edit template - row: {current_row}, path: {template_path}")
 
         if template_path and template_path.exists():
-            # Check if this is an AI-generated template
-            ai_metadata_path = template_path.with_suffix('.ai_meta.json')
-            if ai_metadata_path.exists():
-                # Open AI chat dialog for AI templates
-                self.ocrmill_open_ai_template_editor(template_path, ai_metadata_path)
-            else:
-                # Open regular file editor for non-AI templates
-                self.ocrmill_open_template_file(template_path)
+            # Always open AI Template Editor for all templates
+            self.ocrmill_open_ai_template_editor(template_path, template_info)
         else:
             QMessageBox.warning(self, "File Not Found", f"Template file not found: {template_path}")
 
-    def ocrmill_open_ai_template_editor(self, template_path, metadata_path):
-        """Open the AI chat dialog for editing AI-generated templates."""
+    def ocrmill_open_ai_template_editor(self, template_path, template_info):
+        """Open the AI Template Editor for editing templates."""
         try:
             import json
-            from ai_template_generator import AITemplateChatDialog
+            from ai_template_generator import AITemplateEditorDialog
 
-            # Load metadata
-            with open(metadata_path, 'r', encoding='utf-8') as f:
-                metadata = json.load(f)
+            template_path = Path(template_path)
 
-            dialog = AITemplateChatDialog(str(template_path), metadata, self)
+            # Check if AI metadata exists
+            ai_metadata_path = template_path.with_suffix('.ai_meta.json')
+            if ai_metadata_path.exists():
+                # Load existing AI metadata
+                with open(ai_metadata_path, 'r', encoding='utf-8') as f:
+                    metadata = json.load(f)
+            else:
+                # Create metadata from template_info for non-AI templates
+                metadata = {
+                    'provider': '',
+                    'model': '',
+                    'invoice_text': '',
+                    'conversation_history': [],
+                    'name': template_info.get('name', template_path.stem),
+                    'supplier': template_info.get('supplier', ''),
+                    'client': template_info.get('client', ''),
+                    'country': template_info.get('country', '')
+                }
+
+            dialog = AITemplateEditorDialog(str(template_path), metadata, self)
             dialog.template_modified.connect(lambda: self.ocrmill_refresh_templates())
             dialog.exec_()
 
@@ -11548,7 +13236,7 @@ EXPORT DETAILS
 
     def ocrmill_delete_template(self):
         """Delete the selected template file"""
-        current_row = self.ocrmill_templates_table.currentRow()
+        current_row = self.ocrmill_templates_list.currentRow()
         if current_row < 0:
             QMessageBox.information(self, "No Selection", "Please select a template to delete.")
             return
