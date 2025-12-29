@@ -2,7 +2,7 @@
 ; Build with: iscc installer.iss
 
 #define MyAppName "TariffMill"
-#define MyAppVersion "0.96.9"
+#define MyAppVersion "0.96.10"
 #define MyAppPublisher "TariffMill"
 #define MyAppExeName "TariffMill.exe"
 
@@ -22,7 +22,7 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 
-; Privileges - no admin needed (Python 3.12 doesn't require VC++ install)
+; Privileges - no admin needed
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 
@@ -58,24 +58,3 @@ Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChang
 ; Delete old shortcuts to force recreation with new icons
 Type: files; Name: "{group}\{#MyAppName}.lnk"
 Type: files; Name: "{autodesktop}\{#MyAppName}.lnk"
-; Delete icon cache files to force refresh
-Type: files; Name: "{localappdata}\Microsoft\Windows\Explorer\iconcache*.db"
-Type: files; Name: "{localappdata}\IconCache.db"
-
-[Code]
-procedure RefreshIconCache;
-var
-  ResultCode: Integer;
-begin
-  // Notify Windows shell that icons have changed
-  Exec('cmd.exe', '/c taskkill /f /im explorer.exe & start explorer.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-end;
-
-procedure CurStepChanged(CurStep: TSetupStep);
-begin
-  if CurStep = ssPostInstall then
-  begin
-    // Refresh icon cache after installation
-    RefreshIconCache;
-  end;
-end;

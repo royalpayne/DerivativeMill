@@ -33,6 +33,106 @@
 #   - Real-time data validation and status feedback
 # ==============================================================================
 
+# ==============================================================================
+# EARLY SPLASH SCREEN - Show immediately before heavy imports
+# ==============================================================================
+# This section creates and displays a splash screen using only lightweight imports
+# to provide immediate visual feedback to the user while heavy modules load.
+
+import sys
+import os
+
+# Hide console window on Windows immediately at startup
+if sys.platform == 'win32':
+    import ctypes
+    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    user32 = ctypes.WinDLL('user32', use_last_error=True)
+    hwnd = kernel32.GetConsoleWindow()
+    if hwnd:
+        user32.ShowWindow(hwnd, 0)  # SW_HIDE = 0
+
+# Early splash screen globals
+_early_splash = None
+_early_app = None
+_splash_message_label = None
+
+def show_early_splash():
+    """Show a simple splash screen immediately before heavy imports."""
+    global _early_splash, _early_app, _splash_message_label
+
+    # Only show splash when running as main program
+    if __name__ != "__main__":
+        return None
+
+    # Quick import of just PyQt5 basics for splash
+    from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtGui import QFont
+
+    _early_app = QApplication(sys.argv)
+
+    # Create simple splash window
+    _early_splash = QWidget()
+    _early_splash.setFixedSize(400, 200)
+    _early_splash.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+    _early_splash.setStyleSheet("""
+        QWidget {
+            background-color: #333333;
+            border: 3px solid #0078D4;
+            border-radius: 15px;
+        }
+    """)
+
+    layout = QVBoxLayout(_early_splash)
+    layout.setContentsMargins(30, 30, 30, 30)
+    layout.setSpacing(20)
+
+    # Title
+    title = QLabel("TariffMill")
+    title.setStyleSheet("color: #0078D4; font-size: 28pt; font-weight: bold; border: none;")
+    title.setAlignment(Qt.AlignCenter)
+    layout.addWidget(title)
+
+    # Loading message
+    _splash_message_label = QLabel("Starting...")
+    _splash_message_label.setStyleSheet("color: #f3f3f3; font-size: 12pt; border: none;")
+    _splash_message_label.setAlignment(Qt.AlignCenter)
+    layout.addWidget(_splash_message_label)
+
+    # Center on screen and show
+    _early_splash.show()
+    screen = _early_app.primaryScreen().geometry()
+    _early_splash.move(
+        (screen.width() - _early_splash.width()) // 2,
+        (screen.height() - _early_splash.height()) // 2
+    )
+    _early_app.processEvents()
+
+    return _early_app
+
+def update_early_splash(message):
+    """Update the early splash screen message."""
+    global _splash_message_label, _early_app
+    if _splash_message_label and _early_app:
+        _splash_message_label.setText(message)
+        _early_app.processEvents()
+
+def close_early_splash():
+    """Close the early splash screen."""
+    global _early_splash
+    if _early_splash:
+        _early_splash.close()
+        _early_splash = None
+
+# Show early splash immediately when run as main program
+if __name__ == "__main__":
+    show_early_splash()
+    update_early_splash("Loading modules...")
+
+# ==============================================================================
+# Application Constants
+# ==============================================================================
+
 APP_NAME = "TariffMill"
 DB_NAME = "tariffmill.db"
 
@@ -55,19 +155,11 @@ except ImportError:
         # Fallback if version.py is not available
         VERSION = "v0.93.4"
 
-
-import sys
-import os
-
-# Hide console window on Windows immediately at startup
-if sys.platform == 'win32':
-    import ctypes
-    # Get console window handle and hide it
-    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
-    user32 = ctypes.WinDLL('user32', use_last_error=True)
-    hwnd = kernel32.GetConsoleWindow()
-    if hwnd:
-        user32.ShowWindow(hwnd, 0)  # SW_HIDE = 0
+# ==============================================================================
+# Heavy Imports - These take time to load
+# ==============================================================================
+if __name__ == "__main__":
+    update_early_splash("Loading standard libraries...")
 
 import json
 import time
@@ -84,12 +176,24 @@ from xml.dom import minidom
 from pathlib import Path
 from datetime import datetime, timedelta
 from threading import Thread
+
+if __name__ == "__main__":
+    update_early_splash("Loading pandas...")
+
 import pandas as pd
 import sqlite3
+
+if __name__ == "__main__":
+    update_early_splash("Loading PyQt5 components...")
+
 from PyQt5.QtWidgets import *
 from PyQt5.QtCore import Qt, QMimeData, pyqtSignal, QTimer, QSize, QEventLoop, QRect, QSettings, QThread, QThreadPool, QRunnable, QObject
 from PyQt5.QtGui import QColor, QFont, QDrag, QKeySequence, QIcon, QPixmap, QPainter, QDoubleValidator, QCursor, QPen, QTextCursor, QTextCharFormat, QSyntaxHighlighter, QTextFormat
 from PyQt5.QtSvg import QSvgRenderer
+
+if __name__ == "__main__":
+    update_early_splash("Loading Excel support...")
+
 from openpyxl.styles import Font as ExcelFont, Alignment
 import tempfile
 
@@ -18416,7 +18520,12 @@ if __name__ == "__main__":
         save_installed_path(Path(sys.executable))
 
     import traceback
-    app = QApplication(sys.argv)
+    # Reuse the early splash QApplication if it exists, otherwise create new one
+    app = _early_app if _early_app is not None else QApplication(sys.argv)
+
+    # Close the early splash screen now that we're transitioning to detailed splash
+    close_early_splash()
+
     try:
         # Theme will be set by apply_saved_theme() during initialization
         icon_path = TEMP_RESOURCES_DIR / "tariffmill_icon_hybrid_2.svg"
