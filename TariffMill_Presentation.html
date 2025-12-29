@@ -1,0 +1,1020 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TariffMill - Customs Documentation Processing System</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            min-height: 100vh;
+            color: #ffffff;
+            overflow-x: hidden;
+        }
+
+        /* Slide Container */
+        .presentation {
+            width: 100%;
+            height: 100vh;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .slide {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 60px;
+            opacity: 0;
+            transform: translateX(100%);
+            transition: all 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .slide.active {
+            opacity: 1;
+            transform: translateX(0);
+        }
+
+        .slide.prev {
+            transform: translateX(-100%);
+        }
+
+        /* Navigation */
+        .nav-container {
+            position: fixed;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 15px;
+            z-index: 1000;
+        }
+
+        .nav-btn {
+            background: rgba(255, 255, 255, 0.1);
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            color: white;
+            padding: 12px 30px;
+            border-radius: 30px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+        }
+
+        .nav-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+            border-color: #4a9eff;
+            transform: scale(1.05);
+        }
+
+        .nav-btn:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+        }
+
+        .slide-indicator {
+            position: fixed;
+            bottom: 90px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 10px;
+            z-index: 1000;
+        }
+
+        .dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.3);
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .dot.active {
+            background: #4a9eff;
+            transform: scale(1.3);
+        }
+
+        /* Title Slide */
+        .title-slide h1 {
+            font-size: 5rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #4a9eff, #a855f7, #ec4899);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            animation: titlePulse 3s ease-in-out infinite;
+            text-align: center;
+        }
+
+        @keyframes titlePulse {
+            0%, 100% { filter: brightness(1); }
+            50% { filter: brightness(1.2); }
+        }
+
+        .title-slide .subtitle {
+            font-size: 1.8rem;
+            color: #a0aec0;
+            margin-top: 20px;
+            text-align: center;
+            animation: fadeInUp 1s ease 0.5s both;
+        }
+
+        .title-slide .tagline {
+            font-size: 1.2rem;
+            color: #718096;
+            margin-top: 40px;
+            text-align: center;
+            max-width: 800px;
+            line-height: 1.8;
+            animation: fadeInUp 1s ease 1s both;
+        }
+
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* Content Slides */
+        .slide h2 {
+            font-size: 3rem;
+            margin-bottom: 40px;
+            text-align: center;
+            background: linear-gradient(135deg, #4a9eff, #a855f7);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .content-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 30px;
+            max-width: 1400px;
+            width: 100%;
+        }
+
+        .card {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            padding: 30px;
+            backdrop-filter: blur(10px);
+            transition: all 0.4s ease;
+            opacity: 0;
+            transform: translateY(30px);
+        }
+
+        .slide.active .card {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .slide.active .card:nth-child(1) { transition-delay: 0.1s; }
+        .slide.active .card:nth-child(2) { transition-delay: 0.2s; }
+        .slide.active .card:nth-child(3) { transition-delay: 0.3s; }
+        .slide.active .card:nth-child(4) { transition-delay: 0.4s; }
+        .slide.active .card:nth-child(5) { transition-delay: 0.5s; }
+        .slide.active .card:nth-child(6) { transition-delay: 0.6s; }
+
+        .card:hover {
+            transform: translateY(-5px) scale(1.02);
+            border-color: #4a9eff;
+            box-shadow: 0 20px 40px rgba(74, 158, 255, 0.2);
+        }
+
+        .card-icon {
+            font-size: 3rem;
+            margin-bottom: 20px;
+        }
+
+        .card h3 {
+            font-size: 1.5rem;
+            margin-bottom: 15px;
+            color: #e2e8f0;
+        }
+
+        .card p {
+            color: #a0aec0;
+            line-height: 1.7;
+            font-size: 1rem;
+        }
+
+        .card ul {
+            list-style: none;
+            margin-top: 15px;
+        }
+
+        .card li {
+            color: #a0aec0;
+            padding: 8px 0;
+            padding-left: 25px;
+            position: relative;
+            font-size: 0.95rem;
+        }
+
+        .card li::before {
+            content: "▸";
+            position: absolute;
+            left: 0;
+            color: #4a9eff;
+        }
+
+        /* Workflow Slide */
+        .workflow {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
+            flex-wrap: wrap;
+            max-width: 1200px;
+        }
+
+        .workflow-step {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 25px;
+            text-align: center;
+            min-width: 200px;
+            opacity: 0;
+            transform: scale(0.8);
+            transition: all 0.5s ease;
+        }
+
+        .slide.active .workflow-step {
+            opacity: 1;
+            transform: scale(1);
+        }
+
+        .slide.active .workflow-step:nth-child(1) { transition-delay: 0.1s; }
+        .slide.active .workflow-step:nth-child(2) { transition-delay: 0.3s; }
+        .slide.active .workflow-step:nth-child(3) { transition-delay: 0.5s; }
+        .slide.active .workflow-step:nth-child(4) { transition-delay: 0.7s; }
+        .slide.active .workflow-step:nth-child(5) { transition-delay: 0.9s; }
+
+        .workflow-arrow {
+            font-size: 2rem;
+            color: #4a9eff;
+            opacity: 0;
+            transition: opacity 0.5s ease;
+        }
+
+        .slide.active .workflow-arrow {
+            opacity: 1;
+            animation: arrowPulse 1.5s ease-in-out infinite;
+        }
+
+        @keyframes arrowPulse {
+            0%, 100% { transform: translateX(0); }
+            50% { transform: translateX(10px); }
+        }
+
+        .workflow-step .step-number {
+            background: linear-gradient(135deg, #4a9eff, #a855f7);
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 15px;
+            font-weight: bold;
+            font-size: 1.2rem;
+        }
+
+        .workflow-step h4 {
+            color: #e2e8f0;
+            margin-bottom: 10px;
+        }
+
+        .workflow-step p {
+            color: #718096;
+            font-size: 0.9rem;
+        }
+
+        /* Compliance Slide */
+        .compliance-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 25px;
+            max-width: 1200px;
+        }
+
+        .compliance-card {
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 15px;
+            padding: 25px;
+            text-align: center;
+            border: 2px solid transparent;
+            transition: all 0.4s ease;
+            opacity: 0;
+            transform: rotateY(90deg);
+        }
+
+        .slide.active .compliance-card {
+            opacity: 1;
+            transform: rotateY(0);
+        }
+
+        .slide.active .compliance-card:nth-child(1) { transition-delay: 0.1s; }
+        .slide.active .compliance-card:nth-child(2) { transition-delay: 0.2s; }
+        .slide.active .compliance-card:nth-child(3) { transition-delay: 0.3s; }
+        .slide.active .compliance-card:nth-child(4) { transition-delay: 0.4s; }
+        .slide.active .compliance-card:nth-child(5) { transition-delay: 0.5s; }
+        .slide.active .compliance-card:nth-child(6) { transition-delay: 0.6s; }
+
+        .compliance-card.steel { border-color: #6b7280; }
+        .compliance-card.aluminum { border-color: #6495ed; }
+        .compliance-card.copper { border-color: #b87333; }
+        .compliance-card.wood { border-color: #8b4513; }
+        .compliance-card.auto { border-color: #2f4f4f; }
+        .compliance-card.section301 { border-color: #ff6b35; }
+
+        .compliance-card h3 {
+            font-size: 1.3rem;
+            margin-bottom: 10px;
+        }
+
+        .compliance-card .material-icon {
+            font-size: 2.5rem;
+            margin-bottom: 15px;
+        }
+
+        /* Data Flow Animation */
+        .data-flow {
+            position: relative;
+            width: 100%;
+            max-width: 1000px;
+            height: 400px;
+        }
+
+        .flow-node {
+            position: absolute;
+            background: rgba(255, 255, 255, 0.05);
+            border: 2px solid #4a9eff;
+            border-radius: 15px;
+            padding: 20px 30px;
+            text-align: center;
+            opacity: 0;
+            transition: all 0.6s ease;
+        }
+
+        .slide.active .flow-node {
+            opacity: 1;
+        }
+
+        .flow-node.source { top: 50%; left: 0; transform: translateY(-50%); }
+        .flow-node.process { top: 50%; left: 50%; transform: translate(-50%, -50%); }
+        .flow-node.output { top: 50%; right: 0; transform: translateY(-50%); }
+
+        .flow-line {
+            position: absolute;
+            height: 3px;
+            background: linear-gradient(90deg, #4a9eff, #a855f7);
+            top: 50%;
+            transform-origin: left center;
+            animation: flowPulse 2s ease-in-out infinite;
+        }
+
+        @keyframes flowPulse {
+            0%, 100% { opacity: 0.5; }
+            50% { opacity: 1; }
+        }
+
+        /* Feature List */
+        .feature-list {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            max-width: 900px;
+        }
+
+        .feature-item {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            background: rgba(255, 255, 255, 0.03);
+            padding: 20px 30px;
+            border-radius: 15px;
+            border-left: 4px solid #4a9eff;
+            opacity: 0;
+            transform: translateX(-50px);
+            transition: all 0.5s ease;
+        }
+
+        .slide.active .feature-item {
+            opacity: 1;
+            transform: translateX(0);
+        }
+
+        .slide.active .feature-item:nth-child(1) { transition-delay: 0.1s; }
+        .slide.active .feature-item:nth-child(2) { transition-delay: 0.2s; }
+        .slide.active .feature-item:nth-child(3) { transition-delay: 0.3s; }
+        .slide.active .feature-item:nth-child(4) { transition-delay: 0.4s; }
+        .slide.active .feature-item:nth-child(5) { transition-delay: 0.5s; }
+
+        .feature-icon {
+            font-size: 2rem;
+            min-width: 50px;
+            text-align: center;
+        }
+
+        .feature-text h4 {
+            color: #e2e8f0;
+            margin-bottom: 5px;
+        }
+
+        .feature-text p {
+            color: #718096;
+            font-size: 0.95rem;
+        }
+
+        /* Privacy Slide */
+        .privacy-box {
+            background: linear-gradient(135deg, rgba(34, 197, 94, 0.1), rgba(34, 197, 94, 0.05));
+            border: 2px solid rgba(34, 197, 94, 0.3);
+            border-radius: 25px;
+            padding: 50px;
+            max-width: 900px;
+            text-align: center;
+            opacity: 0;
+            transform: scale(0.9);
+            transition: all 0.6s ease;
+        }
+
+        .slide.active .privacy-box {
+            opacity: 1;
+            transform: scale(1);
+        }
+
+        .privacy-box .shield-icon {
+            font-size: 5rem;
+            margin-bottom: 30px;
+            animation: shieldPulse 2s ease-in-out infinite;
+        }
+
+        @keyframes shieldPulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+        }
+
+        .privacy-box h3 {
+            font-size: 2rem;
+            color: #22c55e;
+            margin-bottom: 20px;
+        }
+
+        .privacy-box p {
+            color: #a0aec0;
+            font-size: 1.2rem;
+            line-height: 1.8;
+        }
+
+        /* Closing Slide */
+        .closing-slide {
+            text-align: center;
+        }
+
+        .closing-slide h2 {
+            font-size: 3.5rem;
+            margin-bottom: 30px;
+        }
+
+        .closing-slide .benefits {
+            display: flex;
+            gap: 40px;
+            margin-top: 40px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        .benefit {
+            text-align: center;
+            opacity: 0;
+            transform: translateY(30px);
+            transition: all 0.5s ease;
+        }
+
+        .slide.active .benefit {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .slide.active .benefit:nth-child(1) { transition-delay: 0.2s; }
+        .slide.active .benefit:nth-child(2) { transition-delay: 0.4s; }
+        .slide.active .benefit:nth-child(3) { transition-delay: 0.6s; }
+        .slide.active .benefit:nth-child(4) { transition-delay: 0.8s; }
+
+        .benefit-icon {
+            font-size: 3rem;
+            margin-bottom: 15px;
+        }
+
+        .benefit h4 {
+            color: #e2e8f0;
+            font-size: 1.2rem;
+        }
+
+        /* Keyboard hint */
+        .keyboard-hint {
+            position: fixed;
+            bottom: 130px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #4a5568;
+            font-size: 0.85rem;
+            z-index: 1000;
+        }
+
+        .keyboard-hint kbd {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 3px 8px;
+            border-radius: 5px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            margin: 0 3px;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .slide {
+                padding: 30px;
+            }
+
+            .title-slide h1 {
+                font-size: 3rem;
+            }
+
+            .slide h2 {
+                font-size: 2rem;
+            }
+
+            .content-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .compliance-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .workflow {
+                flex-direction: column;
+            }
+
+            .workflow-arrow {
+                transform: rotate(90deg);
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="presentation">
+        <!-- Slide 1: Title -->
+        <div class="slide title-slide active" data-slide="0">
+            <h1>TariffMill</h1>
+            <p class="subtitle">Customs Documentation Processing System</p>
+            <p class="tagline">
+                Empowering customs entry writers with intelligent invoice processing,
+                Section 232 compliance automation, and seamless integration with
+                existing customs entry and transportation systems.
+            </p>
+        </div>
+
+        <!-- Slide 2: The Challenge -->
+        <div class="slide" data-slide="1">
+            <h2>The Challenge</h2>
+            <div class="content-grid">
+                <div class="card">
+                    <div class="card-icon">📧</div>
+                    <h3>Scattered Documentation</h3>
+                    <p>Commercial invoices arrive via email attachments, documentation portals, and various delivery systems in multiple formats.</p>
+                </div>
+                <div class="card">
+                    <div class="card-icon">📋</div>
+                    <h3>Manual Data Entry</h3>
+                    <p>Entry writers spend countless hours manually transcribing invoice data into customs processing systems.</p>
+                </div>
+                <div class="card">
+                    <div class="card-icon">⚖️</div>
+                    <h3>Complex Compliance</h3>
+                    <p>Section 232 regulations and Trump Tariff Executive Orders require precise material-based value prorating.</p>
+                </div>
+                <div class="card">
+                    <div class="card-icon">🔍</div>
+                    <h3>Exclusion Tracking</h3>
+                    <p>CBP Section 301 exclusions must be identified and applied based on client-specific tariff exemptions.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Slide 3: The Solution -->
+        <div class="slide" data-slide="2">
+            <h2>The TariffMill Solution</h2>
+            <div class="feature-list">
+                <div class="feature-item">
+                    <div class="feature-icon">📄</div>
+                    <div class="feature-text">
+                        <h4>Intelligent Invoice Digitization</h4>
+                        <p>Transform PDF invoices into structured, import-ready data using AI-powered OCR and customizable templates</p>
+                    </div>
+                </div>
+                <div class="feature-item">
+                    <div class="feature-icon">⚡</div>
+                    <div class="feature-text">
+                        <h4>Automated Material Prorating</h4>
+                        <p>Automatically split commercial value based on material composition for Section 232 compliance</p>
+                    </div>
+                </div>
+                <div class="feature-item">
+                    <div class="feature-icon">🎯</div>
+                    <div class="feature-text">
+                        <h4>Visual Exclusion Identification</h4>
+                        <p>Color-coded highlighting helps operators quickly identify Section 301 exclusion tariff numbers</p>
+                    </div>
+                </div>
+                <div class="feature-item">
+                    <div class="feature-icon">🔄</div>
+                    <div class="feature-text">
+                        <h4>Seamless System Integration</h4>
+                        <p>Export in formats compatible with existing customs entry and transportation processing systems</p>
+                    </div>
+                </div>
+                <div class="feature-item">
+                    <div class="feature-icon">🔒</div>
+                    <div class="feature-text">
+                        <h4>Pass-Through Architecture</h4>
+                        <p>Commercial invoice data flows through without storage, maintaining client confidentiality</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Slide 4: Workflow -->
+        <div class="slide" data-slide="3">
+            <h2>Processing Workflow</h2>
+            <div class="workflow">
+                <div class="workflow-step">
+                    <div class="step-number">1</div>
+                    <h4>Import</h4>
+                    <p>Drop PDF invoices or select Excel/CSV files</p>
+                </div>
+                <div class="workflow-arrow">→</div>
+                <div class="workflow-step">
+                    <div class="step-number">2</div>
+                    <h4>Extract</h4>
+                    <p>OCR templates parse invoice data automatically</p>
+                </div>
+                <div class="workflow-arrow">→</div>
+                <div class="workflow-step">
+                    <div class="step-number">3</div>
+                    <h4>Enrich</h4>
+                    <p>Match parts with HTS codes and material ratios</p>
+                </div>
+                <div class="workflow-arrow">→</div>
+                <div class="workflow-step">
+                    <div class="step-number">4</div>
+                    <h4>Calculate</h4>
+                    <p>Prorate values by material for Section 232</p>
+                </div>
+                <div class="workflow-arrow">→</div>
+                <div class="workflow-step">
+                    <div class="step-number">5</div>
+                    <h4>Export</h4>
+                    <p>Generate import-ready formatted files</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Slide 5: Section 232 Compliance -->
+        <div class="slide" data-slide="4">
+            <h2>Section 232 Material Handling</h2>
+            <div class="compliance-grid">
+                <div class="compliance-card steel">
+                    <div class="material-icon">🔩</div>
+                    <h3>Steel</h3>
+                    <p>Declaration Code 08</p>
+                    <p style="color: #6b7280; margin-top: 10px;">Derivative value prorating with country of melt/pour tracking</p>
+                </div>
+                <div class="compliance-card aluminum">
+                    <div class="material-icon">🪶</div>
+                    <h3>Aluminum</h3>
+                    <p>Declaration Code 07</p>
+                    <p style="color: #6495ed; margin-top: 10px;">Smelting country declarations with aluminum content ratios</p>
+                </div>
+                <div class="compliance-card copper">
+                    <div class="material-icon">🔶</div>
+                    <h3>Copper</h3>
+                    <p>Smelting Required</p>
+                    <p style="color: #b87333; margin-top: 10px;">Country of smelt declarations for copper derivatives</p>
+                </div>
+                <div class="compliance-card wood">
+                    <div class="material-icon">🪵</div>
+                    <h3>Wood</h3>
+                    <p>Lacey Act Compliant</p>
+                    <p style="color: #8b4513; margin-top: 10px;">Species and harvest country tracking for forest products</p>
+                </div>
+                <div class="compliance-card auto">
+                    <div class="material-icon">🚗</div>
+                    <h3>Automotive</h3>
+                    <p>Auto Content Rules</p>
+                    <p style="color: #2f4f4f; margin-top: 10px;">USMCA automotive content percentage tracking</p>
+                </div>
+                <div class="compliance-card section301">
+                    <div class="material-icon">📜</div>
+                    <h3>Section 301</h3>
+                    <p>Exclusion Tracking</p>
+                    <p style="color: #ff6b35; margin-top: 10px;">Client-defined exclusion tariff identification and highlighting</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Slide 6: Key Features -->
+        <div class="slide" data-slide="5">
+            <h2>Core Capabilities</h2>
+            <div class="content-grid">
+                <div class="card">
+                    <div class="card-icon">🤖</div>
+                    <h3>AI Template Generation</h3>
+                    <p>Create invoice parsing templates automatically using AI models:</p>
+                    <ul>
+                        <li>OpenAI GPT-4</li>
+                        <li>Anthropic Claude</li>
+                        <li>Local Ollama models</li>
+                    </ul>
+                </div>
+                <div class="card">
+                    <div class="card-icon">📊</div>
+                    <h3>Parts Database</h3>
+                    <p>Comprehensive parts management with:</p>
+                    <ul>
+                        <li>HTS code mapping</li>
+                        <li>Material composition tracking</li>
+                        <li>Multi-client support</li>
+                    </ul>
+                </div>
+                <div class="card">
+                    <div class="card-icon">🗂️</div>
+                    <h3>Profile Management</h3>
+                    <p>Save and reuse configurations:</p>
+                    <ul>
+                        <li>Invoice mapping profiles</li>
+                        <li>Output column layouts</li>
+                        <li>Folder profiles</li>
+                    </ul>
+                </div>
+                <div class="card">
+                    <div class="card-icon">📈</div>
+                    <h3>HTS Database</h3>
+                    <p>Complete tariff schedule reference:</p>
+                    <ul>
+                        <li>10-digit HTS lookup</li>
+                        <li>Material type identification</li>
+                        <li>Declaration requirements</li>
+                    </ul>
+                </div>
+                <div class="card">
+                    <div class="card-icon">🎨</div>
+                    <h3>Visual Exports</h3>
+                    <p>Color-coded Excel exports showing:</p>
+                    <ul>
+                        <li>Material type highlighting</li>
+                        <li>Section 301 exclusions</li>
+                        <li>Row expansion visualization</li>
+                    </ul>
+                </div>
+                <div class="card">
+                    <div class="card-icon">👥</div>
+                    <h3>MID Management</h3>
+                    <p>Manufacturer ID database:</p>
+                    <ul>
+                        <li>Import manufacturer lists</li>
+                        <li>Related party tracking</li>
+                        <li>Customer ID linking</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <!-- Slide 7: Data Privacy -->
+        <div class="slide" data-slide="6">
+            <h2>Data Privacy by Design</h2>
+            <div class="privacy-box">
+                <div class="shield-icon">🛡️</div>
+                <h3>Pass-Through Architecture</h3>
+                <p>
+                    TariffMill is intentionally designed to <strong>not store client commercial invoice data</strong>.
+                    <br><br>
+                    Invoice information passes through the system and is transformed into a format
+                    ready for import into your existing customs entry processing systems.
+                    <br><br>
+                    Your clients' sensitive commercial data remains transient, never persisted in the database.
+                </p>
+            </div>
+        </div>
+
+        <!-- Slide 8: OCRMill -->
+        <div class="slide" data-slide="7">
+            <h2>OCRMill Invoice Processing</h2>
+            <div class="content-grid">
+                <div class="card">
+                    <div class="card-icon">📥</div>
+                    <h3>Drag & Drop Import</h3>
+                    <p>Simply drop PDF invoices into the processing zone. Files are automatically queued for extraction.</p>
+                </div>
+                <div class="card">
+                    <div class="card-icon">👁️</div>
+                    <h3>Folder Monitoring</h3>
+                    <p>Set up automatic monitoring of input folders. New invoices are processed as they arrive.</p>
+                </div>
+                <div class="card">
+                    <div class="card-icon">📋</div>
+                    <h3>Template Library</h3>
+                    <p>12+ pre-built templates for common invoice formats. Add custom templates as needed.</p>
+                </div>
+                <div class="card">
+                    <div class="card-icon">🔄</div>
+                    <h3>Multi-Invoice PDFs</h3>
+                    <p>Handle PDFs containing multiple invoices. Split or combine outputs based on your needs.</p>
+                </div>
+                <div class="card">
+                    <div class="card-icon">✅</div>
+                    <h3>Results Preview</h3>
+                    <p>Review extracted data before sending to the main processing workflow for verification.</p>
+                </div>
+                <div class="card">
+                    <div class="card-icon">📤</div>
+                    <h3>Send to TariffMill</h3>
+                    <p>One click transfers extracted CSV data to the main processing pipeline for tariff application.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Slide 9: Closing -->
+        <div class="slide closing-slide" data-slide="8">
+            <h2>Streamline Your Customs Workflow</h2>
+            <p style="color: #a0aec0; font-size: 1.3rem; max-width: 800px; line-height: 1.8;">
+                TariffMill bridges the gap between incoming documentation and customs processing systems,
+                automating the complex task of Section 232 compliance while maintaining data privacy.
+            </p>
+            <div class="benefits">
+                <div class="benefit">
+                    <div class="benefit-icon">⏱️</div>
+                    <h4>Save Time</h4>
+                </div>
+                <div class="benefit">
+                    <div class="benefit-icon">✓</div>
+                    <h4>Ensure Compliance</h4>
+                </div>
+                <div class="benefit">
+                    <div class="benefit-icon">🎯</div>
+                    <h4>Reduce Errors</h4>
+                </div>
+                <div class="benefit">
+                    <div class="benefit-icon">🔗</div>
+                    <h4>Integrate Seamlessly</h4>
+                </div>
+            </div>
+            <p style="color: #4a9eff; font-size: 1.5rem; margin-top: 50px; font-weight: 600;">
+                TariffMill — Customs Documentation, Simplified.
+            </p>
+        </div>
+    </div>
+
+    <!-- Navigation -->
+    <div class="keyboard-hint">
+        Press <kbd>←</kbd> <kbd>→</kbd> or <kbd>Space</kbd> to navigate
+    </div>
+
+    <div class="slide-indicator">
+        <div class="dot active" data-slide="0"></div>
+        <div class="dot" data-slide="1"></div>
+        <div class="dot" data-slide="2"></div>
+        <div class="dot" data-slide="3"></div>
+        <div class="dot" data-slide="4"></div>
+        <div class="dot" data-slide="5"></div>
+        <div class="dot" data-slide="6"></div>
+        <div class="dot" data-slide="7"></div>
+        <div class="dot" data-slide="8"></div>
+    </div>
+
+    <div class="nav-container">
+        <button class="nav-btn" id="prevBtn" disabled>← Previous</button>
+        <button class="nav-btn" id="nextBtn">Next →</button>
+    </div>
+
+    <script>
+        let currentSlide = 0;
+        const totalSlides = 9;
+        const slides = document.querySelectorAll('.slide');
+        const dots = document.querySelectorAll('.dot');
+        const prevBtn = document.getElementById('prevBtn');
+        const nextBtn = document.getElementById('nextBtn');
+
+        function updateSlide(newSlide) {
+            if (newSlide < 0 || newSlide >= totalSlides) return;
+
+            // Update slide classes
+            slides[currentSlide].classList.remove('active');
+            slides[currentSlide].classList.add('prev');
+
+            slides[newSlide].classList.remove('prev');
+            slides[newSlide].classList.add('active');
+
+            // Update dots
+            dots[currentSlide].classList.remove('active');
+            dots[newSlide].classList.add('active');
+
+            currentSlide = newSlide;
+
+            // Update buttons
+            prevBtn.disabled = currentSlide === 0;
+            nextBtn.disabled = currentSlide === totalSlides - 1;
+            nextBtn.textContent = currentSlide === totalSlides - 1 ? 'End' : 'Next →';
+        }
+
+        function nextSlide() {
+            if (currentSlide < totalSlides - 1) {
+                updateSlide(currentSlide + 1);
+            }
+        }
+
+        function prevSlide() {
+            if (currentSlide > 0) {
+                updateSlide(currentSlide - 1);
+            }
+        }
+
+        // Button navigation
+        nextBtn.addEventListener('click', nextSlide);
+        prevBtn.addEventListener('click', prevSlide);
+
+        // Dot navigation
+        dots.forEach((dot, index) => {
+            dot.addEventListener('click', () => {
+                if (index !== currentSlide) {
+                    if (index > currentSlide) {
+                        slides[currentSlide].classList.add('prev');
+                    }
+                    updateSlide(index);
+                }
+            });
+        });
+
+        // Keyboard navigation
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowRight' || e.key === ' ') {
+                e.preventDefault();
+                nextSlide();
+            } else if (e.key === 'ArrowLeft') {
+                e.preventDefault();
+                prevSlide();
+            }
+        });
+
+        // Touch/swipe support
+        let touchStartX = 0;
+        let touchEndX = 0;
+
+        document.addEventListener('touchstart', (e) => {
+            touchStartX = e.changedTouches[0].screenX;
+        });
+
+        document.addEventListener('touchend', (e) => {
+            touchEndX = e.changedTouches[0].screenX;
+            handleSwipe();
+        });
+
+        function handleSwipe() {
+            const swipeThreshold = 50;
+            const diff = touchStartX - touchEndX;
+
+            if (Math.abs(diff) > swipeThreshold) {
+                if (diff > 0) {
+                    nextSlide();
+                } else {
+                    prevSlide();
+                }
+            }
+        }
+    </script>
+</body>
+</html>
