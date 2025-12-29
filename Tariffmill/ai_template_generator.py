@@ -1333,24 +1333,154 @@ class AITemplateChatThread(QThread):
     def run(self):
         try:
             # Build the system prompt
-            system_prompt = """You are an expert Python developer helping to modify an OCR invoice template.
-The user has an existing template and wants to make modifications.
+            system_prompt = """You are an expert Python developer and AI assistant for TariffMill and OCRMill applications.
 
-Current template code:
+## Application Context
+
+**TariffMill** is a customs brokerage application that:
+- Processes commercial invoices for US Customs import declarations
+- Maps invoice data to HTS (Harmonized Tariff Schedule) codes
+- Calculates duties, fees, and Section 232 steel/aluminum tariffs
+- Exports data in CBP-compliant formats (CSV, XML for ACE/e2Open)
+- Manages parts master database with HTS classifications
+- Supports MID (Manufacturer ID) tracking and validation
+
+**OCRMill** is the invoice OCR processing module that:
+- Extracts data from PDF invoices using AI-powered OCR
+- Uses customizable Python templates to parse different invoice formats
+- Maps extracted fields (part numbers, quantities, values, descriptions)
+- Supports MSI-to-Sigma part number conversion via msi_sigma_parts table
+- Templates inherit from BaseTemplate class with extract() method
+
+## Database Tables Available
+- parts_master: HTS codes, descriptions, materials, country of origin
+- msi_sigma_parts: MSI to Sigma part number mappings with HTS data
+- mid_list: Manufacturer IDs with country codes
+- billing_records: Export tracking for billing purposes
+
+## MSI-to-Sigma Part Number Mapping (IMPORTANT)
+
+The msi_sigma_parts table maps MSI (supplier) part numbers to Sigma (customer) part numbers.
+This is critical for invoice processing - extracted part numbers must be converted.
+
+**Database Schema:**
+```sql
+msi_sigma_parts (
+    msi_part_number TEXT PRIMARY KEY,  -- e.g., 'MS2001-F/O'
+    sigma_part_number TEXT NOT NULL,   -- e.g., 'MS2001-F-O'
+    material TEXT,                      -- e.g., 'cast iron'
+    hts_type TEXT,                      -- e.g., 'MH RINGS AND COVERS'
+    hts_code TEXT,                      -- e.g., '7325.10.0010'
+    steel_ratio REAL DEFAULT 0.0
+)
+```
+
+**Conversion Patterns:**
+- '/' becomes '-': MS2001-F/O -> MS2001-F-O
+- '.' is removed from decimals: MS2001-X1.5 -> MS2001-X15
+- '/S' becomes '-S': MS2001-ST/S -> MS2001-ST-S
+
+**Required Template Implementation:**
+
+1. Add to __init__:
+```python
+def __init__(self):
+    super().__init__()
+    self.msi_sigma_mappings = {{}}
+    self._load_msi_sigma_mappings()
+```
+
+2. Database path helper:
+```python
+def _get_database_path(self) -> str:
+    import os
+    from pathlib import Path
+    # AppData location (installed app)
+    appdata_path = Path(os.environ.get('LOCALAPPDATA', '')) / 'TariffMill' / 'tariffmill.db'
+    if appdata_path.exists():
+        return str(appdata_path)
+    # Development location
+    dev_path = Path(__file__).parent.parent / 'Resources' / 'tariffmill.db'
+    if dev_path.exists():
+        return str(dev_path)
+    return ""
+```
+
+3. Load mappings from database:
+```python
+def _load_msi_sigma_mappings(self):
+    db_path = self._get_database_path()
+    if not db_path:
+        return
+    try:
+        import sqlite3
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT msi_part_number, sigma_part_number FROM msi_sigma_parts")
+        for msi_part, sigma_part in cursor.fetchall():
+            if msi_part and sigma_part:
+                self.msi_sigma_mappings[msi_part.strip().upper()] = sigma_part.strip()
+        conn.close()
+    except Exception as e:
+        print(f"Error loading mappings: {{e}}")
+```
+
+4. Mapping function:
+```python
+def map_msi_to_sigma(self, msi_part: str) -> str:
+    if not msi_part:
+        return msi_part
+    msi_clean = msi_part.strip().upper()
+
+    # 1. Try exact database match
+    if msi_clean in self.msi_sigma_mappings:
+        return self.msi_sigma_mappings[msi_clean]
+
+    # 2. Try variations
+    for var in [msi_clean, msi_clean.replace('/', '-'), msi_clean.replace(' ', '')]:
+        if var in self.msi_sigma_mappings:
+            return self.msi_sigma_mappings[var]
+
+    # 3. Pattern-based fallback
+    import re
+    sigma_part = msi_clean.replace('/', '-')
+    sigma_part = re.sub(r'(\\d+)\\.(\\d+)', r'\\1\\2', sigma_part)
+    return sigma_part
+```
+
+5. Use in extract_line_items:
+```python
+# After extracting part_number from invoice
+sigma_part_number = self.map_msi_to_sigma(part_number)
+item = {{
+    'part_number': part_number,           # Original MSI format
+    'sigma_part_number': sigma_part_number,  # Converted Sigma format
+    ...
+}}
+```
+
+6. Add 'sigma_part_number' to extra_columns:
+```python
+extra_columns = ['sigma_part_number', 'description', 'country_origin', ...]
+```
+
+## Current Template Code
 ```python
 {code}
 ```
 
 {invoice_context}
 
-When making changes:
+## Guidelines
+When helping with templates:
 1. Preserve the overall structure (class name, imports, base class)
 2. Only modify the specific parts the user asks about
 3. Return the COMPLETE modified template code
 4. Wrap the code in ```python ... ``` markers
 5. Explain what you changed after the code block
+6. ALWAYS implement MSI-to-Sigma mapping when the template processes MSI-format part numbers
 
-If the user asks a question, answer it and then provide the modified code if applicable."""
+If the user asks a question, answer it and provide modified code if applicable."""
 
             invoice_context = ""
             if self.invoice_text:

@@ -6626,6 +6626,8 @@ class TariffMill(QMainWindow):
         self.file_label.setText("No file selected")
         self.ci_input.clear()
         self.wt_input.clear()
+        if hasattr(self, 'file_number_input') and self.file_number_input:
+            self.file_number_input.clear()
         if hasattr(self, 'customer_ref_input') and self.customer_ref_input:
             self.customer_ref_input.clear()
         self.mid_combo.setCurrentIndex(-1)
@@ -6667,10 +6669,14 @@ class TariffMill(QMainWindow):
 
         self.current_csv = path
         self.file_label.setText(Path(path).name)
-        
+
         # Clear previous processing state when loading new file
         self.last_processed_df = None
         self.table.setRowCount(0)
+
+        # Clear file number for new invoice
+        if hasattr(self, 'file_number_input') and self.file_number_input:
+            self.file_number_input.clear()
 
         try:
             # Get header row value from input field
@@ -7007,6 +7013,12 @@ class TariffMill(QMainWindow):
             df = self.load_file_as_dataframe(self.current_csv)
             vr = Path(self.current_csv).stem
             col_map = {v:k for k,v in self.shipment_mapping.items()}
+            # Before renaming, drop columns that would create duplicates
+            # (e.g., if mapping sigma_part_number -> part_number but part_number already exists)
+            for source_col, target_col in col_map.items():
+                if source_col in df.columns and target_col in df.columns and source_col != target_col:
+                    logger.info(f"[PROCESS] Dropping original '{target_col}' column to avoid duplicate after renaming '{source_col}' -> '{target_col}'")
+                    df = df.drop(columns=[target_col])
             df = df.rename(columns=col_map)
             if not {'part_number','value_usd'}.issubset(df.columns):
                 self.status.setText("Missing Part Number or Value USD")
@@ -7354,7 +7366,29 @@ class TariffMill(QMainWindow):
         # If net_weight column exists and has values, use those directly
         # Otherwise, calculate proportionally based on value
         total_value = df['value_usd'].sum()
+        logger.info(f"[CalcWtNet DEBUG] total_value={total_value}, wt={wt}, rows={len(df)}")
+        logger.info(f"[CalcWtNet DEBUG] value_usd column sample: {df['value_usd'].head(5).tolist()}")
+
+        # Check if net_weight column exists and has valid per-row weights
+        # Skip if all values are the same (indicates total weight copied to all rows, not per-row weights)
+        use_net_weight_column = False
         if 'net_weight' in df.columns:
+            net_weights = df['net_weight'].dropna()
+            if len(net_weights) > 0:
+                # Convert to numeric and check if values vary
+                numeric_weights = pd.to_numeric(net_weights.astype(str).str.replace(',', ''), errors='coerce').dropna()
+                if len(numeric_weights) > 1:
+                    unique_weights = numeric_weights.unique()
+                    if len(unique_weights) > 1:
+                        use_net_weight_column = True
+                        logger.info(f"[CalcWtNet DEBUG] Using per-row net_weight column ({len(unique_weights)} unique values)")
+                    else:
+                        logger.info(f"[CalcWtNet DEBUG] Skipping net_weight column - all values are the same ({unique_weights[0]}), using proportional calculation")
+                elif len(numeric_weights) == 1:
+                    # Single row, use the value
+                    use_net_weight_column = True
+
+        if use_net_weight_column:
             # Use invoice-provided net_weight where available, fall back to calculated
             def get_weight(row):
                 nw = row.get('net_weight', '')
@@ -7372,6 +7406,8 @@ class TariffMill(QMainWindow):
             df['CalcWtNet'] = 0.0
         else:
             df['CalcWtNet'] = (df['value_usd'] / total_value) * wt
+
+        logger.info(f"[CalcWtNet DEBUG] CalcWtNet sample: {df['CalcWtNet'].head(5).tolist()}")
 
         # Calculate Qty1 and Qty2 based on qty_unit type from HTS database
         # Categories:
@@ -7721,6 +7757,10 @@ class TariffMill(QMainWindow):
                 df = pd.read_excel(self.current_csv, dtype=str)
             else:
                 df = pd.read_csv(self.current_csv, dtype=str)
+            # Drop columns that would create duplicates after renaming
+            for source_col, target_col in col_map.items():
+                if source_col in df.columns and target_col in df.columns and source_col != target_col:
+                    df = df.drop(columns=[target_col])
             df = df.rename(columns=col_map)
 
             if 'value_usd' in df.columns:
@@ -13140,96 +13180,108 @@ Please fix this error in the template code. Return the complete corrected templa
         Check if a package is installed, and offer to install if not.
         Returns True if package is available, False otherwise.
         """
-        # Check if already installed
+        # Check if already installed using importlib for reliable detection
+        import importlib
+        import importlib.util
         try:
-            __import__(package_name)
+            # First try to find the spec (works even if not yet imported)
+            spec = importlib.util.find_spec(package_name)
+            if spec is not None:
+                return True
+            # Fallback: try direct import
+            importlib.import_module(package_name)
             return True
-        except ImportError:
+        except (ImportError, ModuleNotFoundError):
             pass
 
-        # Track packages we're currently installing to prevent duplicate dialogs
+        # Track packages currently being installed
         if not hasattr(self, '_installing_packages'):
             self._installing_packages = set()
 
         if package_name in self._installing_packages:
-            # Already showing install dialog for this package
+            QMessageBox.information(
+                self, "Installation In Progress",
+                f"The {package_name} package is currently being installed.\n"
+                "Please wait for installation to complete."
+            )
             return False
+
+        # Ask user if they want to install
+        reply = QMessageBox.question(
+            self, "Package Not Installed",
+            f"The {package_name} package is required but not installed.\n\n"
+            f"Would you like to install it now?\n"
+            f"(Installation runs in background)",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes
+        )
+
+        if reply == QMessageBox.Yes:
+            self._install_package_background(package_name)
+
+        return False
+
+    def _install_package_background(self, package_name: str):
+        """Install a package in a hidden background process."""
+        import subprocess
+        import threading
 
         self._installing_packages.add(package_name)
 
-        try:
-            # Show dialog with install option
-            msg_box = QMessageBox(self)
-            msg_box.setWindowTitle("Package Not Installed")
-            msg_box.setIcon(QMessageBox.Warning)
-            msg_box.setText(f"The {package_name} package is not installed.")
-            msg_box.setInformativeText("Would you like to install it now?")
+        def do_install():
+            try:
+                python_exe = sys.executable
+                # Use CREATE_NO_WINDOW flag on Windows for hidden console
+                startupinfo = None
+                creationflags = 0
+                if sys.platform == 'win32':
+                    startupinfo = subprocess.STARTUPINFO()
+                    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                    startupinfo.wShowWindow = subprocess.SW_HIDE
+                    creationflags = subprocess.CREATE_NO_WINDOW
 
-            install_btn = msg_box.addButton("Install Now", QMessageBox.AcceptRole)
-            msg_box.addButton("Cancel", QMessageBox.RejectRole)
-
-            msg_box.exec_()
-
-            if msg_box.clickedButton() == install_btn:
-                return self._install_ai_package(package_name)
-
-            return False
-        finally:
-            self._installing_packages.discard(package_name)
-
-    def _install_ai_package(self, package_name: str) -> bool:
-        """Install a Python package using pip."""
-        import subprocess
-
-        try:
-            # Use the same Python executable that's running this script
-            python_exe = sys.executable
-
-            # Show progress dialog
-            progress = QMessageBox(self)
-            progress.setWindowTitle("Installing Package")
-            progress.setText(f"Installing {package_name}...\nThis may take a moment.")
-            progress.setStandardButtons(QMessageBox.NoButton)
-            progress.show()
-            QApplication.processEvents()
-
-            # Run pip install
-            result = subprocess.run(
-                [python_exe, "-m", "pip", "install", package_name],
-                capture_output=True,
-                text=True,
-                timeout=120
-            )
-
-            progress.close()
-
-            if result.returncode == 0:
-                QMessageBox.information(
-                    self, "Installation Successful",
-                    f"The {package_name} package has been installed successfully.\n\n"
-                    "Please restart the application to use this feature."
+                result = subprocess.run(
+                    [python_exe, "-m", "pip", "install", package_name],
+                    capture_output=True,
+                    text=True,
+                    startupinfo=startupinfo,
+                    creationflags=creationflags
                 )
-                return True
-            else:
-                QMessageBox.critical(
-                    self, "Installation Failed",
-                    f"Failed to install {package_name}:\n\n{result.stderr}"
-                )
-                return False
 
-        except subprocess.TimeoutExpired:
-            QMessageBox.critical(
-                self, "Installation Timeout",
-                f"Installation of {package_name} timed out.\n"
-                f"Please try installing manually:\n  pip install {package_name}"
+                # Signal completion back to main thread
+                QTimer.singleShot(0, lambda: self._on_package_install_complete(
+                    package_name, result.returncode == 0, result.stderr
+                ))
+            except Exception as e:
+                QTimer.singleShot(0, lambda: self._on_package_install_complete(
+                    package_name, False, str(e)
+                ))
+
+        # Show installing message in status bar
+        self.statusBar().showMessage(f"Installing {package_name}... (this may take a minute)", 0)
+
+        # Run in background thread
+        thread = threading.Thread(target=do_install, daemon=True)
+        thread.start()
+
+    def _on_package_install_complete(self, package_name: str, success: bool, error_msg: str):
+        """Handle package installation completion."""
+        self._installing_packages.discard(package_name)
+        self.statusBar().clearMessage()
+
+        if success:
+            QMessageBox.information(
+                self, "Installation Complete",
+                f"The {package_name} package has been installed successfully!\n\n"
+                "You can now use this feature."
             )
-            return False
-        except Exception as e:
-            QMessageBox.critical(
-                self, "Installation Error",
-                f"Error installing {package_name}:\n\n{str(e)}"
+        else:
+            QMessageBox.warning(
+                self, "Installation Failed",
+                f"Failed to install {package_name}.\n\n"
+                f"Error: {error_msg}\n\n"
+                f"Please try manually:\n  pip install {package_name}"
             )
-            return False
 
     def _ai_format_message_html(self, role: str, content: str) -> str:
         """Format a chat message as HTML with theme-aware colors."""

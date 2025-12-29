@@ -375,8 +375,10 @@ class ProcessorEngine:
             for inv_num, inv_items in by_invoice.items():
                 proj_num = inv_items[0].get('project_number', 'UNKNOWN')
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                safe_inv_num = inv_num.replace('/', '-')
-                filename = f"{safe_inv_num}_{proj_num}_{timestamp}.csv"
+                # Sanitize invoice and project numbers for valid filenames
+                safe_inv_num = re.sub(r'[<>:"/\\|?*]', '-', inv_num)
+                safe_proj_num = re.sub(r'[<>:"/\\|?*]', '-', proj_num)
+                filename = f"{safe_inv_num}_{safe_proj_num}_{timestamp}.csv"
                 filepath = output_folder / filename
 
                 with open(filepath, 'w', newline='', encoding='utf-8') as f:
