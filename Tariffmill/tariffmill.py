@@ -8056,6 +8056,10 @@ class TariffMill(QMainWindow):
         # Enable reprocess button after data has been populated
         self.reprocess_btn.setEnabled(True)
 
+        # Reset invoice check display after processing is complete
+        self.invoice_check_label.setText("No file loaded")
+        self.csv_total_value = 0.0
+
         # if has_232:
         #     self.status.setText("SECTION 232 ITEMS • EDIT VALUES • EXPORT WHEN READY")
         #     self.status.setStyleSheet("background:#A4262C; color:white; font-weight:bold; font-size:16pt; padding:10px;")
