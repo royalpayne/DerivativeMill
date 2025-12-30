@@ -129,8 +129,8 @@ if __name__ == "__main__":
     update_splash("Loading PyQt5 components...")
 
 from PyQt5.QtWidgets import *
-from PyQt5.QtCore import Qt, QMimeData, pyqtSignal, QTimer, QSize, QEventLoop, QRect, QSettings, QThread, QThreadPool, QRunnable, QObject
-from PyQt5.QtGui import QColor, QFont, QDrag, QKeySequence, QIcon, QPixmap, QPainter, QDoubleValidator, QCursor, QPen, QTextCursor, QTextCharFormat, QSyntaxHighlighter, QTextFormat
+from PyQt5.QtCore import Qt, QMimeData, pyqtSignal, QTimer, QSize, QEventLoop, QRect, QSettings, QThread, QThreadPool, QRunnable, QObject, QUrl
+from PyQt5.QtGui import QColor, QFont, QDrag, QKeySequence, QIcon, QPixmap, QPainter, QDoubleValidator, QCursor, QPen, QTextCursor, QTextCharFormat, QSyntaxHighlighter, QTextFormat, QDesktopServices
 from PyQt5.QtSvg import QSvgRenderer
 
 if __name__ == "__main__":
