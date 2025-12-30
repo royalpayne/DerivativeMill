@@ -1996,7 +1996,7 @@ init_database()
 class DraggableLabel(QLabel):
     def __init__(self, text):
         super().__init__(text)
-        self.setStyleSheet("background:#6b6b6b;border:2px solid #aaa;border-radius:8px;padding:12px;font-weight:bold;color:#ffffff;cursor:hand;")
+        self.setStyleSheet("background:#6b6b6b;border:2px solid #aaa;border-radius:8px;padding:12px;font-weight:bold;color:#ffffff;")
         self.setAlignment(Qt.AlignCenter)
         self.setCursor(QCursor(Qt.OpenHandCursor))  # Show hand cursor
     def mousePressEvent(self, e):
@@ -8346,23 +8346,51 @@ class TariffMill(QMainWindow):
                 'non_steel_ratio': 'Non-Steel %',
             }
         try:
+            # Create progress dialog
+            progress = QProgressDialog("Loading file...", "Cancel", 0, 100, self)
+            progress.setWindowTitle("Parts Import Progress")
+            progress.setWindowModality(Qt.WindowModal)
+            progress.setMinimumDuration(0)
+            progress.setMinimumWidth(400)
+            progress.setValue(0)
+            progress.show()
+            QApplication.processEvents()
+
+            # Load file
+            progress.setLabelText("Reading file...")
             if self.import_csv_path.lower().endswith('.xlsx'):
                 df = pd.read_excel(self.import_csv_path, dtype=str, keep_default_na=False)
             else:
                 df = pd.read_csv(self.import_csv_path, dtype=str, keep_default_na=False)
+
+            if progress.wasCanceled():
+                return
+            progress.setValue(10)
+
             df = df.fillna("").rename(columns=str.strip)
             col_map = {v: k for k, v in mapping.items()}
             df = df.rename(columns=col_map)
+
             # Only Part Number and HTS Code are required
             required = ['part_number','hts_code']
             missing = [f for f in required if f not in df.columns]
             if missing:
+                progress.close()
                 QMessageBox.critical(self, "Error", f"Missing required fields: {', '.join(missing)}")
                 self.status.setText("Import failed")
                 return
+
+            total_rows = len(df)
+            progress.setLabelText(f"Validating {total_rows} rows...")
+            progress.setValue(15)
+            QApplication.processEvents()
+
             # First pass: validate percentages and collect any rows with total > 100%
             invalid_ratio_rows = []
             for idx, r in df.iterrows():
+                if progress.wasCanceled():
+                    return
+
                 part = str(r.get('part_number', '')).strip()
                 if not part:
                     continue
@@ -8392,8 +8420,11 @@ class TariffMill(QMainWindow):
                 if total_pct > 101.0:  # Allow small floating point tolerance
                     invalid_ratio_rows.append((part, total_pct))
 
+            progress.setValue(25)
+
             # If there are invalid rows, reject the import
             if invalid_ratio_rows:
+                progress.close()
                 msg = f"Import failed. The following {len(invalid_ratio_rows)} part(s) have total percentages exceeding 100%:\n\n"
                 for part, total in invalid_ratio_rows[:15]:  # Show first 15
                     msg += f"  {part}: {total:.1f}%\n"
@@ -8405,11 +8436,30 @@ class TariffMill(QMainWindow):
                 self.status.setText("Import failed - invalid percentages")
                 return
 
+            progress.setLabelText(f"Importing {total_rows} parts to database...")
+            progress.setValue(30)
+            QApplication.processEvents()
+
             conn = sqlite3.connect(str(DB_PATH))
             c = conn.cursor()
             updated = inserted = 0
             now = datetime.now().isoformat()
-            for _, r in df.iterrows():
+
+            # Calculate progress increment per row (30% to 90% = 60% for import)
+            progress_per_row = 60.0 / max(total_rows, 1)
+
+            for row_idx, (_, r) in enumerate(df.iterrows()):
+                if progress.wasCanceled():
+                    conn.close()
+                    return
+
+                # Update progress every 100 rows or at least every 1%
+                if row_idx % 100 == 0 or row_idx == total_rows - 1:
+                    current_progress = 30 + int(row_idx * progress_per_row)
+                    progress.setValue(min(current_progress, 90))
+                    progress.setLabelText(f"Importing parts... ({row_idx + 1}/{total_rows})")
+                    QApplication.processEvents()
+
                 part = str(r.get('part_number', '')).strip()
                 if not part: continue
                 desc = str(r.get('description', r.get('Description', ''))).strip()
@@ -8482,16 +8532,34 @@ class TariffMill(QMainWindow):
                 if c.rowcount:
                     inserted += 1 if conn.total_changes > updated+inserted else 0
                     updated += 1 if conn.total_changes == updated+inserted else 0
-            conn.commit(); conn.close()
-            QMessageBox.information(self, "Success", f"Imported!\nUpdated: {updated}\nInserted: {inserted}")
-            
+
+            progress.setLabelText("Committing to database...")
+            progress.setValue(92)
+            QApplication.processEvents()
+
+            conn.commit()
+            conn.close()
+
+            progress.setLabelText("Refreshing data...")
+            progress.setValue(95)
+            QApplication.processEvents()
+
             # Only refresh parts table if Parts View tab has been initialized
             if hasattr(self, 'parts_table'):
                 self.refresh_parts_table()
-            
+
             self.load_available_mids()
+
+            progress.setValue(100)
+            progress.close()
+
+            QMessageBox.information(self, "Success", f"Import Complete!\n\nTotal rows processed: {total_rows}\nParts imported/updated: {inserted + updated}")
             self.bottom_status.setText("Import complete")
+            logger.info(f"Parts import complete: {total_rows} rows, {inserted + updated} parts imported/updated")
+
         except Exception as e:
+            if 'progress' in locals():
+                progress.close()
             logger.error(f"Import failed: {e}")
             QMessageBox.critical(self, "Error", f"Import failed: {str(e)}")
             self.status.setText("Import failed")
