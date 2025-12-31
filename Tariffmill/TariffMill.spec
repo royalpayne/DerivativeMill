@@ -29,7 +29,7 @@ splash = Splash(
     'Resources\\splash.png',
     binaries=a.binaries,
     datas=a.datas,
-    text_pos=(350, 245),
+    text_pos=(350, 290),
     text_size=14,
     text_color='#b4b4b4',
     text_default='Initializing...',

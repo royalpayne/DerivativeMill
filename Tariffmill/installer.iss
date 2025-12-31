@@ -2,7 +2,7 @@
 ; Build with: iscc installer.iss
 
 #define MyAppName "TariffMill"
-#define MyAppVersion "0.96.19"
+#define MyAppVersion "0.96.20"
 #define MyAppPublisher "Process Logic Labs, LLC"
 #define MyAppExeName "TariffMill.exe"
 
@@ -66,6 +66,37 @@ Type: files; Name: "{autodesktop}\{#MyAppName}.lnk"
 var
   RemoveDatabase: Boolean;
   RemoveTemplates: Boolean;
+
+function InitializeSetup(): Boolean;
+var
+  ResultCode: Integer;
+  TempDir: String;
+  FindRec: TFindRec;
+begin
+  Result := True;
+
+  // Kill any running TariffMill processes before installing
+  Exec('taskkill.exe', '/F /IM TariffMill.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+  // Small delay to ensure process is fully terminated
+  Sleep(500);
+
+  // Clean up old PyInstaller temp folders (_MEI*)
+  TempDir := ExpandConstant('{tmp}\..');
+  if FindFirst(TempDir + '\_MEI*', FindRec) then
+  begin
+    try
+      repeat
+        if (FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0 then
+        begin
+          DelTree(TempDir + '\' + FindRec.Name, True, True, True);
+        end;
+      until not FindNext(FindRec);
+    finally
+      FindClose(FindRec);
+    end;
+  end;
+end;
 
 function InitializeUninstall(): Boolean;
 var
