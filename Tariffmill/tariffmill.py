@@ -1858,6 +1858,15 @@ def init_database():
         except Exception as e:
             logger.warning(f"Failed to clean qty_unit values: {e}")
 
+        # Migration: Clean up Sec301_Exclusion_Tariff values that were incorrectly populated with hts_verified data
+        # (Bug: save function was reading column 13 instead of column 14)
+        try:
+            c.execute("UPDATE parts_master SET Sec301_Exclusion_Tariff = '' WHERE Sec301_Exclusion_Tariff LIKE 'Verified %' OR Sec301_Exclusion_Tariff LIKE 'Invalid HTS%'")
+            if c.rowcount > 0:
+                logger.info(f"Cleaned {c.rowcount} Sec301_Exclusion_Tariff values (removed hts_verified data)")
+        except Exception as e:
+            logger.warning(f"Failed to clean Sec301_Exclusion_Tariff values: {e}")
+
         # Migration: Reset column visibility settings if we have outdated settings
         # (This handles upgrades from versions with fewer columns)
         try:
@@ -17053,7 +17062,9 @@ Please fix this error in the template code. Return the complete corrected templa
                 # Auto-lookup qty_unit from hts_units table if not set but HTS exists
                 if not qty_unit and hts:
                     qty_unit = get_hts_qty_unit(hts)
-                sec301_exclusion = items[13].text() if items[13] else ""
+                # Column 13 is hts_verified (read-only, don't save)
+                # Column 14 is Sec301_Exclusion_Tariff
+                sec301_exclusion = items[14].text() if items[14] else ""
 
                 # Check if this part exists and if data has changed
                 c.execute("""SELECT description, hts_code, country_origin, mid, client_code,
