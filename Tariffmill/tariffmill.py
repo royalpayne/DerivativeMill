@@ -1167,10 +1167,10 @@ OUTPUT_DIR = BASE_DIR / "Tariffmill_Output"
 def get_processed_dir(input_dir: Path) -> Path:
     """Get the processed directory path based on input directory.
 
-    Creates a sibling folder named {FolderName}_Processed.
-    e.g., /home/user/OCROutput -> /home/user/OCROutput_Processed
+    Creates a subfolder named 'Processed' inside the input directory.
+    e.g., /home/user/Downloads -> /home/user/Downloads/Processed
     """
-    return input_dir.parent / f"{input_dir.name}_Processed"
+    return input_dir / "Processed"
 
 PROCESSED_DIR = get_processed_dir(INPUT_DIR)
 
