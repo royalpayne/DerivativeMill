@@ -5590,9 +5590,15 @@ class TariffMill(QMainWindow):
             if reply == QMessageBox.Yes:
                 # Run the installer and exit
                 logger.info(f"Starting installer: {temp_path}")
-                subprocess.Popen([str(temp_path)], shell=True)
-                # Exit the application
-                QApplication.quit()
+
+                # Use os.startfile on Windows for reliable launching
+                if sys.platform == 'win32':
+                    os.startfile(str(temp_path))
+                else:
+                    subprocess.Popen([str(temp_path)], shell=True)
+
+                # Give the installer time to start, then exit
+                QTimer.singleShot(500, QApplication.quit)
 
         except Exception as e:
             progress_dialog.close()
