@@ -7761,7 +7761,8 @@ class TariffMill(QMainWindow):
 
             # Merge strategy: Prefer database (master) values over invoice values
             # Database values ALWAYS take precedence; invoice values are only used as fallback when DB is empty
-            merge_fields = ['hts_code', 'steel_ratio', 'aluminum_ratio', 'copper_ratio', 'wood_ratio', 'auto_ratio', 'non_steel_ratio', 'qty_unit']
+            merge_fields = ['hts_code', 'steel_ratio', 'aluminum_ratio', 'copper_ratio', 'wood_ratio', 'auto_ratio', 'non_steel_ratio', 'qty_unit',
+                           'country_of_melt', 'country_of_cast', 'country_of_smelt', 'Sec301_Exclusion_Tariff']
             for field in merge_fields:
                 master_col = f'{field}_master'
                 if master_col in df.columns:
