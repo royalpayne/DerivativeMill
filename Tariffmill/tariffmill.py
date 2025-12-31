@@ -4550,8 +4550,8 @@ class TariffMill(QMainWindow):
         # Checkbox for startup update check
         startup_check_cb = QCheckBox("Check for updates when application starts")
 
-        # Load saved preference from per-user settings
-        startup_check_cb.setChecked(get_user_setting_bool('check_updates_on_startup', False))
+        # Load saved preference from per-user settings (default True)
+        startup_check_cb.setChecked(get_user_setting_bool('check_updates_on_startup', True))
 
         def save_startup_check_preference(checked):
             set_user_setting('check_updates_on_startup', '1' if checked else '0')
@@ -5485,8 +5485,8 @@ class TariffMill(QMainWindow):
 
     def check_for_updates_startup(self):
         """Check for updates on startup (runs in background thread)"""
-        # Check if startup update check is enabled (per-user setting)
-        if not get_user_setting_bool('check_updates_on_startup', False):
+        # Check if startup update check is enabled (per-user setting, default True)
+        if not get_user_setting_bool('check_updates_on_startup', True):
             logger.debug("Startup update check disabled")
             return
 
