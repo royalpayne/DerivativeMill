@@ -1,0 +1,18 @@
+{
+    "_comment": "TariffMill User Authentication Configuration - DO NOT COMMIT REAL PASSWORDS TO PUBLIC REPO",
+    "_instructions": "To add users: 1) Run scripts/generate_password_hash.py 2) Add the output to the users object below",
+    "users": {
+        "admin@processlogiclabs.com": {
+            "password_hash": "2e20a459d2677681b253c1cdf9262616704596fd0bc36a8226b229727e334e8f",
+            "salt": "1a21d06272dcd4370223d4d93a3065dc",
+            "role": "admin",
+            "name": "Administrator"
+        },
+        "demo@example.com": {
+            "password_hash": "1d3c022453bdc95a0f96acec0550ce402838194ca501809611e09f5be063c9ac",
+            "salt": "19ccca9a4d5643f189700294ecb70a95",
+            "role": "user",
+            "name": "Demo User"
+        }
+    }
+}
