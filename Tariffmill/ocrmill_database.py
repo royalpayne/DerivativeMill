@@ -327,47 +327,6 @@ class OCRMillDatabase:
                 datetime.now().isoformat()
             ))
 
-    def get_part_history(self, part_number: str) -> List[Dict]:
-        """Get complete history of a part across all invoices."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT * FROM part_occurrences
-            WHERE part_number = ?
-            ORDER BY processed_date DESC
-        """, (part_number,))
-        results = [dict(row) for row in cursor.fetchall()]
-        conn.close()
-        return results
-
-    def get_parts_by_invoice(self, invoice_number: str) -> List[Dict]:
-        """Get all parts on a specific invoice."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT * FROM part_occurrences
-            WHERE invoice_number = ?
-            ORDER BY part_number
-        """, (invoice_number,))
-        results = [dict(row) for row in cursor.fetchall()]
-        conn.close()
-        return results
-
-    def get_parts_by_project(self, project_number: str) -> List[Dict]:
-        """Get all parts for a specific project."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT DISTINCT p.*, po.quantity, po.total_price
-            FROM parts_master p
-            JOIN part_occurrences po ON p.part_number = po.part_number
-            WHERE po.project_number = ?
-            ORDER BY p.part_number
-        """, (project_number,))
-        results = [dict(row) for row in cursor.fetchall()]
-        conn.close()
-        return results
-
     def search_parts(self, search_term: str) -> List[Dict]:
         """Search parts by part number or description."""
         conn = self._get_connection()
@@ -448,75 +407,6 @@ class OCRMillDatabase:
             print(f"Error loading HTS mapping: {e}")
             return False
 
-    def get_statistics(self) -> Dict:
-        """Get database statistics for OCRMill."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-
-        cursor.execute("SELECT COUNT(*) as count FROM parts_master")
-        total_parts = cursor.fetchone()['count']
-
-        cursor.execute("SELECT COUNT(*) as count FROM part_occurrences")
-        total_occurrences = cursor.fetchone()['count']
-
-        cursor.execute("SELECT COUNT(DISTINCT invoice_number) as count FROM part_occurrences")
-        total_invoices = cursor.fetchone()['count']
-
-        cursor.execute("SELECT COUNT(DISTINCT project_number) as count FROM part_occurrences")
-        total_projects = cursor.fetchone()['count']
-
-        cursor.execute("SELECT SUM(total_price) as total FROM part_occurrences")
-        result = cursor.fetchone()
-        total_value = result['total'] if result['total'] else 0
-
-        cursor.execute("SELECT COUNT(*) as count FROM parts_master WHERE hts_code IS NOT NULL AND hts_code != ''")
-        parts_with_hts = cursor.fetchone()['count']
-
-        conn.close()
-
-        return {
-            'total_parts': total_parts,
-            'total_occurrences': total_occurrences,
-            'total_invoices': total_invoices,
-            'total_projects': total_projects,
-            'total_value': total_value,
-            'parts_with_hts': parts_with_hts,
-            'hts_coverage_pct': (parts_with_hts / total_parts * 100) if total_parts > 0 else 0
-        }
-
-    def get_recent_occurrences(self, limit: int = 100) -> List[Dict]:
-        """Get most recent part occurrences."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT * FROM part_occurrences
-            ORDER BY processed_date DESC
-            LIMIT ?
-        """, (limit,))
-        results = [dict(row) for row in cursor.fetchall()]
-        conn.close()
-        return results
-
-    def export_occurrences_to_csv(self, output_path: Path, invoice_number: str = None) -> bool:
-        """Export part occurrences to CSV."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-
-        if invoice_number:
-            cursor.execute("SELECT * FROM part_occurrences WHERE invoice_number = ? ORDER BY part_number", (invoice_number,))
-        else:
-            cursor.execute("SELECT * FROM part_occurrences ORDER BY processed_date DESC")
-
-        rows = cursor.fetchall()
-        conn.close()
-
-        if not rows:
-            return False
-
-        df = pd.DataFrame([dict(row) for row in rows])
-        df.to_csv(output_path, index=False)
-        return True
-
     def get_manufacturer_by_name(self, company_name: str) -> Optional[Dict]:
         """Get manufacturer by company name from mid_table."""
         if not company_name:
@@ -564,3 +454,290 @@ class OCRMillDatabase:
         result = cursor.fetchone()
         conn.close()
         return dict(result) if result else None
+
+    def ensure_template_stats_table(self):
+        """Create the template_stats table if it doesn't exist."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS template_stats (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                template_name TEXT NOT NULL,
+                pdf_file TEXT,
+                items_extracted INTEGER DEFAULT 0,
+                confidence_score REAL,
+                processing_time_ms INTEGER,
+                success INTEGER DEFAULT 1,
+                error_message TEXT,
+                processed_date TEXT NOT NULL
+            )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_template_stats_name ON template_stats(template_name)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_template_stats_date ON template_stats(processed_date)
+        """)
+        conn.commit()
+        conn.close()
+
+    def record_template_usage(self, template_name: str, pdf_file: str = None,
+                              items_extracted: int = 0, confidence_score: float = None,
+                              processing_time_ms: int = None, success: bool = True,
+                              error_message: str = None):
+        """Record template usage statistics."""
+        self.ensure_template_stats_table()
+        with self._lock:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO template_stats (
+                    template_name, pdf_file, items_extracted, confidence_score,
+                    processing_time_ms, success, error_message, processed_date
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                template_name,
+                pdf_file,
+                items_extracted,
+                confidence_score,
+                processing_time_ms,
+                1 if success else 0,
+                error_message,
+                datetime.now().isoformat()
+            ))
+            conn.commit()
+            conn.close()
+
+    def get_template_statistics(self) -> List[Dict]:
+        """Get aggregated template usage statistics."""
+        self.ensure_template_stats_table()
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT
+                template_name,
+                COUNT(*) as total_uses,
+                SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successful_uses,
+                SUM(items_extracted) as total_items,
+                ROUND(AVG(confidence_score), 2) as avg_confidence,
+                ROUND(AVG(processing_time_ms), 0) as avg_time_ms,
+                MAX(processed_date) as last_used
+            FROM template_stats
+            GROUP BY template_name
+            ORDER BY total_uses DESC
+        """)
+        results = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return results
+
+    def get_template_usage_history(self, template_name: str, limit: int = 50) -> List[Dict]:
+        """Get recent usage history for a specific template."""
+        self.ensure_template_stats_table()
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT * FROM template_stats
+            WHERE template_name = ?
+            ORDER BY processed_date DESC
+            LIMIT ?
+        """, (template_name, limit))
+        results = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return results
+
+    def get_processing_stats_summary(self) -> Dict:
+        """Get overall processing statistics summary."""
+        self.ensure_template_stats_table()
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        # Overall stats
+        cursor.execute("""
+            SELECT
+                COUNT(*) as total_processed,
+                SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successful,
+                SUM(items_extracted) as total_items,
+                COUNT(DISTINCT template_name) as templates_used,
+                ROUND(AVG(confidence_score), 2) as avg_confidence
+            FROM template_stats
+        """)
+        overall = dict(cursor.fetchone())
+
+        # Today's stats
+        today = datetime.now().strftime('%Y-%m-%d')
+        cursor.execute("""
+            SELECT
+                COUNT(*) as processed_today,
+                SUM(items_extracted) as items_today
+            FROM template_stats
+            WHERE processed_date LIKE ?
+        """, (f'{today}%',))
+        today_stats = dict(cursor.fetchone())
+
+        # This week's stats
+        cursor.execute("""
+            SELECT
+                COUNT(*) as processed_week,
+                SUM(items_extracted) as items_week
+            FROM template_stats
+            WHERE processed_date >= date('now', '-7 days')
+        """)
+        week_stats = dict(cursor.fetchone())
+
+        conn.close()
+
+        return {
+            **overall,
+            **today_stats,
+            **week_stats
+        }
+
+    def ensure_corrections_table(self):
+        """Create the extraction_corrections table if it doesn't exist."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS extraction_corrections (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                template_name TEXT NOT NULL,
+                pdf_file TEXT,
+                field_name TEXT NOT NULL,
+                original_value TEXT,
+                corrected_value TEXT,
+                part_number TEXT,
+                correction_date TEXT NOT NULL
+            )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_corrections_template ON extraction_corrections(template_name)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_corrections_field ON extraction_corrections(field_name)
+        """)
+        conn.commit()
+        conn.close()
+
+    def record_correction(self, template_name: str, pdf_file: str = None,
+                          field_name: str = None, original_value: str = None,
+                          corrected_value: str = None, part_number: str = None):
+        """Record a user correction for learning purposes."""
+        self.ensure_corrections_table()
+        with self._lock:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO extraction_corrections (
+                    template_name, pdf_file, field_name, original_value,
+                    corrected_value, part_number, correction_date
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                template_name,
+                pdf_file,
+                field_name,
+                original_value,
+                corrected_value,
+                part_number,
+                datetime.now().isoformat()
+            ))
+            conn.commit()
+            conn.close()
+
+    def get_common_corrections(self, template_name: str = None, limit: int = 50) -> List[Dict]:
+        """Get common corrections for a template to identify improvement patterns."""
+        self.ensure_corrections_table()
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        if template_name:
+            cursor.execute("""
+                SELECT field_name, original_value, corrected_value, COUNT(*) as frequency
+                FROM extraction_corrections
+                WHERE template_name = ?
+                GROUP BY field_name, original_value, corrected_value
+                ORDER BY frequency DESC
+                LIMIT ?
+            """, (template_name, limit))
+        else:
+            cursor.execute("""
+                SELECT template_name, field_name, original_value, corrected_value, COUNT(*) as frequency
+                FROM extraction_corrections
+                GROUP BY template_name, field_name, original_value, corrected_value
+                ORDER BY frequency DESC
+                LIMIT ?
+            """, (limit,))
+
+        results = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return results
+
+    def get_correction_stats(self) -> Dict:
+        """Get statistics about corrections."""
+        self.ensure_corrections_table()
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT
+                COUNT(*) as total_corrections,
+                COUNT(DISTINCT template_name) as templates_with_corrections,
+                COUNT(DISTINCT field_name) as fields_corrected
+            FROM extraction_corrections
+        """)
+        stats = dict(cursor.fetchone())
+
+        # Most corrected templates
+        cursor.execute("""
+            SELECT template_name, COUNT(*) as correction_count
+            FROM extraction_corrections
+            GROUP BY template_name
+            ORDER BY correction_count DESC
+            LIMIT 5
+        """)
+        stats['top_templates'] = [dict(row) for row in cursor.fetchall()]
+
+        # Most corrected fields
+        cursor.execute("""
+            SELECT field_name, COUNT(*) as correction_count
+            FROM extraction_corrections
+            GROUP BY field_name
+            ORDER BY correction_count DESC
+            LIMIT 5
+        """)
+        stats['top_fields'] = [dict(row) for row in cursor.fetchall()]
+
+        conn.close()
+        return stats
+
+    def suggest_correction(self, template_name: str, field_name: str, value: str) -> Optional[str]:
+        """
+        Suggest a correction based on learned patterns.
+
+        Args:
+            template_name: Name of the template
+            field_name: Name of the field being extracted
+            value: The extracted value
+
+        Returns:
+            Suggested corrected value if a pattern is found, None otherwise
+        """
+        self.ensure_corrections_table()
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        # Look for exact match corrections
+        cursor.execute("""
+            SELECT corrected_value, COUNT(*) as frequency
+            FROM extraction_corrections
+            WHERE template_name = ? AND field_name = ? AND original_value = ?
+            GROUP BY corrected_value
+            ORDER BY frequency DESC
+            LIMIT 1
+        """, (template_name, field_name, value))
+
+        result = cursor.fetchone()
+        conn.close()
+
+        if result and result['frequency'] >= 2:  # At least 2 occurrences
+            return result['corrected_value']
+
+        return None

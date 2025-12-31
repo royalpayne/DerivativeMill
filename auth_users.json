@@ -13,6 +13,12 @@
             "salt": "19ccca9a4d5643f189700294ecb70a95",
             "role": "user",
             "name": "Demo User"
+        },
+        "hpayne@chpowell.com": {
+            "password_hash": "2bc35a34bd2f912e94cb0a83948e4ff9939d6c12319a49b2e85b7b6f5f2794a6",
+            "salt": "008161ab33b02b916a8169ca6fdb1d57",
+            "role": "user",
+            "name": "Heath"
         }
     }
 }

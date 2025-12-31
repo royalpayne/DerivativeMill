@@ -1,7 +1,7 @@
 """
 AI Template Generator for TariffMill
 
-Allows users to generate invoice templates using AI models (OpenAI, Anthropic, or local models).
+Allows users to generate invoice templates using AI models (OpenAI, Anthropic, Google Gemini, Groq).
 The AI analyzes sample invoice text and generates a complete template class.
 """
 
@@ -127,6 +127,18 @@ except ImportError:
     HAS_ANTHROPIC = False
 
 try:
+    import google.generativeai as genai
+    HAS_GEMINI = True
+except ImportError:
+    HAS_GEMINI = False
+
+try:
+    from groq import Groq
+    HAS_GROQ = True
+except ImportError:
+    HAS_GROQ = False
+
+try:
     import pdfplumber
     HAS_PDFPLUMBER = True
 except ImportError:
@@ -182,8 +194,10 @@ class AIGeneratorThread(QThread):
                 result = self._call_openai(prompt)
             elif self.provider == "Anthropic":
                 result = self._call_anthropic(prompt)
-            elif self.provider == "Ollama (Local)":
-                result = self._call_ollama(prompt)
+            elif self.provider == "Google Gemini":
+                result = self._call_gemini(prompt)
+            elif self.provider == "Groq":
+                result = self._call_groq(prompt)
             else:
                 raise ValueError(f"Unknown provider: {self.provider}")
 
@@ -384,175 +398,42 @@ Generate the complete, working Python template code:
         )
         return response.content[0].text
 
-    def _check_ollama_status(self) -> tuple:
-        """
-        Check if Ollama is running and the model is available.
-        Returns: (is_running: bool, available_models: list, error_message: str)
-        """
-        import urllib.request
-        import urllib.error
-        import json
-
-        # Check if Ollama server is running
+    def _call_gemini(self, prompt: str) -> str:
+        """Call Google Gemini API."""
         try:
-            with urllib.request.urlopen("http://localhost:11434/api/tags", timeout=5) as response:
-                result = json.loads(response.read().decode('utf-8'))
-                models = [m.get('name', '').split(':')[0] for m in result.get('models', [])]
-                return True, models, ""
-        except urllib.error.URLError as e:
-            if "Connection refused" in str(e) or "No connection" in str(e):
-                return False, [], "not_running"
-            return False, [], str(e)
-        except Exception as e:
-            return False, [], str(e)
+            import google.generativeai as genai
+        except ImportError:
+            raise ImportError("google-generativeai package not installed. Run: pip install google-generativeai")
 
-    def _call_ollama(self, prompt: str) -> str:
-        """Call local Ollama API."""
-        import urllib.request
-        import urllib.error
-        import json
-        import platform
-        import socket
-
-        # First check if Ollama is running
-        is_running, available_models, error_type = self._check_ollama_status()
-
-        if not is_running:
-            system = platform.system()
-
-            if error_type == "not_running":
-                # Ollama not running - provide platform-specific instructions
-                if system == "Windows":
-                    install_instructions = (
-                        "Ollama is not running or not installed.\n\n"
-                        "To install Ollama on Windows:\n"
-                        "1. Download from: https://ollama.com/download\n"
-                        "2. Run the installer\n"
-                        "3. Open a terminal and run: ollama serve\n"
-                        "4. In another terminal, pull a model: ollama pull llama3.1\n\n"
-                        "After installation, start Ollama and try again."
-                    )
-                elif system == "Darwin":  # macOS
-                    install_instructions = (
-                        "Ollama is not running or not installed.\n\n"
-                        "To install Ollama on macOS:\n"
-                        "1. Download from: https://ollama.com/download\n"
-                        "   Or use Homebrew: brew install ollama\n"
-                        "2. Start Ollama: ollama serve\n"
-                        "3. Pull a model: ollama pull llama3.1\n\n"
-                        "After installation, start Ollama and try again."
-                    )
-                else:  # Linux
-                    install_instructions = (
-                        "Ollama is not running or not installed.\n\n"
-                        "To install Ollama on Linux:\n"
-                        "1. Run: curl -fsSL https://ollama.com/install.sh | sh\n"
-                        "2. Start Ollama: ollama serve\n"
-                        "3. Pull a model: ollama pull llama3.1\n\n"
-                        "After installation, start Ollama and try again."
-                    )
-                raise ConnectionError(install_instructions)
-            else:
-                raise ConnectionError(f"Failed to connect to Ollama: {error_type}")
-
-        # Check if the requested model is available
-        model_base = self.model.split(':')[0]
-        if available_models and model_base not in available_models:
-            available_list = ', '.join(available_models) if available_models else 'none'
-            raise ValueError(
-                f"Model '{self.model}' is not installed in Ollama.\n\n"
-                f"Available models: {available_list}\n\n"
-                f"To install this model, run:\n"
-                f"  ollama pull {self.model}\n\n"
-                f"Or select one of the available models from the dropdown."
+        genai.configure(api_key=self.api_key)
+        model = genai.GenerativeModel(self.model)
+        response = model.generate_content(
+            prompt,
+            generation_config=genai.types.GenerationConfig(
+                max_output_tokens=4000,
+                temperature=0.3
             )
-
-        # Make the API call with streaming
-        url = "http://localhost:11434/api/generate"
-        data = {
-            "model": self.model,
-            "prompt": prompt,
-            "stream": True  # Enable streaming for better UX
-        }
-
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(data).encode('utf-8'),
-            headers={'Content-Type': 'application/json'}
         )
+        return response.text
 
+    def _call_groq(self, prompt: str) -> str:
+        """Call Groq API."""
         try:
-            # 5 minute timeout for large prompts on slower hardware
-            full_response = ""
-            with urllib.request.urlopen(req, timeout=300) as response:
-                # Read streaming response line by line
-                for line in response:
-                    if self._cancelled:
-                        return full_response  # Return what we have so far
+            from groq import Groq
+        except ImportError:
+            raise ImportError("groq package not installed. Run: pip install groq")
 
-                    try:
-                        chunk = json.loads(line.decode('utf-8'))
-                        if 'response' in chunk:
-                            full_response += chunk['response']
-                            # Emit streaming update with character count in progress
-                            char_count = len(full_response)
-                            self.progress.emit(f"Generating... ({char_count} chars)")
-                            # Send the full text so far for preview
-                            self.stream_update.emit(full_response)
-
-                        # Check if generation is complete
-                        if chunk.get('done', False):
-                            break
-                    except json.JSONDecodeError:
-                        # Skip malformed lines
-                        continue
-
-                return full_response
-        except urllib.error.HTTPError as e:
-            if e.code == 404:
-                raise ValueError(
-                    f"Model '{self.model}' not found.\n\n"
-                    f"Pull the model first:\n  ollama pull {self.model}"
-                )
-            raise ConnectionError(f"Ollama API error: HTTP {e.code} - {e.reason}")
-        except urllib.error.URLError as e:
-            if "timed out" in str(e).lower():
-                raise TimeoutError(
-                    f"Generation timed out after 5 minutes.\n\n"
-                    f"Suggestions:\n"
-                    f"1. Try a smaller/faster model:\n"
-                    f"   - llama3.2:1b (fastest)\n"
-                    f"   - phi3 or mistral (fast)\n\n"
-                    f"2. Use shorter invoice text (first 1-2 pages)\n\n"
-                    f"3. Use a cloud provider (OpenAI/Anthropic) for faster results"
-                )
-            raise ConnectionError(
-                f"Lost connection to Ollama during generation.\n\n"
-                f"Error: {e}\n\n"
-                f"Make sure Ollama is still running."
-            )
-        except socket.timeout:
-            raise TimeoutError(
-                f"Generation timed out after 5 minutes.\n\n"
-                f"Suggestions:\n"
-                f"1. Try a smaller/faster model:\n"
-                f"   - llama3.2:1b (fastest)\n"
-                f"   - phi3 or mistral (fast)\n\n"
-                f"2. Use shorter invoice text (first 1-2 pages)\n\n"
-                f"3. Use a cloud provider (OpenAI/Anthropic) for faster results"
-            )
-        except Exception as e:
-            if "timed out" in str(e).lower():
-                raise TimeoutError(
-                    f"Generation timed out after 5 minutes.\n\n"
-                    f"Suggestions:\n"
-                    f"1. Try a smaller/faster model:\n"
-                    f"   - llama3.2:1b (fastest)\n"
-                    f"   - phi3 or mistral (fast)\n\n"
-                    f"2. Use shorter invoice text (first 1-2 pages)\n\n"
-                    f"3. Use a cloud provider (OpenAI/Anthropic) for faster results"
-                )
-            raise ConnectionError(f"Ollama error: {e}")
+        client = Groq(api_key=self.api_key)
+        response = client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": "You are an expert Python developer specializing in invoice parsing and OCR templates."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=4000,
+            temperature=0.3
+        )
+        return response.choices[0].message.content
 
     def _extract_code(self, response: str) -> str:
         """Extract Python code from AI response."""
@@ -591,7 +472,6 @@ class AITemplateGeneratorDialog(QDialog):
     Supports:
     - OpenAI (GPT-4, GPT-3.5)
     - Anthropic (Claude)
-    - Ollama (local models)
     """
 
     template_created = pyqtSignal(str, str)  # template_name, file_path
@@ -630,8 +510,8 @@ class AITemplateGeneratorDialog(QDialog):
         provider_layout = QFormLayout()
 
         self.provider_combo = QComboBox()
-        # Always show all providers - status indicator will show if they're available
-        providers = ["OpenAI", "Anthropic", "Ollama (Local)"]
+        # Available providers - status indicator will show if they're available
+        providers = ["OpenAI", "Anthropic", "Google Gemini", "Groq"]
         self.provider_combo.addItems(providers)
         self.provider_combo.currentTextChanged.connect(self.on_provider_changed)
         provider_layout.addRow("Provider:", self.provider_combo)
@@ -642,7 +522,7 @@ class AITemplateGeneratorDialog(QDialog):
 
         self.api_key_edit = QLineEdit()
         self.api_key_edit.setEchoMode(QLineEdit.Password)
-        self.api_key_edit.setPlaceholderText("Enter API key (not needed for Ollama)")
+        self.api_key_edit.setPlaceholderText("Enter API key")
         self.api_key_edit.textChanged.connect(self._update_status_indicator)
         provider_layout.addRow("API Key:", self.api_key_edit)
 
@@ -811,27 +691,6 @@ class AITemplateGeneratorDialog(QDialog):
 
         layout.addLayout(btn_layout)
 
-    def _get_ollama_models(self) -> list:
-        """Get list of available Ollama models."""
-        import urllib.request
-        import urllib.error
-        import json
-
-        try:
-            with urllib.request.urlopen("http://localhost:11434/api/tags", timeout=3) as response:
-                result = json.loads(response.read().decode('utf-8'))
-                models = []
-                for m in result.get('models', []):
-                    name = m.get('name', '')
-                    # Remove the :latest suffix for cleaner display
-                    if ':latest' in name:
-                        name = name.replace(':latest', '')
-                    if name and name not in models:
-                        models.append(name)
-                return models
-        except Exception:
-            return []
-
     def _get_saved_api_key(self, provider: str) -> str:
         """Get saved API key from database."""
         try:
@@ -872,19 +731,7 @@ class AITemplateGeneratorDialog(QDialog):
         """Update the status indicator based on current provider and settings."""
         provider = self.provider_combo.currentText()
 
-        if provider == "Ollama (Local)":
-            # Check if Ollama is running
-            models = self._get_ollama_models()
-            if models:
-                self.status_indicator.setStyleSheet("color: #27ae60; font-size: 16px; font-weight: bold;")
-                self.status_label.setText(f"Ready - {len(models)} model(s) available")
-                self.status_label.setStyleSheet("color: #27ae60;")
-            else:
-                self.status_indicator.setStyleSheet("color: #e74c3c; font-size: 16px; font-weight: bold;")
-                self.status_label.setText("Not connected - Ollama not running")
-                self.status_label.setStyleSheet("color: #e74c3c;")
-
-        elif provider == "OpenAI":
+        if provider == "OpenAI":
             # Check if openai package is installed
             try:
                 import openai
@@ -934,6 +781,56 @@ class AITemplateGeneratorDialog(QDialog):
                 self.status_label.setText("Not ready - Enter Anthropic API key")
                 self.status_label.setStyleSheet("color: #e74c3c;")
 
+        elif provider == "Google Gemini":
+            # Check if google-generativeai package is installed
+            try:
+                import google.generativeai
+            except ImportError:
+                self.status_indicator.setStyleSheet("color: #e74c3c; font-size: 16px; font-weight: bold;")
+                self.status_label.setText("Package not installed - click Generate to install")
+                self.status_label.setStyleSheet("color: #e74c3c;")
+                return
+
+            api_key = self.api_key_edit.text().strip()
+            if api_key:
+                if api_key.startswith("AI"):
+                    self.status_indicator.setStyleSheet("color: #27ae60; font-size: 16px; font-weight: bold;")
+                    self.status_label.setText("Ready - API key configured")
+                    self.status_label.setStyleSheet("color: #27ae60;")
+                else:
+                    self.status_indicator.setStyleSheet("color: #f39c12; font-size: 16px; font-weight: bold;")
+                    self.status_label.setText("Warning - API key format looks incorrect")
+                    self.status_label.setStyleSheet("color: #f39c12;")
+            else:
+                self.status_indicator.setStyleSheet("color: #e74c3c; font-size: 16px; font-weight: bold;")
+                self.status_label.setText("Not ready - Enter Google AI API key")
+                self.status_label.setStyleSheet("color: #e74c3c;")
+
+        elif provider == "Groq":
+            # Check if groq package is installed
+            try:
+                from groq import Groq
+            except ImportError:
+                self.status_indicator.setStyleSheet("color: #e74c3c; font-size: 16px; font-weight: bold;")
+                self.status_label.setText("Package not installed - click Generate to install")
+                self.status_label.setStyleSheet("color: #e74c3c;")
+                return
+
+            api_key = self.api_key_edit.text().strip()
+            if api_key:
+                if api_key.startswith("gsk_"):
+                    self.status_indicator.setStyleSheet("color: #27ae60; font-size: 16px; font-weight: bold;")
+                    self.status_label.setText("Ready - API key configured")
+                    self.status_label.setStyleSheet("color: #27ae60;")
+                else:
+                    self.status_indicator.setStyleSheet("color: #f39c12; font-size: 16px; font-weight: bold;")
+                    self.status_label.setText("Warning - API key format looks incorrect")
+                    self.status_label.setStyleSheet("color: #f39c12;")
+            else:
+                self.status_indicator.setStyleSheet("color: #e74c3c; font-size: 16px; font-weight: bold;")
+                self.status_label.setText("Not ready - Enter Groq API key")
+                self.status_label.setStyleSheet("color: #e74c3c;")
+
     def on_provider_changed(self, provider: str):
         """Update model list when provider changes."""
         self.model_combo.clear()
@@ -958,17 +855,26 @@ class AITemplateGeneratorDialog(QDialog):
                 self.api_key_edit.setText(saved_key)
             elif os.environ.get('ANTHROPIC_API_KEY'):
                 self.api_key_edit.setText(os.environ['ANTHROPIC_API_KEY'])
-        elif provider == "Ollama (Local)":
-            # Try to get available models from Ollama
-            available_models = self._get_ollama_models()
-            if available_models:
-                self.model_combo.addItems(available_models)
-            else:
-                # Fallback to common models if Ollama not running
-                self.model_combo.addItems(["llama3.1", "llama3", "codellama", "mistral", "mixtral", "deepseek-coder"])
-            self.api_key_edit.setEnabled(False)
-            self.api_key_edit.setPlaceholderText("Not needed for local Ollama")
-            self.api_key_edit.clear()
+        elif provider == "Google Gemini":
+            self.model_combo.addItems(["gemini-1.5-pro", "gemini-1.5-flash", "gemini-1.0-pro"])
+            self.api_key_edit.setEnabled(True)
+            self.api_key_edit.setPlaceholderText("Enter Google AI API key")
+            # Try to load from database first, then environment
+            saved_key = self._get_saved_api_key('gemini')
+            if saved_key:
+                self.api_key_edit.setText(saved_key)
+            elif os.environ.get('GOOGLE_API_KEY'):
+                self.api_key_edit.setText(os.environ['GOOGLE_API_KEY'])
+        elif provider == "Groq":
+            self.model_combo.addItems(["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768", "gemma2-9b-it"])
+            self.api_key_edit.setEnabled(True)
+            self.api_key_edit.setPlaceholderText("Enter Groq API key")
+            # Try to load from database first, then environment
+            saved_key = self._get_saved_api_key('groq')
+            if saved_key:
+                self.api_key_edit.setText(saved_key)
+            elif os.environ.get('GROQ_API_KEY'):
+                self.api_key_edit.setText(os.environ['GROQ_API_KEY'])
 
         # Update status indicator after provider change
         self._update_status_indicator()
@@ -1115,7 +1021,7 @@ class AITemplateGeneratorDialog(QDialog):
         self.progress_bar.setFormat(message)
 
     def on_stream_update(self, text: str):
-        """Update preview with streaming text from Ollama."""
+        """Update preview with streaming text."""
         # Show raw streaming text in preview (will be processed on completion)
         self.code_preview.setPlainText(text)
         # Scroll to bottom to show latest content
@@ -1269,8 +1175,16 @@ class AITemplateGeneratorDialog(QDialog):
                     self.model_combo.setCurrentIndex(idx)
                 else:
                     self.model_combo.setCurrentText(default_model)
-        elif current_provider == "Ollama (Local)":
-            default_model = self._get_ai_setting_from_db('ollama_default_model')
+        elif current_provider == "Google Gemini":
+            default_model = self._get_ai_setting_from_db('gemini_default_model')
+            if default_model:
+                idx = self.model_combo.findText(default_model)
+                if idx >= 0:
+                    self.model_combo.setCurrentIndex(idx)
+                else:
+                    self.model_combo.setCurrentText(default_model)
+        elif current_provider == "Groq":
+            default_model = self._get_ai_setting_from_db('groq_default_model')
             if default_model:
                 idx = self.model_combo.findText(default_model)
                 if idx >= 0:
@@ -1279,13 +1193,17 @@ class AITemplateGeneratorDialog(QDialog):
                     self.model_combo.setCurrentText(default_model)
 
         # Load API key - database first, then environment
-        saved_key = self._get_saved_api_key(current_provider.lower().replace(" (local)", "").replace(" ", ""))
+        saved_key = self._get_saved_api_key(current_provider.lower().replace(" ", "").replace("google", ""))
         if saved_key:
             self.api_key_edit.setText(saved_key)
         elif current_provider == "OpenAI" and os.environ.get('OPENAI_API_KEY'):
             self.api_key_edit.setText(os.environ['OPENAI_API_KEY'])
         elif current_provider == "Anthropic" and os.environ.get('ANTHROPIC_API_KEY'):
             self.api_key_edit.setText(os.environ['ANTHROPIC_API_KEY'])
+        elif current_provider == "Google Gemini" and os.environ.get('GOOGLE_API_KEY'):
+            self.api_key_edit.setText(os.environ['GOOGLE_API_KEY'])
+        elif current_provider == "Groq" and os.environ.get('GROQ_API_KEY'):
+            self.api_key_edit.setText(os.environ['GROQ_API_KEY'])
 
     def _get_ai_setting_from_db(self, key: str) -> str:
         """Get AI setting from database."""
@@ -1492,8 +1410,10 @@ If the user asks a question, answer it and provide modified code if applicable."
                 result = self._call_openai(system_msg)
             elif self.provider == "Anthropic":
                 result = self._call_anthropic(system_msg)
-            elif self.provider == "Ollama (Local)":
-                result = self._call_ollama(system_msg)
+            elif self.provider == "Google Gemini":
+                result = self._call_gemini(system_msg)
+            elif self.provider == "Groq":
+                result = self._call_groq(system_msg)
             else:
                 raise ValueError(f"Unknown provider: {self.provider}")
 
@@ -1548,29 +1468,51 @@ If the user asks a question, answer it and provide modified code if applicable."
         )
         return response.content[0].text
 
-    def _call_ollama(self, system_msg: str) -> str:
-        import urllib.request
+    def _call_gemini(self, system_msg: str) -> str:
+        try:
+            import google.generativeai as genai
+        except ImportError:
+            raise ImportError("google-generativeai package not installed")
+
+        genai.configure(api_key=self.api_key)
+        model = genai.GenerativeModel(self.model)
+
+        # Build conversation for Gemini
+        full_prompt = f"{system_msg}\n\n"
+        for msg in self.conversation_history:
+            role = "User" if msg["role"] == "user" else "Assistant"
+            full_prompt += f"{role}: {msg['content']}\n\n"
+        full_prompt += f"User: {self.user_message}"
+
+        response = model.generate_content(
+            full_prompt,
+            generation_config=genai.types.GenerationConfig(
+                max_output_tokens=4000,
+                temperature=0.3
+            )
+        )
+        return response.text
+
+    def _call_groq(self, system_msg: str) -> str:
+        try:
+            from groq import Groq
+        except ImportError:
+            raise ImportError("groq package not installed")
+
+        client = Groq(api_key=self.api_key)
 
         messages = [{"role": "system", "content": system_msg}]
         for msg in self.conversation_history:
             messages.append(msg)
         messages.append({"role": "user", "content": self.user_message})
 
-        data = json.dumps({
-            "model": self.model,
-            "messages": messages,
-            "stream": False
-        }).encode('utf-8')
-
-        req = urllib.request.Request(
-            "http://localhost:11434/api/chat",
-            data=data,
-            headers={'Content-Type': 'application/json'}
+        response = client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            max_tokens=4000,
+            temperature=0.3
         )
-
-        with urllib.request.urlopen(req, timeout=300) as response:
-            result = json.loads(response.read().decode('utf-8'))
-            return result.get('message', {}).get('content', '')
+        return response.choices[0].message.content
 
 
 class AITemplateChatDialog(QDialog):
@@ -1603,7 +1545,7 @@ class AITemplateChatDialog(QDialog):
         # Provider/Model selection for modifications
         header_layout.addWidget(QLabel("Use:"))
         self.provider_combo = QComboBox()
-        self.provider_combo.addItems(["Anthropic", "OpenAI", "Ollama (Local)"])
+        self.provider_combo.addItems(["Anthropic", "OpenAI", "Google Gemini", "Groq"])
         # Set to original provider
         idx = self.provider_combo.findText(provider)
         if idx >= 0:
@@ -1817,8 +1759,10 @@ class AITemplateChatDialog(QDialog):
             self.model_combo.addItems(["gpt-4o", "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo"])
         elif provider == "Anthropic":
             self.model_combo.addItems(["claude-sonnet-4-20250514", "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022"])
-        elif provider == "Ollama (Local)":
-            self.model_combo.addItems(["llama3.1", "llama3", "codellama", "mistral"])
+        elif provider == "Google Gemini":
+            self.model_combo.addItems(["gemini-1.5-pro", "gemini-1.5-flash", "gemini-1.0-pro"])
+        elif provider == "Groq":
+            self.model_combo.addItems(["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768", "gemma2-9b-it"])
 
     def _get_api_key(self, provider: str) -> str:
         """Get API key for the provider."""
@@ -1828,7 +1772,7 @@ class AITemplateChatDialog(QDialog):
             db_path = Path(__file__).parent / "tariffmill.db"
             conn = sqlite3.connect(str(db_path))
             c = conn.cursor()
-            key_name = 'openai' if provider == "OpenAI" else 'anthropic'
+            key_name = {'OpenAI': 'openai', 'Anthropic': 'anthropic', 'Google Gemini': 'gemini', 'Groq': 'groq'}.get(provider, 'openai')
             c.execute("SELECT value FROM app_config WHERE key = ?", (f'api_key_{key_name}',))
             row = c.fetchone()
             conn.close()
@@ -1842,6 +1786,10 @@ class AITemplateChatDialog(QDialog):
             return os.environ.get('OPENAI_API_KEY', '')
         elif provider == "Anthropic":
             return os.environ.get('ANTHROPIC_API_KEY', '')
+        elif provider == "Google Gemini":
+            return os.environ.get('GOOGLE_API_KEY', '')
+        elif provider == "Groq":
+            return os.environ.get('GROQ_API_KEY', '')
         return ""
 
     def load_template(self):
@@ -2106,7 +2054,7 @@ class AITemplateEditorDialog(QDialog):
         # AI Provider selection
         header_layout.addWidget(QLabel("<span style='color: #9cdcfe;'>AI Provider:</span>"))
         self.provider_combo = QComboBox()
-        self.provider_combo.addItems(["Anthropic", "OpenAI", "Ollama (Local)"])
+        self.provider_combo.addItems(["Anthropic", "OpenAI", "Google Gemini", "Groq"])
         self.provider_combo.setFixedWidth(140)
         if self.is_ai_template:
             idx = self.provider_combo.findText(self.metadata.get('provider', ''))
@@ -2353,8 +2301,10 @@ class AITemplateEditorDialog(QDialog):
             self.model_combo.addItems(["gpt-4o", "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo"])
         elif provider == "Anthropic":
             self.model_combo.addItems(["claude-sonnet-4-20250514", "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022"])
-        elif provider == "Ollama (Local)":
-            self.model_combo.addItems(["llama3.1", "llama3", "codellama", "mistral"])
+        elif provider == "Google Gemini":
+            self.model_combo.addItems(["gemini-1.5-pro", "gemini-1.5-flash", "gemini-1.0-pro"])
+        elif provider == "Groq":
+            self.model_combo.addItems(["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768", "gemma2-9b-it"])
 
     def _get_api_key(self, provider: str) -> str:
         """Get API key for the provider."""
@@ -2363,7 +2313,7 @@ class AITemplateEditorDialog(QDialog):
             db_path = Path(__file__).parent / "tariffmill.db"
             conn = sqlite3.connect(str(db_path))
             c = conn.cursor()
-            key_name = 'openai' if provider == "OpenAI" else 'anthropic'
+            key_name = {'OpenAI': 'openai', 'Anthropic': 'anthropic', 'Google Gemini': 'gemini', 'Groq': 'groq'}.get(provider, 'openai')
             c.execute("SELECT value FROM app_config WHERE key = ?", (f'api_key_{key_name}',))
             row = c.fetchone()
             conn.close()
@@ -2376,6 +2326,10 @@ class AITemplateEditorDialog(QDialog):
             return os.environ.get('OPENAI_API_KEY', '')
         elif provider == "Anthropic":
             return os.environ.get('ANTHROPIC_API_KEY', '')
+        elif provider == "Google Gemini":
+            return os.environ.get('GOOGLE_API_KEY', '')
+        elif provider == "Groq":
+            return os.environ.get('GROQ_API_KEY', '')
         return ""
 
     def load_template(self):

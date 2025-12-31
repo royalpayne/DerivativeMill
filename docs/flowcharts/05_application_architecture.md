@@ -6,9 +6,9 @@ This flowchart shows the overall system architecture and component relationships
 flowchart TD
     subgraph UI["User Interface Layer (PyQt5)"]
         A[TariffMill Main Window]
-        A --> B[Process Shipment Tab]
-        A --> C[Parts Master Tab]
-        A --> D[OCRMill Tab]
+        A --> B[Invoice Processing Tab]
+        A --> C[PDF Processing Tab]
+        A --> D[Parts View Tab]
         A --> E[Menu Bar]
         E --> F[Settings]
         E --> G[Configuration]
@@ -17,14 +17,14 @@ flowchart TD
 
     subgraph Business["Business Logic Layer"]
         B --> I[Invoice Processor]
-        C --> J[Parts Manager]
-        D --> K[OCR Engine]
+        C --> J[OCR Engine]
+        D --> K[Parts Manager]
 
         I --> L[Column Mapper]
         I --> M[Value Calculator]
         I --> N[Tariff Classifier]
 
-        K --> O[Template Engine]
+        J --> O[Template Engine]
         O --> P[Template Registry]
     end
 
@@ -32,7 +32,7 @@ flowchart TD
         L --> Q[(SQLite Database)]
         M --> Q
         N --> Q
-        J --> Q
+        K --> Q
         P --> R[Template Files]
 
         Q --> S[parts_master]
@@ -59,9 +59,9 @@ flowchart TD
 | Component | Description |
 |-----------|-------------|
 | Main Window | Primary application window with tabbed interface |
-| Process Shipment | Invoice processing and export functionality |
-| Parts Master | Database management for parts inventory |
-| OCRMill | OCR processing with template system |
+| Invoice Processing | Invoice processing and export functionality (CSV/Excel files) |
+| PDF Processing | OCR processing with AI template system for PDF invoices |
+| Parts View | Database management for parts inventory |
 | Menu Bar | Application settings and configuration |
 
 ### Business Logic Layer

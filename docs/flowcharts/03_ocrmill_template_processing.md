@@ -1,6 +1,6 @@
-# OCRMill Template Processing
+# PDF Processing Template System
 
-This flowchart shows how OCRMill processes invoices using the template system.
+This flowchart shows how the PDF Processing tab processes invoices using the template system.
 
 ```mermaid
 flowchart TD

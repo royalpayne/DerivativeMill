@@ -14,8 +14,8 @@ flowchart TD
 
     subgraph Daily["Daily Workflow"]
         G[Receive Invoice] --> H{File Format?}
-        H -->|PDF| I[Use OCRMill]
-        H -->|CSV/Excel| J[Use Process Shipment]
+        H -->|PDF| I[Use PDF Processing]
+        H -->|CSV/Excel| J[Use Invoice Processing]
 
         I --> K[Select Template]
         K --> L[Extract Data]
@@ -74,7 +74,7 @@ flowchart TD
    - Choose theme (Light/Dark)
 
 3. **Import Parts Data**
-   - Parts Master tab → Import
+   - Parts View tab → Import
    - Select CSV file with parts data
    - Map columns to database fields
    - Import records
@@ -116,11 +116,12 @@ sequenceDiagram
 
 | Task | Location | Steps |
 |------|----------|-------|
-| Process Invoice | Process Shipment tab | Load → Map → Process → Export |
-| Add New Part | Parts Master tab | Right-click → Add Row |
-| Edit Part | Parts Master tab | Double-click cell |
-| Search Parts | Parts Master tab | Use search box or Query Builder |
-| Import Parts | Parts Master tab | File → Import |
+| Process CSV/Excel Invoice | Invoice Processing tab | Load → Map → Process → Export |
+| Process PDF Invoice | PDF Processing tab | Drop PDF → Select Template → Extract → Send to Invoice Processing |
+| Add New Part | Parts View tab | Right-click → Add Row |
+| Edit Part | Parts View tab | Double-click cell |
+| Search Parts | Parts View tab | Use search box or Query Builder |
+| Import Parts | Parts View tab | File → Import |
 | Change Theme | Settings menu | Select Light/Dark |
 | View Logs | Log View menu | View Log |
 

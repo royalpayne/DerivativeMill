@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 from typing import List, Dict, Callable, Optional
 from datetime import datetime
+import time
 
 try:
     import pdfplumber
@@ -71,7 +72,11 @@ class ProcessorEngine:
         self.log_callback(message)
 
     def get_best_template(self, text: str):
-        """Find the best template for the given text."""
+        """Find the best template for the given text.
+
+        Returns:
+            Tuple of (template, confidence_score) or (None, 0.0) if no match
+        """
         best_template = None
         best_score = 0.0
 
@@ -97,7 +102,7 @@ class ProcessorEngine:
         else:
             self.log(f"  No matching template found")
 
-        return best_template
+        return best_template, best_score
 
     def process_pdf(self, pdf_path: Path) -> List[Dict]:
         """
@@ -114,6 +119,7 @@ class ProcessorEngine:
             return []
 
         self.log(f"Processing: {pdf_path.name}")
+        start_time = time.time()
 
         try:
             with pdfplumber.open(pdf_path) as pdf:
@@ -142,9 +148,20 @@ class ProcessorEngine:
                             break
 
                 # Find the best template
-                template = self.get_best_template(full_text)
+                template, confidence_score = self.get_best_template(full_text)
                 if not template:
                     self.log(f"  No matching template for {pdf_path.name}")
+                    # Record failed template match
+                    processing_time_ms = int((time.time() - start_time) * 1000)
+                    self.parts_db.record_template_usage(
+                        template_name="NO_MATCH",
+                        pdf_file=pdf_path.name,
+                        items_extracted=0,
+                        confidence_score=0.0,
+                        processing_time_ms=processing_time_ms,
+                        success=False,
+                        error_message="No matching template found"
+                    )
                     return []
 
                 self.log(f"  Using template: {template.name}")
@@ -159,6 +176,7 @@ class ProcessorEngine:
                 current_invoice = None
                 current_project = None
                 page_buffer = []
+                page_tables = []  # Collect tables from all processed pages
 
                 self.log(f"  PDF has {len(pdf.pages)} page(s)")
 
@@ -204,6 +222,15 @@ class ProcessorEngine:
 
                     self.log(f"  Page {page_idx + 1}: Processing ({len(page_text)} chars)")
 
+                    # Extract tables from page for table-based extraction
+                    try:
+                        tables = page.extract_tables()
+                        if tables:
+                            self.log(f"    Found {len(tables)} table(s) on page")
+                            page_tables.extend(tables)
+                    except Exception as e:
+                        self.log(f"    Table extraction failed: {e}")
+
                     # Debug: Show first 100 chars of page
                     preview = page_text[:100].replace('\n', ' ')
                     self.log(f"    Preview: {preview}...")
@@ -218,7 +245,8 @@ class ProcessorEngine:
                         # Process accumulated pages for previous invoice
                         if page_buffer:
                             buffer_text = "\n".join(page_buffer)
-                            _, _, items = template.extract_all(buffer_text)
+                            # Pass tables for table-based extraction
+                            _, _, items = template.extract_all(buffer_text, tables=page_tables if page_tables else None)
                             for item in items:
                                 item['invoice_number'] = current_invoice
                                 item['project_number'] = current_project
@@ -248,7 +276,10 @@ class ProcessorEngine:
                         current_invoice = template.extract_invoice_number(buffer_text)
                         current_project = template.extract_project_number(buffer_text)
 
-                    _, _, items = template.extract_all(buffer_text)
+                    # Pass tables for table-based extraction
+                    _, _, items = template.extract_all(buffer_text, tables=page_tables if page_tables else None)
+                    if page_tables:
+                        self.log(f"  Passed {len(page_tables)} table(s) to template")
                     self.log(f"  Template extracted {len(items)} line items from buffer")
                     for item in items:
                         # Only set invoice_number if template didn't already provide one
@@ -274,10 +305,34 @@ class ProcessorEngine:
                     total_value = sum(float(item.get('total_price', 0) or 0) for item in inv_items)
                     self.log(f"    - Invoice {inv} (Project {proj}): {len(inv_items)} items, ${total_value:,.2f}")
 
+                # Record successful template usage
+                processing_time_ms = int((time.time() - start_time) * 1000)
+                self.parts_db.record_template_usage(
+                    template_name=template.name,
+                    pdf_file=pdf_path.name,
+                    items_extracted=len(all_items),
+                    confidence_score=confidence_score,
+                    processing_time_ms=processing_time_ms,
+                    success=True
+                )
+
                 return all_items
 
         except Exception as e:
             self.log(f"  Error processing {pdf_path.name}: {e}")
+            # Record error
+            processing_time_ms = int((time.time() - start_time) * 1000)
+            try:
+                self.parts_db.record_template_usage(
+                    template_name=template.name if template else "ERROR",
+                    pdf_file=pdf_path.name,
+                    items_extracted=0,
+                    processing_time_ms=processing_time_ms,
+                    success=False,
+                    error_message=str(e)
+                )
+            except Exception:
+                pass  # Don't fail on stat recording error
             return []
 
     def save_to_csv(self, items: List[Dict], output_folder: Path, pdf_name: str = None) -> List[Path]:

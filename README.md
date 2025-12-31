@@ -13,8 +13,8 @@ TariffMill is a desktop application for import/export businesses, customs broker
 - Preview and edit data before export
 - Split exports by invoice number
 
-### OCRMill - Invoice OCR Processing
-- AI-powered invoice text extraction
+### PDF Processing - Invoice OCR
+- AI-powered PDF invoice text extraction
 - Customizable template system for different invoice formats
 - Automatic field mapping and data extraction
 - Dynamic template discovery and hot-reload
@@ -115,7 +115,7 @@ python Tariffmill/tariffmill.py
 
 - **Import**: Use the Parts Import dialog to bulk import from CSV
 - **Search**: Quick search or use the Query Builder for advanced searches
-- **Edit**: Double-click cells in the Parts Master tab to edit
+- **Edit**: Double-click cells in the Parts View tab to edit
 - **HTS Lookup**: Automatic CBP quantity unit lookup for HTS codes
 
 ### Output Mapping
@@ -165,14 +165,19 @@ Settings are stored in:
 
 ## Version
 
-**Current Version**: v0.94.0
+**Current Version**: v0.96
 
 Version is automatically derived from git tags. See [version.py](Tariffmill/version.py) for details.
 
 ## Recent Changes
 
+### v0.96
+- **Tab Reorganization**: Renamed tabs to Invoice Processing, PDF Processing, and Parts View
+- **Removed Parts History**: Streamlined PDF Processing by removing unused Parts History tab
+- **Documentation Update**: Updated all flowcharts and documentation to reflect current workflow
+
 ### v0.94.0
-- **OCRMill Integration**: AI-powered invoice OCR processing with template system
+- **PDF Processing Integration**: AI-powered invoice OCR processing with template system
 - **Copyright Protection**: Added proprietary license and copyright notices
 - **Dark Theme Improvements**: Enhanced dark theme styling consistency
 - **Result Preview Enhancements**: Improved column layout and value rounding fixes

@@ -578,6 +578,390 @@ class LicenseManager:
 
 
 # ==============================================================================
+# Authentication System
+# ==============================================================================
+# Remote user authentication with GitHub-hosted user list, password hashing,
+# role-based access control, and offline credential caching.
+
+# GitHub API URL for private repo access (use API endpoint, not raw.githubusercontent)
+AUTH_CONFIG_URL = "https://api.github.com/repos/process-logic-labs/TariffMill_Config/contents/auth_users.json"
+# Personal Access Token for private repo (read-only, contents scope)
+# Set TARIFFMILL_GITHUB_TOKEN environment variable or use local auth_users.json
+# Generate at: https://github.com/settings/tokens/new?scopes=repo
+AUTH_GITHUB_TOKEN = os.environ.get('TARIFFMILL_GITHUB_TOKEN', '')
+
+class AuthenticationManager:
+    """Manages user authentication with Windows domain auth, remote user list, and local caching."""
+
+    # Allowed Windows domains for auto-authentication
+    ALLOWED_DOMAINS = ['DMUSA']
+
+    def __init__(self, db_path):
+        self.db_path = db_path
+        self.current_user = None
+        self.current_role = None
+        self.current_name = None
+        self.is_authenticated = False
+        self.auth_method = None  # 'windows' or 'password'
+
+    def try_windows_auth(self) -> tuple:
+        """Try to authenticate using Windows domain credentials.
+
+        Returns (success: bool, message: str, user_data: dict or None)
+        """
+        import os
+
+        try:
+            username = os.environ.get('USERNAME', '')
+            domain = os.environ.get('USERDOMAIN', '')
+
+            if not username or not domain:
+                return False, "Windows credentials not available", None
+
+            # Check if domain is in allowed list
+            if domain.upper() not in [d.upper() for d in self.ALLOWED_DOMAINS]:
+                logger.debug(f"Domain {domain} not in allowed list")
+                return False, f"Domain {domain} not authorized for auto-login", None
+
+            # Build the Windows user identifier
+            windows_user = f"{domain.upper()}\\{username.lower()}"
+
+            # Fetch remote users
+            remote_users = self._fetch_remote_users()
+            if remote_users is None:
+                return False, "Could not fetch user list", None
+
+            # Look for Windows user in user list (case-insensitive)
+            for user_key, user_data in remote_users.items():
+                # Check if this is a Windows-style user (contains backslash)
+                if '\\' in user_key:
+                    if user_key.upper() == windows_user.upper():
+                        # Windows user found
+                        role = user_data.get('role', 'user')
+                        name = user_data.get('name', username)
+
+                        self.current_user = user_key
+                        self.current_role = role
+                        self.current_name = name
+                        self.is_authenticated = True
+                        self.auth_method = 'windows'
+
+                        # Store last login
+                        self._set_config('last_auth_user', user_key)
+                        self._set_config('last_auth_time', datetime.now().isoformat())
+                        self._set_config('last_auth_method', 'windows')
+
+                        logger.info(f"Windows auth successful for {windows_user}")
+                        return True, f"Welcome, {name}!", user_data
+
+            # Windows user not in allowed list
+            logger.debug(f"Windows user {windows_user} not found in user list")
+            return False, f"Windows user {windows_user} not authorized", None
+
+        except Exception as e:
+            logger.warning(f"Windows auth failed: {e}")
+            return False, str(e), None
+
+    def get_windows_user_info(self) -> tuple:
+        """Get current Windows domain and username.
+
+        Returns (domain, username) or (None, None) if not available.
+        """
+        import os
+        domain = os.environ.get('USERDOMAIN', '')
+        username = os.environ.get('USERNAME', '')
+        return (domain, username) if domain and username else (None, None)
+
+    def _hash_password(self, password: str, salt: str = None) -> tuple:
+        """Hash a password using SHA-256 with salt.
+
+        Returns (hash, salt) tuple.
+        """
+        import hashlib
+        import secrets
+
+        if salt is None:
+            salt = secrets.token_hex(16)
+
+        # Combine password with salt and hash
+        salted = f"{salt}{password}".encode('utf-8')
+        password_hash = hashlib.sha256(salted).hexdigest()
+
+        return password_hash, salt
+
+    def _verify_password(self, password: str, stored_hash: str, salt: str) -> bool:
+        """Verify a password against stored hash and salt."""
+        computed_hash, _ = self._hash_password(password, salt)
+        return computed_hash == stored_hash
+
+    def _get_config(self, key: str) -> str:
+        """Get a value from app_config table."""
+        try:
+            conn = sqlite3.connect(str(self.db_path))
+            c = conn.cursor()
+            c.execute("SELECT value FROM app_config WHERE key = ?", (key,))
+            row = c.fetchone()
+            conn.close()
+            return row[0] if row else None
+        except Exception as e:
+            logger.warning(f"Failed to get auth config {key}: {e}")
+            return None
+
+    def _set_config(self, key: str, value: str):
+        """Set a value in app_config table."""
+        try:
+            conn = sqlite3.connect(str(self.db_path))
+            c = conn.cursor()
+            c.execute("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)", (key, str(value)))
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to set auth config {key}: {e}")
+            return False
+
+    def _fetch_remote_users(self) -> dict:
+        """Fetch user list from remote GitHub-hosted JSON (supports private repos).
+
+        Expected JSON format:
+        {
+            "users": {
+                "admin@processlogiclabs.com": {
+                    "password_hash": "abc123...",
+                    "salt": "def456...",
+                    "role": "admin",
+                    "name": "Admin User"
+                },
+                "customer@example.com": {
+                    "password_hash": "ghi789...",
+                    "salt": "jkl012...",
+                    "role": "user",
+                    "name": "Customer Name"
+                }
+            }
+        }
+        """
+        import urllib.request
+        import urllib.error
+        import base64
+
+        try:
+            headers = {
+                'User-Agent': 'TariffMill/1.0',
+                'Accept': 'application/vnd.github.v3+json',
+                'Cache-Control': 'no-cache'
+            }
+
+            # Add authorization header if token is configured
+            if AUTH_GITHUB_TOKEN and not AUTH_GITHUB_TOKEN.startswith('ghp_REPLACE'):
+                headers['Authorization'] = f'token {AUTH_GITHUB_TOKEN}'
+
+            req = urllib.request.Request(AUTH_CONFIG_URL, headers=headers)
+
+            with urllib.request.urlopen(req, timeout=10) as response:
+                api_response = json.loads(response.read().decode('utf-8'))
+
+                # GitHub API returns content as base64 encoded
+                if 'content' in api_response:
+                    # Decode base64 content from GitHub API response
+                    content_b64 = api_response['content'].replace('\n', '')
+                    content_bytes = base64.b64decode(content_b64)
+                    data = json.loads(content_bytes.decode('utf-8'))
+                else:
+                    # Direct JSON response (for raw URLs)
+                    data = api_response
+
+                logger.info("Successfully fetched remote user list")
+                return data.get('users', {})
+
+        except urllib.error.HTTPError as e:
+            if e.code == 401:
+                logger.warning("GitHub authentication failed - check AUTH_GITHUB_TOKEN")
+            elif e.code == 404:
+                logger.warning("Auth config file not found in GitHub repo")
+            else:
+                logger.warning(f"GitHub API error: {e.code} {e.reason}")
+            return self._load_local_auth_file()
+        except urllib.error.URLError as e:
+            logger.warning(f"Failed to fetch remote user list: {e}")
+            return self._load_local_auth_file()
+        except json.JSONDecodeError as e:
+            logger.warning(f"Invalid auth users JSON: {e}")
+            return self._load_local_auth_file()
+        except Exception as e:
+            logger.warning(f"Error fetching remote user list: {e}")
+            return self._load_local_auth_file()
+
+    def _load_local_auth_file(self) -> dict:
+        """Load user list from local auth_users.json file as fallback.
+
+        This is used when remote fetch fails or for development/testing.
+        """
+        try:
+            # Check in project root directory (parent of Tariffmill folder)
+            local_auth_path = Path(__file__).parent.parent / 'auth_users.json'
+            if local_auth_path.exists():
+                with open(local_auth_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    logger.info(f"Loaded local auth file: {local_auth_path}")
+                    return data.get('users', {})
+
+            # Also check in same directory as script
+            alt_path = Path(__file__).parent / 'auth_users.json'
+            if alt_path.exists():
+                with open(alt_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    logger.info(f"Loaded local auth file: {alt_path}")
+                    return data.get('users', {})
+
+            logger.warning("No local auth_users.json found")
+            return None
+        except Exception as e:
+            logger.warning(f"Failed to load local auth file: {e}")
+            return None
+
+    def _cache_credentials(self, email: str, password_hash: str, salt: str, role: str, name: str):
+        """Cache user credentials locally for offline authentication."""
+        try:
+            cached_users = self._get_config('cached_auth_users')
+            if cached_users:
+                users = json.loads(cached_users)
+            else:
+                users = {}
+
+            users[email.lower()] = {
+                'password_hash': password_hash,
+                'salt': salt,
+                'role': role,
+                'name': name,
+                'cached_at': datetime.now().isoformat()
+            }
+
+            self._set_config('cached_auth_users', json.dumps(users))
+            logger.debug(f"Cached credentials for {email}")
+        except Exception as e:
+            logger.warning(f"Failed to cache credentials: {e}")
+
+    def _get_cached_user(self, email: str) -> dict:
+        """Get cached user credentials for offline authentication."""
+        try:
+            cached_users = self._get_config('cached_auth_users')
+            if cached_users:
+                users = json.loads(cached_users)
+                return users.get(email.lower())
+        except Exception as e:
+            logger.warning(f"Failed to get cached user: {e}")
+        return None
+
+    def authenticate(self, email: str, password: str) -> tuple:
+        """Authenticate user against remote user list or cached credentials.
+
+        Returns (success: bool, message: str, role: str or None)
+        """
+        email = email.strip().lower()
+        if not email or not password:
+            return False, "Email and password are required", None
+
+        # Try remote authentication first
+        remote_users = self._fetch_remote_users()
+
+        if remote_users is not None:
+            # Online authentication
+            user_data = None
+            for user_email, data in remote_users.items():
+                if user_email.lower() == email:
+                    user_data = data
+                    break
+
+            if user_data:
+                stored_hash = user_data.get('password_hash', '')
+                salt = user_data.get('salt', '')
+                role = user_data.get('role', 'user')
+                name = user_data.get('name', email)
+
+                if self._verify_password(password, stored_hash, salt):
+                    # Cache credentials for offline use
+                    self._cache_credentials(email, stored_hash, salt, role, name)
+
+                    self.current_user = email
+                    self.current_role = role
+                    self.current_name = name
+                    self.is_authenticated = True
+                    self.auth_method = 'password'
+
+                    # Store last login
+                    self._set_config('last_auth_user', email)
+                    self._set_config('last_auth_time', datetime.now().isoformat())
+                    self._set_config('last_auth_method', 'password')
+
+                    logger.info(f"User {email} authenticated successfully (online)")
+                    return True, f"Welcome, {name}!", role
+                else:
+                    return False, "Invalid email or password", None
+            else:
+                return False, "User not found", None
+
+        else:
+            # Offline authentication - use cached credentials
+            logger.info("Remote auth unavailable, trying cached credentials")
+            cached_user = self._get_cached_user(email)
+
+            if cached_user:
+                stored_hash = cached_user.get('password_hash', '')
+                salt = cached_user.get('salt', '')
+                role = cached_user.get('role', 'user')
+                name = cached_user.get('name', email)
+
+                if self._verify_password(password, stored_hash, salt):
+                    self.current_user = email
+                    self.current_role = role
+                    self.is_authenticated = True
+
+                    self._set_config('last_auth_user', email)
+                    self._set_config('last_auth_time', datetime.now().isoformat())
+
+                    logger.info(f"User {email} authenticated successfully (offline/cached)")
+                    return True, f"Welcome, {name}! (Offline mode)", role
+                else:
+                    return False, "Invalid email or password", None
+            else:
+                return False, "Cannot authenticate: No network connection and no cached credentials", None
+
+    def logout(self):
+        """Clear current authentication state."""
+        self.current_user = None
+        self.current_role = None
+        self.is_authenticated = False
+        logger.info("User logged out")
+
+    def is_admin(self) -> bool:
+        """Check if current user has admin role."""
+        return self.is_authenticated and self.current_role == 'admin'
+
+    def get_last_user(self) -> str:
+        """Get the last authenticated user email for convenience."""
+        return self._get_config('last_auth_user') or ''
+
+    @staticmethod
+    def generate_password_hash(password: str) -> dict:
+        """Utility to generate password hash for adding new users.
+
+        Returns dict with 'password_hash' and 'salt' to add to auth_users.json
+        """
+        import hashlib
+        import secrets
+
+        salt = secrets.token_hex(16)
+        salted = f"{salt}{password}".encode('utf-8')
+        password_hash = hashlib.sha256(salted).hexdigest()
+
+        return {
+            'password_hash': password_hash,
+            'salt': salt
+        }
+
+
+# ==============================================================================
 # Self-Update Mechanism
 # ==============================================================================
 # Detects if the exe is running from a different location (e.g., Downloads)
@@ -2612,6 +2996,198 @@ class ChatMessageInput(QPlainTextEdit):
 
 
 # ----------------------------------------------------------------------
+# LOGIN DIALOG
+# ----------------------------------------------------------------------
+class LoginDialog(QDialog):
+    """Login dialog for user authentication."""
+
+    def __init__(self, auth_manager: AuthenticationManager, parent=None):
+        super().__init__(parent)
+        self.auth_manager = auth_manager
+        self.authenticated = False
+        self.user_role = None
+
+        self.setWindowTitle(f"{APP_NAME} - Login")
+        self.setFixedSize(400, 360)
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+
+        # Set dark background for the dialog
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #2d2d2d;
+            }
+        """)
+
+        self._setup_ui()
+
+    def _setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+        layout.setContentsMargins(30, 30, 30, 30)
+
+        # Logo/Title
+        title_label = QLabel(f"Welcome to {APP_NAME}")
+        title_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #ffffff;")
+        title_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title_label)
+
+        subtitle_label = QLabel("Please sign in to continue")
+        subtitle_label.setStyleSheet("font-size: 12px; color: #a0a0a0; margin-bottom: 10px;")
+        subtitle_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(subtitle_label)
+
+        # Email field
+        email_label = QLabel("Email:")
+        email_label.setStyleSheet("font-weight: bold; color: #e0e0e0;")
+        layout.addWidget(email_label)
+
+        self.email_input = QLineEdit()
+        self.email_input.setPlaceholderText("your@email.com")
+        self.email_input.setMinimumHeight(40)
+        self.email_input.setStyleSheet("""
+            QLineEdit {
+                padding: 8px 10px;
+                border: 1px solid #555;
+                border-radius: 5px;
+                font-size: 14px;
+                background-color: #3c3c3c;
+                color: #ffffff;
+            }
+            QLineEdit:focus {
+                border-color: #0078d4;
+            }
+        """)
+        # Pre-fill with last user
+        last_user = self.auth_manager.get_last_user()
+        if last_user:
+            self.email_input.setText(last_user)
+        layout.addWidget(self.email_input)
+
+        # Password field
+        password_label = QLabel("Password:")
+        password_label.setStyleSheet("font-weight: bold; color: #e0e0e0;")
+        layout.addWidget(password_label)
+
+        self.password_input = QLineEdit()
+        self.password_input.setPlaceholderText("Enter your password")
+        self.password_input.setEchoMode(QLineEdit.Password)
+        self.password_input.setMinimumHeight(40)
+        self.password_input.setStyleSheet("""
+            QLineEdit {
+                padding: 8px 10px;
+                border: 1px solid #555;
+                border-radius: 5px;
+                font-size: 14px;
+                background-color: #3c3c3c;
+                color: #ffffff;
+            }
+            QLineEdit:focus {
+                border-color: #0078d4;
+            }
+        """)
+        self.password_input.returnPressed.connect(self._on_login)
+        layout.addWidget(self.password_input)
+
+        # Error message label (hidden by default)
+        self.error_label = QLabel("")
+        self.error_label.setStyleSheet("color: #dc3545; font-size: 12px;")
+        self.error_label.setAlignment(Qt.AlignCenter)
+        self.error_label.setVisible(False)
+        layout.addWidget(self.error_label)
+
+        layout.addStretch()
+
+        # Buttons
+        btn_layout = QHBoxLayout()
+
+        self.login_btn = QPushButton("Sign In")
+        self.login_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #0078d4;
+                color: white;
+                padding: 10px 30px;
+                border: none;
+                border-radius: 5px;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #106ebe;
+            }
+            QPushButton:pressed {
+                background-color: #005a9e;
+            }
+        """)
+        self.login_btn.clicked.connect(self._on_login)
+        btn_layout.addWidget(self.login_btn)
+
+        self.cancel_btn = QPushButton("Exit")
+        self.cancel_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #6c757d;
+                color: white;
+                padding: 10px 30px;
+                border: none;
+                border-radius: 5px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #5a6268;
+            }
+        """)
+        self.cancel_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(self.cancel_btn)
+
+        layout.addLayout(btn_layout)
+
+        # Focus on password if email is pre-filled, otherwise on email
+        if last_user:
+            self.password_input.setFocus()
+        else:
+            self.email_input.setFocus()
+
+    def _on_login(self):
+        """Handle login button click."""
+        email = self.email_input.text().strip()
+        password = self.password_input.text()
+
+        if not email:
+            self._show_error("Please enter your email address")
+            self.email_input.setFocus()
+            return
+
+        if not password:
+            self._show_error("Please enter your password")
+            self.password_input.setFocus()
+            return
+
+        # Disable buttons during authentication
+        self.login_btn.setEnabled(False)
+        self.login_btn.setText("Signing in...")
+        QApplication.processEvents()
+
+        try:
+            success, message, role = self.auth_manager.authenticate(email, password)
+
+            if success:
+                self.authenticated = True
+                self.user_role = role
+                self.accept()
+            else:
+                self._show_error(message)
+                self.password_input.clear()
+                self.password_input.setFocus()
+        finally:
+            self.login_btn.setEnabled(True)
+            self.login_btn.setText("Sign In")
+
+    def _show_error(self, message: str):
+        """Display error message."""
+        self.error_label.setText(message)
+        self.error_label.setVisible(True)
+
+
+# ----------------------------------------------------------------------
 # VISUAL PDF PATTERN TRAINER WITH DRAWING CANVAS
 # ----------------------------------------------------------------------
 class TariffMill(QMainWindow):
@@ -2745,7 +3321,20 @@ class TariffMill(QMainWindow):
         settings_action = QAction(gear_icon, "Settings", self)
         settings_action.triggered.connect(self.show_settings_dialog)
         settings_menu.addAction(settings_action)
-        
+
+        # Add Account menu
+        account_menu = menubar.addMenu("Account")
+        # Show current user
+        self.account_user_action = QAction("", self)
+        self.account_user_action.setEnabled(False)
+        account_menu.addAction(self.account_user_action)
+        account_menu.addSeparator()
+        # Sign out action
+        signout_icon = self.style().standardIcon(QStyle.SP_DialogCloseButton)
+        signout_action = QAction(signout_icon, "Sign Out", self)
+        signout_action.triggered.connect(self._sign_out)
+        account_menu.addAction(signout_action)
+
         # Add Log View menu
         log_menu = menubar.addMenu("Log View")
         log_icon = self.style().standardIcon(QStyle.SP_FileDialogContentsView)
@@ -2834,9 +3423,9 @@ class TariffMill(QMainWindow):
         self.tab_config = QWidget()
         self.tab_actions = QWidget()
         self.tab_ocrmill = QWidget()
-        self.tabs.addTab(self.tab_process, "Process Shipment")
+        self.tabs.addTab(self.tab_process, "Invoice Processing")
+        self.tabs.addTab(self.tab_ocrmill, "PDF Processing")
         self.tabs.addTab(self.tab_master, "Parts View")
-        self.tabs.addTab(self.tab_ocrmill, "OCRMill")
         # Invoice Mapping, Output Mapping, and Parts Import moved to Configuration menu
         # Customs Config and Section 232 Actions moved to References menu
         
@@ -2961,10 +3550,10 @@ class TariffMill(QMainWindow):
             return
 
         # Map tab index to setup method
-        # Tab order: 0=Process, 1=Parts View, 2=OCRMill
+        # Tab order: 0=Invoice Processing, 1=PDF Processing, 2=Parts View
         tab_setup_methods = {
-            1: self.setup_master_tab,
-            2: self.setup_ocrmill_tab
+            1: self.setup_ocrmill_tab,
+            2: self.setup_master_tab
             # Invoice Mapping, Output Mapping, and Parts Import moved to Configuration menu
             # Customs Config and Section 232 Actions moved to References menu
         }
@@ -3807,10 +4396,11 @@ class TariffMill(QMainWindow):
         tabs.addTab(tab_import, "Parts Import")
         tabs.addTab(tab_mid_management, "MID Management")
 
-        # Add Billing tab
-        tab_billing = QWidget()
-        self.setup_billing_tab(tab_billing)
-        tabs.addTab(tab_billing, "Billing")
+        # Add Billing tab (only visible to admin)
+        if self._is_billing_admin():
+            tab_billing = QWidget()
+            self.setup_billing_tab(tab_billing)
+            tabs.addTab(tab_billing, "Billing")
 
         # Add AI Agents tab
         tab_ai_agents = QWidget()
@@ -5316,6 +5906,10 @@ class TariffMill(QMainWindow):
         # Refresh AI template tab styling for new theme
         if hasattr(self, 'ocrmill_templates_list'):
             self._update_ai_template_styles()
+
+        # Refresh Statistics tab styling for new theme
+        if hasattr(self, 'stats_summary_frame'):
+            self._update_stats_tab_styles()
 
         # Update logo for theme
         self.update_logo_for_theme(is_dark)
@@ -10309,6 +10903,130 @@ class TariffMill(QMainWindow):
             logger.warning(f"Failed to set billing setting: {e}")
             return False
 
+    def _is_billing_admin(self) -> bool:
+        """Check if the current user has admin role (can access billing settings)."""
+        try:
+            # Primary check: Use authentication manager
+            if hasattr(self, 'auth_manager') and self.auth_manager:
+                return self.auth_manager.is_admin()
+
+            # Fallback for legacy: check specific admin email
+            ADMIN_EMAIL = "admin@processlogiclabs.com"
+            if hasattr(self, 'license_mgr') and self.license_mgr:
+                if self.license_mgr.license_email:
+                    return self.license_mgr.license_email.lower() == ADMIN_EMAIL.lower()
+        except Exception as e:
+            logger.warning(f"Error checking billing admin status: {e}")
+        return False
+
+    def _update_account_menu(self):
+        """Update the Account menu to show current user."""
+        if hasattr(self, 'account_user_action') and hasattr(self, 'auth_manager'):
+            if self.auth_manager and self.auth_manager.is_authenticated:
+                user_display = self.auth_manager.current_user
+                role_badge = " [Admin]" if self.auth_manager.current_role == 'admin' else ""
+                self.account_user_action.setText(f"Signed in as: {user_display}{role_badge}")
+            else:
+                self.account_user_action.setText("Not signed in")
+
+    def _sign_out(self):
+        """Sign out current user and show login dialog."""
+        if hasattr(self, 'auth_manager') and self.auth_manager:
+            # Confirm sign out
+            reply = QMessageBox.question(
+                self, "Sign Out",
+                "Are you sure you want to sign out?\n\nThe application will close and you'll need to sign in again.",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+
+            if reply == QMessageBox.Yes:
+                self.auth_manager.logout()
+                logger.info("User signed out, closing application")
+                # Close the application - user will need to restart and log in again
+                self.close()
+
+    def _fetch_remote_billing_config(self, customer_email: str) -> dict:
+        """Fetch billing configuration from remote GitHub-hosted JSON.
+
+        Expected JSON format at GitHub:
+        {
+            "customers": {
+                "customer@example.com": {
+                    "rate_per_file": "2.50",
+                    "billing_enabled": true,
+                    "admin_email": "admin@processlogiclabs.com"
+                }
+            },
+            "default": {
+                "rate_per_file": "0",
+                "billing_enabled": false
+            }
+        }
+        """
+        import urllib.request
+        import urllib.error
+
+        BILLING_CONFIG_URL = "https://raw.githubusercontent.com/ProcessLogicLabs/TariffMill/main/billing_config.json"
+
+        try:
+            req = urllib.request.Request(
+                BILLING_CONFIG_URL,
+                headers={'User-Agent': 'TariffMill/1.0'}
+            )
+            with urllib.request.urlopen(req, timeout=10) as response:
+                data = json.loads(response.read().decode('utf-8'))
+
+                # Look up customer-specific config
+                customers = data.get('customers', {})
+                if customer_email and customer_email.lower() in {k.lower() for k in customers}:
+                    # Find the matching key (case-insensitive)
+                    for key in customers:
+                        if key.lower() == customer_email.lower():
+                            logger.info(f"Found remote billing config for {customer_email}")
+                            return customers[key]
+
+                # Return default config if no customer-specific config found
+                return data.get('default', {})
+
+        except urllib.error.URLError as e:
+            logger.warning(f"Failed to fetch remote billing config: {e}")
+            return {}
+        except json.JSONDecodeError as e:
+            logger.warning(f"Invalid billing config JSON: {e}")
+            return {}
+        except Exception as e:
+            logger.warning(f"Error fetching remote billing config: {e}")
+            return {}
+
+    def _sync_billing_from_remote(self):
+        """Sync billing settings from remote configuration."""
+        # Get customer email - prefer license email, fallback to stored customer email
+        customer_email = None
+        if hasattr(self, 'license_mgr') and self.license_mgr and self.license_mgr.license_email:
+            customer_email = self.license_mgr.license_email
+        else:
+            customer_email = self.get_billing_setting('customer_email', '')
+
+        if not customer_email:
+            logger.debug("No customer email configured, skipping remote billing sync")
+            return
+
+        remote_config = self._fetch_remote_billing_config(customer_email)
+        if remote_config:
+            # Apply remote settings (admin can override locally)
+            if 'rate_per_file' in remote_config:
+                self.set_billing_setting('rate_per_file', str(remote_config['rate_per_file']))
+                logger.info(f"Updated billing rate from remote: {remote_config['rate_per_file']}")
+            if 'admin_email' in remote_config:
+                self.set_billing_setting('admin_email', remote_config['admin_email'])
+            if 'billing_enabled' in remote_config:
+                self.set_billing_setting('billing_enabled', str(remote_config['billing_enabled']))
+
+            # Store last sync time
+            self.set_billing_setting('last_remote_sync', datetime.now().isoformat())
+            logger.info("Billing settings synced from remote configuration")
+
     def setup_billing_tab(self, tab_widget):
         """Setup the Billing tab for the Configuration dialog."""
         layout = QVBoxLayout(tab_widget)
@@ -10397,6 +11115,50 @@ class TariffMill(QMainWindow):
         btn_layout.addWidget(btn_save)
 
         layout.addLayout(btn_layout)
+
+        # User Management Section
+        user_group = QGroupBox("User Management")
+        user_layout = QVBoxLayout()
+
+        # User table
+        self.user_table = QTableWidget()
+        self.user_table.setColumnCount(4)
+        self.user_table.setHorizontalHeaderLabels(["Email", "Name", "Role", "Actions"])
+        self.user_table.horizontalHeader().setStretchLastSection(True)
+        self.user_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.user_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.user_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.user_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.user_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.user_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.user_table.setMinimumHeight(150)
+        user_layout.addWidget(self.user_table)
+
+        # User management buttons
+        user_btn_layout = QHBoxLayout()
+
+        btn_refresh_users = QPushButton("Refresh")
+        btn_refresh_users.clicked.connect(self._refresh_user_list)
+        user_btn_layout.addWidget(btn_refresh_users)
+
+        btn_add_user = QPushButton("Add User")
+        btn_add_user.setStyleSheet(self.get_button_style("primary"))
+        btn_add_user.clicked.connect(self._add_user_dialog)
+        user_btn_layout.addWidget(btn_add_user)
+
+        user_btn_layout.addStretch()
+
+        user_info = QLabel("<small>Changes are synced to the private GitHub config repository.</small>")
+        user_info.setStyleSheet("color:#666;")
+        user_btn_layout.addWidget(user_info)
+
+        user_layout.addLayout(user_btn_layout)
+        user_group.setLayout(user_layout)
+        layout.addWidget(user_group)
+
+        # Load users on tab creation
+        QTimer.singleShot(100, self._refresh_user_list)
+
         layout.addStretch()
 
     def _save_billing_settings_from_tab(self):
@@ -10420,9 +11182,457 @@ class TariffMill(QMainWindow):
             self.billing_admin_email.text()
         )
 
+    # =========================================================================
+    # User Management Methods
+    # =========================================================================
+
+    def _refresh_user_list(self):
+        """Refresh the user list table from local auth file."""
+        if not hasattr(self, 'user_table'):
+            return
+
+        self.user_table.setRowCount(0)
+
+        # Load from local auth file
+        users = self._load_auth_users()
+        if not users:
+            return
+
+        for user_key, data in users.items():
+            row = self.user_table.rowCount()
+            self.user_table.insertRow(row)
+
+            # Determine if this is a Windows user
+            is_windows_user = '\\' in user_key or data.get('auth_type') == 'windows'
+
+            # User identifier (email or DOMAIN\username)
+            user_item = QTableWidgetItem(user_key)
+            if is_windows_user:
+                user_item.setToolTip("Windows Domain User - Auto-login enabled")
+                user_item.setForeground(QColor("#28a745"))  # Green for Windows users
+            self.user_table.setItem(row, 0, user_item)
+
+            # Name
+            self.user_table.setItem(row, 1, QTableWidgetItem(data.get('name', '')))
+
+            # Role with auth type indicator
+            role_text = data.get('role', 'user')
+            if is_windows_user:
+                role_text += " (Win)"
+            role_item = QTableWidgetItem(role_text)
+            if data.get('role') == 'admin':
+                role_item.setForeground(QColor("#0078d4"))
+            self.user_table.setItem(row, 2, role_item)
+
+            # Actions buttons
+            actions_widget = QWidget()
+            actions_layout = QHBoxLayout(actions_widget)
+            actions_layout.setContentsMargins(2, 2, 2, 2)
+            actions_layout.setSpacing(4)
+
+            btn_edit = QPushButton("Edit")
+            btn_edit.setFixedWidth(55)
+            btn_edit.clicked.connect(lambda checked, e=user_key: self._edit_user_dialog(e))
+            actions_layout.addWidget(btn_edit)
+
+            # Only show Reset PW for password-based users
+            if not is_windows_user:
+                btn_reset = QPushButton("Reset PW")
+                btn_reset.setFixedWidth(80)
+                btn_reset.clicked.connect(lambda checked, e=user_key: self._reset_user_password(e))
+                actions_layout.addWidget(btn_reset)
+
+            # Don't allow deleting yourself
+            if hasattr(self, 'auth_manager') and self.auth_manager:
+                current_user = self.auth_manager.current_user or ''
+                if user_key.lower() != current_user.lower():
+                    btn_delete = QPushButton("Del")
+                    btn_delete.setFixedWidth(45)
+                    btn_delete.setStyleSheet("color: #dc3545;")
+                    btn_delete.clicked.connect(lambda checked, e=user_key: self._delete_user(e))
+                    actions_layout.addWidget(btn_delete)
+
+            self.user_table.setCellWidget(row, 3, actions_widget)
+
+    def _load_auth_users(self) -> dict:
+        """Load users from local auth_users.json file."""
+        try:
+            # Check in project root directory
+            local_auth_path = Path(__file__).parent.parent / 'auth_users.json'
+            if local_auth_path.exists():
+                with open(local_auth_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    return data.get('users', {})
+
+            # Also check in TariffMill_Config repo
+            config_path = Path.home() / 'TariffMill_Config' / 'auth_users.json'
+            if config_path.exists():
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    return data.get('users', {})
+
+            return {}
+        except Exception as e:
+            logger.warning(f"Failed to load auth users: {e}")
+            return {}
+
+    def _save_auth_users(self, users: dict) -> bool:
+        """Save users to local auth_users.json file and sync to GitHub."""
+        try:
+            data = {
+                "_comment": "TariffMill User Authentication Configuration - DO NOT COMMIT REAL PASSWORDS TO PUBLIC REPO",
+                "_instructions": "To add users: 1) Run scripts/generate_password_hash.py 2) Add the output to the users object below",
+                "users": users
+            }
+
+            # Save to local file first
+            local_auth_path = Path(__file__).parent.parent / 'auth_users.json'
+            with open(local_auth_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=4)
+
+            # Also save to TariffMill_Config repo if it exists
+            config_path = Path.home() / 'TariffMill_Config' / 'auth_users.json'
+            if config_path.parent.exists():
+                with open(config_path, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, indent=4)
+
+                # Git commit and push
+                self._sync_auth_to_github(config_path)
+
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save auth users: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to save users: {e}")
+            return False
+
+    def _sync_auth_to_github(self, config_path: Path):
+        """Sync auth_users.json to GitHub repository."""
+        import subprocess
+        try:
+            repo_dir = config_path.parent
+            # Git add, commit, push
+            subprocess.run(['git', 'add', 'auth_users.json'], cwd=repo_dir, check=True, capture_output=True)
+            subprocess.run(['git', 'commit', '-m', 'Update user credentials'], cwd=repo_dir, check=True, capture_output=True)
+            subprocess.run(['git', 'push'], cwd=repo_dir, check=True, capture_output=True)
+            logger.info("Successfully synced auth_users.json to GitHub")
+        except subprocess.CalledProcessError as e:
+            # Commit might fail if no changes - that's OK
+            if b'nothing to commit' not in e.stderr:
+                logger.warning(f"Failed to sync to GitHub: {e.stderr.decode() if e.stderr else e}")
+        except Exception as e:
+            logger.warning(f"Failed to sync to GitHub: {e}")
+
+    def _generate_password_hash(self, password: str) -> tuple:
+        """Generate a salted SHA-256 hash for a password."""
+        import hashlib
+        import secrets
+        salt = secrets.token_hex(16)
+        salted = f"{salt}{password}".encode('utf-8')
+        password_hash = hashlib.sha256(salted).hexdigest()
+        return password_hash, salt
+
+    def _add_user_dialog(self):
+        """Show dialog to add a new user."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Add User")
+        dialog.setFixedSize(450, 340)
+
+        layout = QVBoxLayout(dialog)
+        form = QFormLayout()
+
+        # User type selection
+        user_type_combo = QComboBox()
+        user_type_combo.addItems(["Email/Password User", "Windows Domain User"])
+        form.addRow("User Type:", user_type_combo)
+
+        # Email/Username input
+        email_input = QLineEdit()
+        email_input.setPlaceholderText("user@example.com")
+        email_label = QLabel("Email:")
+        form.addRow(email_label, email_input)
+
+        # Windows domain input (for domain users)
+        domain_input = QLineEdit()
+        domain_input.setPlaceholderText("DMUSA")
+        domain_input.setText("DMUSA")
+        domain_label = QLabel("Domain:")
+        domain_input.setVisible(False)
+        domain_label.setVisible(False)
+        form.addRow(domain_label, domain_input)
+
+        name_input = QLineEdit()
+        name_input.setPlaceholderText("Display Name")
+        form.addRow("Name:", name_input)
+
+        role_combo = QComboBox()
+        role_combo.addItems(["user", "admin"])
+        form.addRow("Role:", role_combo)
+
+        password_input = QLineEdit()
+        password_input.setEchoMode(QLineEdit.Password)
+        password_input.setPlaceholderText("Password")
+        password_label = QLabel("Password:")
+        form.addRow(password_label, password_input)
+
+        confirm_input = QLineEdit()
+        confirm_input.setEchoMode(QLineEdit.Password)
+        confirm_input.setPlaceholderText("Confirm Password")
+        confirm_label = QLabel("Confirm:")
+        form.addRow(confirm_label, confirm_input)
+
+        # Toggle password fields visibility based on user type
+        def on_user_type_changed(index):
+            is_windows = index == 1
+            domain_input.setVisible(is_windows)
+            domain_label.setVisible(is_windows)
+            password_input.setVisible(not is_windows)
+            password_label.setVisible(not is_windows)
+            confirm_input.setVisible(not is_windows)
+            confirm_label.setVisible(not is_windows)
+            if is_windows:
+                email_label.setText("Username:")
+                email_input.setPlaceholderText("username (without domain)")
+            else:
+                email_label.setText("Email:")
+                email_input.setPlaceholderText("user@example.com")
+
+        user_type_combo.currentIndexChanged.connect(on_user_type_changed)
+
+        layout.addLayout(form)
+
+        # Buttons
+        btn_layout = QHBoxLayout()
+        btn_cancel = QPushButton("Cancel")
+        btn_cancel.clicked.connect(dialog.reject)
+        btn_layout.addWidget(btn_cancel)
+
+        btn_save = QPushButton("Add User")
+        btn_save.setStyleSheet(self.get_button_style("primary"))
+        btn_layout.addWidget(btn_save)
+
+        layout.addLayout(btn_layout)
+
+        def save_user():
+            is_windows_user = user_type_combo.currentIndex() == 1
+            name = name_input.text().strip()
+            role = role_combo.currentText()
+
+            if is_windows_user:
+                # Windows domain user
+                username = email_input.text().strip().lower()
+                domain = domain_input.text().strip().upper()
+
+                if not username:
+                    QMessageBox.warning(dialog, "Error", "Please enter a username.")
+                    return
+                if not domain:
+                    QMessageBox.warning(dialog, "Error", "Please enter a domain.")
+                    return
+
+                # Build Windows user key: DOMAIN\username
+                user_key = f"{domain}\\{username}"
+                name = name or username
+
+                users = self._load_auth_users()
+                if user_key in users or user_key.upper() in [k.upper() for k in users.keys()]:
+                    QMessageBox.warning(dialog, "Error", "User already exists.")
+                    return
+
+                # Windows users don't need password hash
+                users[user_key] = {
+                    "role": role,
+                    "name": name,
+                    "auth_type": "windows"
+                }
+
+                if self._save_auth_users(users):
+                    QMessageBox.information(dialog, "Success", f"Windows user {user_key} added successfully.\n\nThis user will auto-login when logged into the {domain} domain.")
+                    dialog.accept()
+                    self._refresh_user_list()
+            else:
+                # Email/password user
+                email = email_input.text().strip().lower()
+                password = password_input.text()
+                confirm = confirm_input.text()
+                name = name or email
+
+                if not email or '@' not in email:
+                    QMessageBox.warning(dialog, "Error", "Please enter a valid email address.")
+                    return
+                if not password:
+                    QMessageBox.warning(dialog, "Error", "Please enter a password.")
+                    return
+                if password != confirm:
+                    QMessageBox.warning(dialog, "Error", "Passwords do not match.")
+                    return
+
+                users = self._load_auth_users()
+                if email in users:
+                    QMessageBox.warning(dialog, "Error", "User already exists.")
+                    return
+
+                password_hash, salt = self._generate_password_hash(password)
+                users[email] = {
+                    "password_hash": password_hash,
+                    "salt": salt,
+                    "role": role,
+                    "name": name,
+                    "auth_type": "password"
+                }
+
+                if self._save_auth_users(users):
+                    QMessageBox.information(dialog, "Success", f"User {email} added successfully.")
+                    dialog.accept()
+                    self._refresh_user_list()
+
+        btn_save.clicked.connect(save_user)
+        dialog.exec_()
+
+    def _edit_user_dialog(self, email: str):
+        """Show dialog to edit a user."""
+        users = self._load_auth_users()
+        if email not in users:
+            QMessageBox.warning(self, "Error", "User not found.")
+            return
+
+        user_data = users[email]
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Edit User: {email}")
+        dialog.setFixedSize(400, 200)
+
+        layout = QVBoxLayout(dialog)
+        form = QFormLayout()
+
+        email_label = QLabel(email)
+        email_label.setStyleSheet("font-weight: bold;")
+        form.addRow("Email:", email_label)
+
+        name_input = QLineEdit()
+        name_input.setText(user_data.get('name', ''))
+        form.addRow("Name:", name_input)
+
+        role_combo = QComboBox()
+        role_combo.addItems(["user", "admin"])
+        role_combo.setCurrentText(user_data.get('role', 'user'))
+        form.addRow("Role:", role_combo)
+
+        layout.addLayout(form)
+
+        # Buttons
+        btn_layout = QHBoxLayout()
+        btn_cancel = QPushButton("Cancel")
+        btn_cancel.clicked.connect(dialog.reject)
+        btn_layout.addWidget(btn_cancel)
+
+        btn_save = QPushButton("Save Changes")
+        btn_save.setStyleSheet(self.get_button_style("primary"))
+        btn_layout.addWidget(btn_save)
+
+        layout.addLayout(btn_layout)
+
+        def save_changes():
+            users[email]['name'] = name_input.text().strip() or email
+            users[email]['role'] = role_combo.currentText()
+
+            if self._save_auth_users(users):
+                QMessageBox.information(dialog, "Success", "User updated successfully.")
+                dialog.accept()
+                self._refresh_user_list()
+
+        btn_save.clicked.connect(save_changes)
+        dialog.exec_()
+
+    def _reset_user_password(self, email: str):
+        """Reset a user's password."""
+        users = self._load_auth_users()
+        if email not in users:
+            QMessageBox.warning(self, "Error", "User not found.")
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Reset Password: {email}")
+        dialog.setFixedSize(350, 180)
+
+        layout = QVBoxLayout(dialog)
+        form = QFormLayout()
+
+        password_input = QLineEdit()
+        password_input.setEchoMode(QLineEdit.Password)
+        password_input.setPlaceholderText("New Password")
+        form.addRow("New Password:", password_input)
+
+        confirm_input = QLineEdit()
+        confirm_input.setEchoMode(QLineEdit.Password)
+        confirm_input.setPlaceholderText("Confirm Password")
+        form.addRow("Confirm:", confirm_input)
+
+        layout.addLayout(form)
+
+        # Buttons
+        btn_layout = QHBoxLayout()
+        btn_cancel = QPushButton("Cancel")
+        btn_cancel.clicked.connect(dialog.reject)
+        btn_layout.addWidget(btn_cancel)
+
+        btn_save = QPushButton("Reset Password")
+        btn_save.setStyleSheet(self.get_button_style("primary"))
+        btn_layout.addWidget(btn_save)
+
+        layout.addLayout(btn_layout)
+
+        def do_reset():
+            password = password_input.text()
+            confirm = confirm_input.text()
+
+            if not password:
+                QMessageBox.warning(dialog, "Error", "Please enter a password.")
+                return
+            if password != confirm:
+                QMessageBox.warning(dialog, "Error", "Passwords do not match.")
+                return
+
+            password_hash, salt = self._generate_password_hash(password)
+            users[email]['password_hash'] = password_hash
+            users[email]['salt'] = salt
+
+            if self._save_auth_users(users):
+                QMessageBox.information(dialog, "Success", f"Password for {email} has been reset.")
+                dialog.accept()
+
+        btn_save.clicked.connect(do_reset)
+        dialog.exec_()
+
+    def _delete_user(self, email: str):
+        """Delete a user after confirmation."""
+        reply = QMessageBox.question(
+            self, "Confirm Delete",
+            f"Are you sure you want to delete user:\n{email}?\n\nThis cannot be undone.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+
+        if reply == QMessageBox.Yes:
+            users = self._load_auth_users()
+            if email in users:
+                del users[email]
+                if self._save_auth_users(users):
+                    QMessageBox.information(self, "Success", f"User {email} deleted.")
+                    self._refresh_user_list()
+
     def setup_ai_agents_tab(self, tab_widget):
         """Setup the AI Agents tab for the Configuration dialog."""
-        layout = QVBoxLayout(tab_widget)
+        main_layout = QVBoxLayout(tab_widget)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Create scroll area for the content
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.NoFrame)
+
+        # Create container widget for scroll area
+        scroll_content = QWidget()
+        layout = QVBoxLayout(scroll_content)
 
         # Title
         title = QLabel("<h2>AI Agent Configuration</h2>")
@@ -10439,6 +11649,19 @@ class TariffMill(QMainWindow):
         # OpenAI Configuration
         openai_group = QGroupBox("OpenAI")
         openai_layout = QFormLayout()
+
+        # Package status row
+        openai_pkg_layout = QHBoxLayout()
+        self.openai_pkg_indicator = QLabel("●")
+        self.openai_pkg_label = QLabel("Checking...")
+        openai_pkg_layout.addWidget(self.openai_pkg_indicator)
+        openai_pkg_layout.addWidget(self.openai_pkg_label)
+        openai_pkg_layout.addStretch()
+        self.btn_install_openai = QPushButton("Install Package")
+        self.btn_install_openai.clicked.connect(lambda: self._install_ai_package('openai'))
+        self.btn_install_openai.setVisible(False)
+        openai_pkg_layout.addWidget(self.btn_install_openai)
+        openai_layout.addRow("Package:", openai_pkg_layout)
 
         self.ai_openai_api_key = QLineEdit()
         self.ai_openai_api_key.setEchoMode(QLineEdit.Password)
@@ -10480,6 +11703,19 @@ class TariffMill(QMainWindow):
         anthropic_group = QGroupBox("Anthropic (Claude)")
         anthropic_layout = QFormLayout()
 
+        # Package status row
+        anthropic_pkg_layout = QHBoxLayout()
+        self.anthropic_pkg_indicator = QLabel("●")
+        self.anthropic_pkg_label = QLabel("Checking...")
+        anthropic_pkg_layout.addWidget(self.anthropic_pkg_indicator)
+        anthropic_pkg_layout.addWidget(self.anthropic_pkg_label)
+        anthropic_pkg_layout.addStretch()
+        self.btn_install_anthropic = QPushButton("Install Package")
+        self.btn_install_anthropic.clicked.connect(lambda: self._install_ai_package('anthropic'))
+        self.btn_install_anthropic.setVisible(False)
+        anthropic_pkg_layout.addWidget(self.btn_install_anthropic)
+        anthropic_layout.addRow("Package:", anthropic_pkg_layout)
+
         self.ai_anthropic_api_key = QLineEdit()
         self.ai_anthropic_api_key.setEchoMode(QLineEdit.Password)
         self.ai_anthropic_api_key.setPlaceholderText("sk-ant-...")
@@ -10516,59 +11752,118 @@ class TariffMill(QMainWindow):
         anthropic_group.setLayout(anthropic_layout)
         layout.addWidget(anthropic_group)
 
-        # Ollama (Local) Configuration
-        ollama_group = QGroupBox("Ollama (Local)")
-        ollama_layout = QFormLayout()
+        # Google Gemini Configuration
+        gemini_group = QGroupBox("Google Gemini")
+        gemini_layout = QFormLayout()
 
-        self.ai_ollama_url = QLineEdit()
-        self.ai_ollama_url.setPlaceholderText("http://localhost:11434")
-        saved_ollama_url = self._get_ai_setting('ollama_url')
-        self.ai_ollama_url.setText(saved_ollama_url if saved_ollama_url else "http://localhost:11434")
-        ollama_layout.addRow("Ollama URL:", self.ai_ollama_url)
+        # Package status row
+        gemini_pkg_layout = QHBoxLayout()
+        self.gemini_pkg_indicator = QLabel("●")
+        self.gemini_pkg_label = QLabel("Checking...")
+        gemini_pkg_layout.addWidget(self.gemini_pkg_indicator)
+        gemini_pkg_layout.addWidget(self.gemini_pkg_label)
+        gemini_pkg_layout.addStretch()
+        self.btn_install_gemini = QPushButton("Install Package")
+        self.btn_install_gemini.clicked.connect(lambda: self._install_ai_package('google-generativeai'))
+        self.btn_install_gemini.setVisible(False)
+        gemini_pkg_layout.addWidget(self.btn_install_gemini)
+        gemini_layout.addRow("Package:", gemini_pkg_layout)
 
-        self.ai_ollama_model = QComboBox()
-        self.ai_ollama_model.setEditable(True)
-        # Try to get available models from Ollama
-        ollama_models = self._get_ollama_models_list()
-        if ollama_models:
-            self.ai_ollama_model.addItems(ollama_models)
-        else:
-            self.ai_ollama_model.addItems(["llama3.1", "llama3", "codellama", "mistral", "mixtral", "deepseek-coder", "phi3"])
-        saved_ollama_model = self._get_ai_setting('ollama_default_model')
-        if saved_ollama_model:
-            idx = self.ai_ollama_model.findText(saved_ollama_model)
+        self.ai_gemini_api_key = QLineEdit()
+        self.ai_gemini_api_key.setEchoMode(QLineEdit.Password)
+        self.ai_gemini_api_key.setPlaceholderText("AI...")
+        saved_gemini_key = self._get_ai_api_key('gemini')
+        if saved_gemini_key:
+            self.ai_gemini_api_key.setText(saved_gemini_key)
+        gemini_layout.addRow("API Key:", self.ai_gemini_api_key)
+
+        self.ai_gemini_model = QComboBox()
+        self.ai_gemini_model.setEditable(True)
+        self.ai_gemini_model.addItems(["gemini-1.5-pro", "gemini-1.5-flash", "gemini-1.0-pro"])
+        saved_gemini_model = self._get_ai_setting('gemini_default_model')
+        if saved_gemini_model:
+            idx = self.ai_gemini_model.findText(saved_gemini_model)
             if idx >= 0:
-                self.ai_ollama_model.setCurrentIndex(idx)
+                self.ai_gemini_model.setCurrentIndex(idx)
             else:
-                self.ai_ollama_model.setCurrentText(saved_ollama_model)
-        ollama_layout.addRow("Default Model:", self.ai_ollama_model)
+                self.ai_gemini_model.setCurrentText(saved_gemini_model)
+        gemini_layout.addRow("Default Model:", self.ai_gemini_model)
 
-        # Ollama status indicator
-        ollama_status_layout = QHBoxLayout()
-        self.ollama_status_indicator = QLabel("●")
-        self.ollama_status_label = QLabel("Not checked")
-        ollama_status_layout.addWidget(self.ollama_status_indicator)
-        ollama_status_layout.addWidget(self.ollama_status_label)
-        ollama_status_layout.addStretch()
+        # Gemini status indicator
+        gemini_status_layout = QHBoxLayout()
+        self.gemini_status_indicator = QLabel("●")
+        self.gemini_status_label = QLabel("Not configured")
+        gemini_status_layout.addWidget(self.gemini_status_indicator)
+        gemini_status_layout.addWidget(self.gemini_status_label)
+        gemini_status_layout.addStretch()
 
-        btn_refresh_ollama = QPushButton("Refresh Models")
-        btn_refresh_ollama.clicked.connect(self._refresh_ollama_models)
-        ollama_status_layout.addWidget(btn_refresh_ollama)
+        btn_test_gemini = QPushButton("Test Connection")
+        btn_test_gemini.clicked.connect(lambda: self._test_ai_connection('gemini'))
+        gemini_status_layout.addWidget(btn_test_gemini)
+        gemini_layout.addRow("Status:", gemini_status_layout)
 
-        btn_test_ollama = QPushButton("Test Connection")
-        btn_test_ollama.clicked.connect(lambda: self._test_ai_connection('ollama'))
-        ollama_status_layout.addWidget(btn_test_ollama)
-        ollama_layout.addRow("Status:", ollama_status_layout)
+        gemini_group.setLayout(gemini_layout)
+        layout.addWidget(gemini_group)
 
-        ollama_group.setLayout(ollama_layout)
-        layout.addWidget(ollama_group)
+        # Groq Configuration
+        groq_group = QGroupBox("Groq")
+        groq_layout = QFormLayout()
+
+        # Package status row
+        groq_pkg_layout = QHBoxLayout()
+        self.groq_pkg_indicator = QLabel("●")
+        self.groq_pkg_label = QLabel("Checking...")
+        groq_pkg_layout.addWidget(self.groq_pkg_indicator)
+        groq_pkg_layout.addWidget(self.groq_pkg_label)
+        groq_pkg_layout.addStretch()
+        self.btn_install_groq = QPushButton("Install Package")
+        self.btn_install_groq.clicked.connect(lambda: self._install_ai_package('groq'))
+        self.btn_install_groq.setVisible(False)
+        groq_pkg_layout.addWidget(self.btn_install_groq)
+        groq_layout.addRow("Package:", groq_pkg_layout)
+
+        self.ai_groq_api_key = QLineEdit()
+        self.ai_groq_api_key.setEchoMode(QLineEdit.Password)
+        self.ai_groq_api_key.setPlaceholderText("gsk_...")
+        saved_groq_key = self._get_ai_api_key('groq')
+        if saved_groq_key:
+            self.ai_groq_api_key.setText(saved_groq_key)
+        groq_layout.addRow("API Key:", self.ai_groq_api_key)
+
+        self.ai_groq_model = QComboBox()
+        self.ai_groq_model.setEditable(True)
+        self.ai_groq_model.addItems(["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768", "gemma2-9b-it"])
+        saved_groq_model = self._get_ai_setting('groq_default_model')
+        if saved_groq_model:
+            idx = self.ai_groq_model.findText(saved_groq_model)
+            if idx >= 0:
+                self.ai_groq_model.setCurrentIndex(idx)
+            else:
+                self.ai_groq_model.setCurrentText(saved_groq_model)
+        groq_layout.addRow("Default Model:", self.ai_groq_model)
+
+        # Groq status indicator
+        groq_status_layout = QHBoxLayout()
+        self.groq_status_indicator = QLabel("●")
+        self.groq_status_label = QLabel("Not configured")
+        groq_status_layout.addWidget(self.groq_status_indicator)
+        groq_status_layout.addWidget(self.groq_status_label)
+        groq_status_layout.addStretch()
+
+        btn_test_groq = QPushButton("Test Connection")
+        btn_test_groq.clicked.connect(lambda: self._test_ai_connection('groq'))
+        groq_status_layout.addWidget(btn_test_groq)
+        groq_layout.addRow("Status:", groq_status_layout)
+
+        groq_group.setLayout(groq_layout)
+        layout.addWidget(groq_group)
 
         # Default Provider Selection
         default_group = QGroupBox("Default Settings")
         default_layout = QFormLayout()
 
         self.ai_default_provider = QComboBox()
-        self.ai_default_provider.addItems(["OpenAI", "Anthropic", "Ollama (Local)"])
+        self.ai_default_provider.addItems(["OpenAI", "Anthropic", "Google Gemini", "Groq"])
         saved_default_provider = self._get_ai_setting('default_provider')
         if saved_default_provider:
             idx = self.ai_default_provider.findText(saved_default_provider)
@@ -10591,8 +11886,13 @@ class TariffMill(QMainWindow):
         layout.addLayout(btn_layout)
         layout.addStretch()
 
+        # Set the scroll content and add to main layout
+        scroll_area.setWidget(scroll_content)
+        main_layout.addWidget(scroll_area)
+
         # Update status indicators
         self._update_ai_status_indicators()
+        self._update_package_indicators()
 
     def _get_ai_api_key(self, provider: str) -> str:
         """Get saved AI API key from database."""
@@ -10650,35 +11950,6 @@ class TariffMill(QMainWindow):
         except Exception as e:
             logger.error(f"Failed to save AI setting: {e}")
 
-    def _get_ollama_models_list(self) -> list:
-        """Get list of available Ollama models."""
-        try:
-            import urllib.request
-            import json
-            url = self._get_ai_setting('ollama_url') or "http://localhost:11434"
-            request = urllib.request.Request(f"{url}/api/tags", method='GET')
-            request.add_header('Content-Type', 'application/json')
-            with urllib.request.urlopen(request, timeout=5) as response:
-                data = json.loads(response.read().decode())
-                return [model['name'] for model in data.get('models', [])]
-        except Exception:
-            return []
-
-    def _refresh_ollama_models(self):
-        """Refresh the Ollama models list."""
-        models = self._get_ollama_models_list()
-        if models:
-            current = self.ai_ollama_model.currentText()
-            self.ai_ollama_model.clear()
-            self.ai_ollama_model.addItems(models)
-            # Restore selection if still available
-            idx = self.ai_ollama_model.findText(current)
-            if idx >= 0:
-                self.ai_ollama_model.setCurrentIndex(idx)
-            QMessageBox.information(self, "Ollama Models", f"Found {len(models)} models:\n" + "\n".join(models[:10]))
-        else:
-            QMessageBox.warning(self, "Ollama", "Could not connect to Ollama or no models found.\n\nMake sure Ollama is running.")
-
     def _test_ai_connection(self, provider: str):
         """Test connection to AI provider."""
         try:
@@ -10722,19 +11993,50 @@ class TariffMill(QMainWindow):
                     QMessageBox.warning(self, "Invalid Key Format",
                         "Anthropic API keys should start with 'sk-ant-'")
 
-            elif provider == 'ollama':
-                url = self.ai_ollama_url.text().strip() or "http://localhost:11434"
+            elif provider == 'gemini':
+                api_key = self.ai_gemini_api_key.text().strip()
+                if not api_key:
+                    QMessageBox.warning(self, "Test Failed", "Please enter a Google AI API key.")
+                    return
+                # Test with a simple API call to list models
                 import urllib.request
                 import json
-                request = urllib.request.Request(f"{url}/api/tags", method='GET')
-                with urllib.request.urlopen(request, timeout=5) as response:
+                request = urllib.request.Request(
+                    f"https://generativelanguage.googleapis.com/v1/models?key={api_key}",
+                    headers={'Content-Type': 'application/json'}
+                )
+                with urllib.request.urlopen(request, timeout=10) as response:
                     data = json.loads(response.read().decode())
-                    models = data.get('models', [])
+                    model_count = len(data.get('models', []))
                     QMessageBox.information(self, "Connection Successful",
-                        f"Successfully connected to Ollama at {url}.\n{len(models)} models available.")
-                    self.ollama_status_indicator.setStyleSheet("color: #27ae60; font-size: 16px; font-weight: bold;")
-                    self.ollama_status_label.setText(f"Connected - {len(models)} models")
-                    self.ollama_status_label.setStyleSheet("color: #27ae60;")
+                        f"Successfully connected to Google AI API.\n{model_count} models available.")
+                    self.gemini_status_indicator.setStyleSheet("color: #27ae60; font-size: 16px; font-weight: bold;")
+                    self.gemini_status_label.setText("Connected")
+                    self.gemini_status_label.setStyleSheet("color: #27ae60;")
+
+            elif provider == 'groq':
+                api_key = self.ai_groq_api_key.text().strip()
+                if not api_key:
+                    QMessageBox.warning(self, "Test Failed", "Please enter a Groq API key.")
+                    return
+                # Test with a simple API call to list models
+                import urllib.request
+                import json
+                request = urllib.request.Request(
+                    "https://api.groq.com/openai/v1/models",
+                    headers={
+                        'Authorization': f'Bearer {api_key}',
+                        'Content-Type': 'application/json'
+                    }
+                )
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    data = json.loads(response.read().decode())
+                    model_count = len(data.get('data', []))
+                    QMessageBox.information(self, "Connection Successful",
+                        f"Successfully connected to Groq API.\n{model_count} models available.")
+                    self.groq_status_indicator.setStyleSheet("color: #27ae60; font-size: 16px; font-weight: bold;")
+                    self.groq_status_label.setText("Connected")
+                    self.groq_status_label.setStyleSheet("color: #27ae60;")
 
         except urllib.error.HTTPError as e:
             QMessageBox.warning(self, "Connection Failed", f"HTTP Error: {e.code}\n{e.reason}")
@@ -10756,10 +12058,14 @@ class TariffMill(QMainWindow):
             self.anthropic_status_indicator.setStyleSheet("color: #e74c3c; font-size: 16px; font-weight: bold;")
             self.anthropic_status_label.setText("Connection failed")
             self.anthropic_status_label.setStyleSheet("color: #e74c3c;")
-        elif provider == 'ollama':
-            self.ollama_status_indicator.setStyleSheet("color: #e74c3c; font-size: 16px; font-weight: bold;")
-            self.ollama_status_label.setText("Connection failed")
-            self.ollama_status_label.setStyleSheet("color: #e74c3c;")
+        elif provider == 'gemini':
+            self.gemini_status_indicator.setStyleSheet("color: #e74c3c; font-size: 16px; font-weight: bold;")
+            self.gemini_status_label.setText("Connection failed")
+            self.gemini_status_label.setStyleSheet("color: #e74c3c;")
+        elif provider == 'groq':
+            self.groq_status_indicator.setStyleSheet("color: #e74c3c; font-size: 16px; font-weight: bold;")
+            self.groq_status_label.setText("Connection failed")
+            self.groq_status_label.setStyleSheet("color: #e74c3c;")
 
     def _update_ai_status_indicators(self):
         """Update all AI status indicators based on current configuration."""
@@ -10793,30 +12099,49 @@ class TariffMill(QMainWindow):
             self.anthropic_status_label.setText("Not configured")
             self.anthropic_status_label.setStyleSheet("color: #95a5a6;")
 
-        # Ollama - check if running
-        models = self._get_ollama_models_list()
-        if models:
-            self.ollama_status_indicator.setStyleSheet("color: #27ae60; font-size: 16px; font-weight: bold;")
-            self.ollama_status_label.setText(f"Running - {len(models)} models available")
-            self.ollama_status_label.setStyleSheet("color: #27ae60;")
+        # Google Gemini
+        gemini_key = self.ai_gemini_api_key.text().strip()
+        if gemini_key and gemini_key.startswith('AI'):
+            self.gemini_status_indicator.setStyleSheet("color: #f39c12; font-size: 16px; font-weight: bold;")
+            self.gemini_status_label.setText("Key configured - test to verify")
+            self.gemini_status_label.setStyleSheet("color: #f39c12;")
+        elif gemini_key:
+            self.gemini_status_indicator.setStyleSheet("color: #f39c12; font-size: 16px; font-weight: bold;")
+            self.gemini_status_label.setText("Key configured - test to verify")
+            self.gemini_status_label.setStyleSheet("color: #f39c12;")
         else:
-            self.ollama_status_indicator.setStyleSheet("color: #95a5a6; font-size: 16px; font-weight: bold;")
-            self.ollama_status_label.setText("Not running or not reachable")
-            self.ollama_status_label.setStyleSheet("color: #95a5a6;")
+            self.gemini_status_indicator.setStyleSheet("color: #95a5a6; font-size: 16px; font-weight: bold;")
+            self.gemini_status_label.setText("Not configured")
+            self.gemini_status_label.setStyleSheet("color: #95a5a6;")
+
+        # Groq
+        groq_key = self.ai_groq_api_key.text().strip()
+        if groq_key and groq_key.startswith('gsk_'):
+            self.groq_status_indicator.setStyleSheet("color: #f39c12; font-size: 16px; font-weight: bold;")
+            self.groq_status_label.setText("Key configured - test to verify")
+            self.groq_status_label.setStyleSheet("color: #f39c12;")
+        elif groq_key:
+            self.groq_status_indicator.setStyleSheet("color: #e74c3c; font-size: 16px; font-weight: bold;")
+            self.groq_status_label.setText("Invalid key format (should start with gsk_)")
+            self.groq_status_label.setStyleSheet("color: #e74c3c;")
+        else:
+            self.groq_status_indicator.setStyleSheet("color: #95a5a6; font-size: 16px; font-weight: bold;")
+            self.groq_status_label.setText("Not configured")
+            self.groq_status_label.setStyleSheet("color: #95a5a6;")
 
     def _save_ai_settings(self):
         """Save all AI settings from the Configuration dialog tab."""
         # Save API keys
         self._save_ai_api_key('openai', self.ai_openai_api_key.text().strip())
         self._save_ai_api_key('anthropic', self.ai_anthropic_api_key.text().strip())
+        self._save_ai_api_key('gemini', self.ai_gemini_api_key.text().strip())
+        self._save_ai_api_key('groq', self.ai_groq_api_key.text().strip())
 
         # Save default models
         self._save_ai_setting('openai_default_model', self.ai_openai_model.currentText())
         self._save_ai_setting('anthropic_default_model', self.ai_anthropic_model.currentText())
-        self._save_ai_setting('ollama_default_model', self.ai_ollama_model.currentText())
-
-        # Save Ollama URL
-        self._save_ai_setting('ollama_url', self.ai_ollama_url.text().strip())
+        self._save_ai_setting('gemini_default_model', self.ai_gemini_model.currentText())
+        self._save_ai_setting('groq_default_model', self.ai_groq_model.currentText())
 
         # Save default provider
         self._save_ai_setting('default_provider', self.ai_default_provider.currentText())
@@ -10825,6 +12150,118 @@ class TariffMill(QMainWindow):
 
         # Update status indicators
         self._update_ai_status_indicators()
+
+    def _update_package_indicators(self):
+        """Update package availability indicators for all AI providers."""
+        packages = {
+            'openai': ('openai', self.openai_pkg_indicator, self.openai_pkg_label, self.btn_install_openai),
+            'anthropic': ('anthropic', self.anthropic_pkg_indicator, self.anthropic_pkg_label, self.btn_install_anthropic),
+            'gemini': ('google-generativeai', self.gemini_pkg_indicator, self.gemini_pkg_label, self.btn_install_gemini),
+            'groq': ('groq', self.groq_pkg_indicator, self.groq_pkg_label, self.btn_install_groq),
+        }
+
+        for provider, (pkg_name, indicator, label, btn) in packages.items():
+            try:
+                if provider == 'openai':
+                    import openai
+                    version = getattr(openai, '__version__', 'installed')
+                    indicator.setStyleSheet("color: #27ae60; font-size: 16px; font-weight: bold;")
+                    label.setText(f"openai v{version} installed")
+                    label.setStyleSheet("color: #27ae60;")
+                    btn.setVisible(False)
+                elif provider == 'anthropic':
+                    import anthropic
+                    version = getattr(anthropic, '__version__', 'installed')
+                    indicator.setStyleSheet("color: #27ae60; font-size: 16px; font-weight: bold;")
+                    label.setText(f"anthropic v{version} installed")
+                    label.setStyleSheet("color: #27ae60;")
+                    btn.setVisible(False)
+                elif provider == 'gemini':
+                    import google.generativeai as genai
+                    indicator.setStyleSheet("color: #27ae60; font-size: 16px; font-weight: bold;")
+                    label.setText("google-generativeai installed")
+                    label.setStyleSheet("color: #27ae60;")
+                    btn.setVisible(False)
+                elif provider == 'groq':
+                    from groq import Groq
+                    indicator.setStyleSheet("color: #27ae60; font-size: 16px; font-weight: bold;")
+                    label.setText("groq installed")
+                    label.setStyleSheet("color: #27ae60;")
+                    btn.setVisible(False)
+            except ImportError:
+                indicator.setStyleSheet("color: #e74c3c; font-size: 16px; font-weight: bold;")
+                label.setText(f"{pkg_name} not installed")
+                label.setStyleSheet("color: #e74c3c;")
+                btn.setVisible(True)
+
+    def _install_ai_package(self, package_name: str):
+        """Install an AI package using pip."""
+        reply = QMessageBox.question(
+            self,
+            "Install Package",
+            f"Do you want to install the '{package_name}' package?\n\n"
+            f"This will run: pip install {package_name}",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes
+        )
+
+        if reply != QMessageBox.Yes:
+            return
+
+        # Create progress dialog
+        progress = QProgressDialog(f"Installing {package_name}...", None, 0, 0, self)
+        progress.setWindowTitle("Installing Package")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.show()
+        QApplication.processEvents()
+
+        try:
+            import subprocess
+            import sys
+
+            # Run pip install
+            result = subprocess.run(
+                [sys.executable, '-m', 'pip', 'install', package_name],
+                capture_output=True,
+                text=True,
+                timeout=120
+            )
+
+            progress.close()
+
+            if result.returncode == 0:
+                QMessageBox.information(
+                    self,
+                    "Installation Complete",
+                    f"Successfully installed '{package_name}'.\n\n"
+                    "Please restart the application to use this provider."
+                )
+                # Update indicators
+                self._update_package_indicators()
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Installation Failed",
+                    f"Failed to install '{package_name}'.\n\n"
+                    f"Error: {result.stderr[:500] if result.stderr else 'Unknown error'}"
+                )
+        except subprocess.TimeoutExpired:
+            progress.close()
+            QMessageBox.warning(
+                self,
+                "Installation Timeout",
+                f"Installation of '{package_name}' timed out.\n"
+                "Please try installing manually using:\n"
+                f"pip install {package_name}"
+            )
+        except Exception as e:
+            progress.close()
+            QMessageBox.warning(
+                self,
+                "Installation Error",
+                f"An error occurred during installation:\n{str(e)}"
+            )
 
     def show_billing_settings_dialog(self):
         """Show dialog to configure billing settings."""
@@ -11947,6 +13384,10 @@ EXPORT DETAILS
         self.ocrmill_preview_table.setAlternatingRowColors(True)
         self.ocrmill_preview_table.verticalHeader().setDefaultSectionSize(22)
         self.ocrmill_preview_table.verticalHeader().setFixedWidth(30)
+        # Enable edit tracking for learning from corrections
+        self.ocrmill_preview_table.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed)
+        self.ocrmill_preview_table.itemChanged.connect(self._on_ocrmill_item_changed)
+        self._ocrmill_editing = False  # Flag to prevent recursive signals during population
         preview_layout.addWidget(self.ocrmill_preview_table)
 
         preview_group.setLayout(preview_layout)
@@ -11967,54 +13408,13 @@ EXPORT DETAILS
 
         self.ocrmill_tabs.addTab(processing_widget, "Invoice Processing")
 
-        # ===== TAB 2: PARTS HISTORY =====
-        history_widget = QWidget()
-        history_layout = QVBoxLayout(history_widget)
-
-        # Search/filter bar
-        filter_layout = QHBoxLayout()
-        filter_layout.addWidget(QLabel("Search:"))
-        self.ocrmill_history_search = QLineEdit()
-        self.ocrmill_history_search.setPlaceholderText("Part number, invoice, or project...")
-        self.ocrmill_history_search.textChanged.connect(self.ocrmill_filter_history)
-        filter_layout.addWidget(self.ocrmill_history_search)
-
-        refresh_history_btn = QPushButton("Refresh")
-        refresh_history_btn.clicked.connect(self.ocrmill_refresh_history)
-        filter_layout.addWidget(refresh_history_btn)
-
-        history_layout.addLayout(filter_layout)
-
-        # History table
-        self.ocrmill_history_table = QTableWidget()
-        self.ocrmill_history_table.setColumnCount(10)
-        self.ocrmill_history_table.setHorizontalHeaderLabels([
-            "Part Number", "Invoice", "Project", "Quantity", "Total Price",
-            "HTS Code", "MID", "Country", "Processed Date", "Source File"
-        ])
-        self.ocrmill_history_table.horizontalHeader().setStretchLastSection(True)
-        self.ocrmill_history_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.ocrmill_history_table.setAlternatingRowColors(True)
-        history_layout.addWidget(self.ocrmill_history_table, 1)
-
-        # History buttons
-        history_btn_layout = QHBoxLayout()
-        export_history_btn = QPushButton("Export Selected to CSV")
-        export_history_btn.clicked.connect(self.ocrmill_export_history)
-        history_btn_layout.addWidget(export_history_btn)
-
-        load_to_process_btn = QPushButton("Load in Process Shipment")
-        load_to_process_btn.clicked.connect(self.ocrmill_load_invoice_to_process)
-        history_btn_layout.addWidget(load_to_process_btn)
-
-        history_btn_layout.addStretch()
-        history_layout.addLayout(history_btn_layout)
-
-        self.ocrmill_tabs.addTab(history_widget, "Parts History")
-
-        # ===== TAB 3: AI TEMPLATE GENERATOR (integrated editor) =====
+        # ===== TAB 2: AI TEMPLATE GENERATOR (integrated editor) =====
         self.setup_ai_template_tab()
         self.ocrmill_tabs.addTab(self.ai_template_widget, "AI Templates")
+
+        # ===== TAB 3: PROCESSING STATISTICS =====
+        self.setup_processing_stats_tab()
+        self.ocrmill_tabs.addTab(self.processing_stats_widget, "Statistics")
 
         layout.addWidget(self.ocrmill_tabs, 1)
 
@@ -12090,6 +13490,12 @@ EXPORT DETAILS
         btn_new.clicked.connect(self._ai_template_new)
         list_btn_layout.addWidget(btn_new)
 
+        btn_duplicate = QPushButton("Duplicate")
+        btn_duplicate.setToolTip("Create a copy of the selected template")
+        btn_duplicate.setStyleSheet(self._get_small_button_style("default"))
+        btn_duplicate.clicked.connect(self._duplicate_template)
+        list_btn_layout.addWidget(btn_duplicate)
+
         btn_delete = QPushButton("Delete")
         btn_delete.setToolTip("Delete selected template")
         btn_delete.setStyleSheet(self._get_small_button_style("danger"))
@@ -12133,7 +13539,7 @@ EXPORT DETAILS
         self.ai_provider_label = QLabel("AI:")
         header_layout.addWidget(self.ai_provider_label)
         self.ai_provider_combo = QComboBox()
-        self.ai_provider_combo.addItems(["Anthropic", "OpenAI", "Ollama (Local)"])
+        self.ai_provider_combo.addItems(["Anthropic", "OpenAI", "Google Gemini", "Groq"])
         self.ai_provider_combo.setFixedWidth(120)
         self.ai_provider_combo.currentTextChanged.connect(self._on_ai_provider_changed)
         header_layout.addWidget(self.ai_provider_combo)
@@ -12223,6 +13629,18 @@ EXPORT DETAILS
         """)
         self._show_ai_welcome_message()
         chat_layout.addWidget(self.ai_chat_display, 1)
+
+        # Context indicator - shows which template is being used
+        self.ai_context_label = QLabel()
+        self.ai_context_label.setStyleSheet("""
+            QLabel {
+                color: #888888;
+                font-size: 9pt;
+                padding: 2px 4px;
+            }
+        """)
+        self._update_ai_context_label()
+        chat_layout.addWidget(self.ai_context_label)
 
         # Message input (Enter to send, Shift+Enter for newline)
         self.ai_message_input = ChatMessageInput()
@@ -12591,13 +14009,16 @@ EXPORT DETAILS
     def _show_ai_welcome_message(self):
         """Show welcome message in AI chat."""
         colors = self._get_ai_theme_colors()
+        base_font_size = get_user_setting_int('font_size', 9)
+        font_size = base_font_size + 1  # Chat text slightly larger for readability
+        header_size = font_size + 2
         self.ai_chat_display.setHtml(f'''
         <div style="font-family: Segoe UI; padding: 8px;">
             <div style="background-color: {colors['bg_secondary']}; border-radius: 6px; padding: 12px; border: 1px solid {colors['border']};">
-                <div style="color: {colors['accent']}; font-size: 12px; font-weight: bold; margin-bottom: 8px;">
+                <div style="color: {colors['accent']}; font-size: {header_size}pt; font-weight: bold; margin-bottom: 8px;">
                     👋 AI Template Assistant
                 </div>
-                <div style="color: {colors['text']}; line-height: 1.5; font-size: 10px;">
+                <div style="color: {colors['text']}; line-height: 1.5; font-size: {font_size}pt;">
                     <p>Select a template to edit, or create a new one.</p>
                     <p>I can help you:</p>
                     <ul style="margin: 5px 0; padding-left: 15px;">
@@ -12610,6 +14031,471 @@ EXPORT DETAILS
             </div>
         </div>
         ''')
+
+    def _update_ai_context_label(self):
+        """Update the context indicator label to show current template."""
+        if not hasattr(self, 'ai_context_label'):
+            return
+
+        colors = self._get_ai_theme_colors()
+
+        if getattr(self, 'ai_current_template_path', None):
+            template_name = self.ai_current_template_path.stem
+            self.ai_context_label.setText(f"📎 Context: {template_name}")
+            self.ai_context_label.setStyleSheet(f"""
+                QLabel {{
+                    color: {colors['accent']};
+                    font-size: 9pt;
+                    padding: 2px 4px;
+                    background-color: {colors['bg_secondary']};
+                    border-radius: 3px;
+                }}
+            """)
+            self.ai_context_label.setToolTip(f"AI has access to template: {self.ai_current_template_path}")
+        else:
+            self.ai_context_label.setText("📎 No template selected")
+            self.ai_context_label.setStyleSheet(f"""
+                QLabel {{
+                    color: {colors['text_muted']};
+                    font-size: 9pt;
+                    padding: 2px 4px;
+                }}
+            """)
+            self.ai_context_label.setToolTip("Select a template to provide context for the AI")
+
+    def setup_processing_stats_tab(self):
+        """Setup the Processing Statistics tab to display template usage and processing metrics."""
+        self.processing_stats_widget = QWidget()
+        layout = QVBoxLayout(self.processing_stats_widget)
+        layout.setSpacing(10)
+        layout.setContentsMargins(10, 10, 10, 10)
+
+        # Header with refresh button
+        header_layout = QHBoxLayout()
+        self.stats_header_label = QLabel("Processing Statistics")
+        header_layout.addWidget(self.stats_header_label)
+        header_layout.addStretch()
+
+        self.stats_refresh_btn = QPushButton("Refresh")
+        self.stats_refresh_btn.setIcon(self.style().standardIcon(QStyle.SP_BrowserReload))
+        self.stats_refresh_btn.clicked.connect(self._refresh_processing_stats)
+        header_layout.addWidget(self.stats_refresh_btn)
+        layout.addLayout(header_layout)
+
+        # Summary cards
+        self.stats_summary_frame = QFrame()
+        summary_layout = QHBoxLayout(self.stats_summary_frame)
+
+        # Today's stats
+        self.stats_today_label = self._create_stat_card("Today", "0 files", "0 items")
+        summary_layout.addWidget(self.stats_today_label)
+
+        # This week's stats
+        self.stats_week_label = self._create_stat_card("This Week", "0 files", "0 items")
+        summary_layout.addWidget(self.stats_week_label)
+
+        # All time stats
+        self.stats_total_label = self._create_stat_card("All Time", "0 files", "0 items")
+        summary_layout.addWidget(self.stats_total_label)
+
+        # Success rate
+        self.stats_success_label = self._create_stat_card("Success Rate", "0%", "0 templates")
+        summary_layout.addWidget(self.stats_success_label)
+
+        layout.addWidget(self.stats_summary_frame)
+
+        # Template statistics table
+        self.stats_table_label = QLabel("Template Usage Statistics")
+        layout.addWidget(self.stats_table_label)
+
+        self.template_stats_table = QTableWidget()
+        self.template_stats_table.setColumnCount(7)
+        self.template_stats_table.setHorizontalHeaderLabels([
+            "Template", "Total Uses", "Successful", "Items Extracted",
+            "Avg Confidence", "Avg Time (ms)", "Last Used"
+        ])
+        self.template_stats_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        for i in range(1, 7):
+            self.template_stats_table.horizontalHeader().setSectionResizeMode(i, QHeaderView.ResizeToContents)
+        self.template_stats_table.setAlternatingRowColors(True)
+        self.template_stats_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.template_stats_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.template_stats_table.verticalHeader().setVisible(False)
+        layout.addWidget(self.template_stats_table, 1)
+
+        # Recent activity section
+        self.stats_recent_label = QLabel("Recent Processing Activity")
+        layout.addWidget(self.stats_recent_label)
+
+        self.recent_activity_table = QTableWidget()
+        self.recent_activity_table.setColumnCount(6)
+        self.recent_activity_table.setHorizontalHeaderLabels([
+            "Date/Time", "Template", "PDF File", "Items", "Confidence", "Status"
+        ])
+        self.recent_activity_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.recent_activity_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.recent_activity_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        for i in range(3, 6):
+            self.recent_activity_table.horizontalHeader().setSectionResizeMode(i, QHeaderView.ResizeToContents)
+        self.recent_activity_table.setAlternatingRowColors(True)
+        self.recent_activity_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.recent_activity_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.recent_activity_table.verticalHeader().setVisible(False)
+        self.recent_activity_table.setMaximumHeight(200)
+        layout.addWidget(self.recent_activity_table)
+
+        # Learned Corrections section
+        self.stats_corrections_label = QLabel("Learned Corrections")
+        layout.addWidget(self.stats_corrections_label)
+
+        corrections_info_layout = QHBoxLayout()
+        self.corrections_count_label = QLabel("0 corrections recorded")
+        corrections_info_layout.addWidget(self.corrections_count_label)
+        corrections_info_layout.addStretch()
+
+        self.stats_view_corrections_btn = QPushButton("View Details")
+        self.stats_view_corrections_btn.clicked.connect(self._show_corrections_dialog)
+        corrections_info_layout.addWidget(self.stats_view_corrections_btn)
+        layout.addLayout(corrections_info_layout)
+
+        # Apply theme-aware styles
+        self._update_stats_tab_styles()
+
+        # Initial data load
+        QTimer.singleShot(500, self._refresh_processing_stats)
+
+    def _create_stat_card(self, title: str, value: str, subtitle: str) -> QFrame:
+        """Create a statistics card widget (styles applied via _update_stats_tab_styles)."""
+        card = QFrame()
+        card.setObjectName("stat_card")
+        card_layout = QVBoxLayout(card)
+        card_layout.setSpacing(2)
+        card_layout.setContentsMargins(12, 8, 12, 8)
+
+        title_lbl = QLabel(title)
+        title_lbl.setObjectName("title")
+        card_layout.addWidget(title_lbl)
+
+        value_lbl = QLabel(value)
+        value_lbl.setObjectName("value")
+        card_layout.addWidget(value_lbl)
+
+        subtitle_lbl = QLabel(subtitle)
+        subtitle_lbl.setObjectName("subtitle")
+        card_layout.addWidget(subtitle_lbl)
+
+        return card
+
+    def _update_stat_card(self, card: QFrame, value: str, subtitle: str):
+        """Update a statistics card's values."""
+        value_lbl = card.findChild(QLabel, "value")
+        subtitle_lbl = card.findChild(QLabel, "subtitle")
+        if value_lbl:
+            value_lbl.setText(value)
+        if subtitle_lbl:
+            subtitle_lbl.setText(subtitle)
+
+    def _update_stats_tab_styles(self):
+        """Update Statistics tab styles based on current theme."""
+        colors = self._get_ai_theme_colors()
+
+        # Summary frame background
+        self.stats_summary_frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: {colors['bg_secondary']};
+                border-radius: 6px;
+                padding: 10px;
+            }}
+        """)
+
+        # Stat cards
+        for card in [self.stats_today_label, self.stats_week_label,
+                     self.stats_total_label, self.stats_success_label]:
+            card.setStyleSheet(f"""
+                QFrame {{
+                    background-color: {colors['bg_input']};
+                    border-radius: 6px;
+                    padding: 8px;
+                    border: 1px solid {colors['border']};
+                }}
+            """)
+            # Update child labels
+            title_lbl = card.findChild(QLabel, "title")
+            value_lbl = card.findChild(QLabel, "value")
+            subtitle_lbl = card.findChild(QLabel, "subtitle")
+            if title_lbl:
+                title_lbl.setStyleSheet(f"color: {colors['text_muted']}; font-size: 10px;")
+            if value_lbl:
+                value_lbl.setStyleSheet(f"color: {colors['accent']}; font-size: 18px; font-weight: bold;")
+            if subtitle_lbl:
+                subtitle_lbl.setStyleSheet(f"color: {colors['text_muted']}; font-size: 10px;")
+
+        # Header and section labels
+        self.stats_header_label.setStyleSheet(f"font-weight: bold; font-size: 14px; color: {colors['text_header']};")
+        self.stats_table_label.setStyleSheet(f"font-weight: bold; font-size: 12px; margin-top: 10px; color: {colors['text_header']};")
+        self.stats_recent_label.setStyleSheet(f"font-weight: bold; font-size: 12px; margin-top: 10px; color: {colors['text_header']};")
+        self.stats_corrections_label.setStyleSheet(f"font-weight: bold; font-size: 12px; margin-top: 10px; color: {colors['text_header']};")
+        self.corrections_count_label.setStyleSheet(f"color: {colors['text_muted']};")
+
+        # Table styles
+        table_style = f"""
+            QTableWidget {{
+                background-color: {colors['bg_code']};
+                color: {colors['text']};
+                border: 1px solid {colors['border']};
+                border-radius: 4px;
+                gridline-color: {colors['border']};
+            }}
+            QTableWidget::item {{
+                padding: 5px;
+            }}
+            QTableWidget::item:selected {{
+                background-color: {colors['selection']};
+            }}
+            QHeaderView::section {{
+                background-color: {colors['bg_secondary']};
+                color: {colors['text']};
+                padding: 6px;
+                border: none;
+                border-bottom: 1px solid {colors['border']};
+            }}
+        """
+        self.template_stats_table.setStyleSheet(table_style)
+        self.recent_activity_table.setStyleSheet(table_style)
+
+    def _refresh_processing_stats(self):
+        """Refresh all processing statistics."""
+        try:
+            # Get summary stats
+            summary = self.ocrmill_db.get_processing_stats_summary()
+
+            # Update summary cards
+            self._update_stat_card(
+                self.stats_today_label,
+                str(summary.get('processed_today', 0) or 0),
+                f"{summary.get('items_today', 0) or 0} items"
+            )
+            self._update_stat_card(
+                self.stats_week_label,
+                str(summary.get('processed_week', 0) or 0),
+                f"{summary.get('items_week', 0) or 0} items"
+            )
+            self._update_stat_card(
+                self.stats_total_label,
+                str(summary.get('total_processed', 0) or 0),
+                f"{summary.get('total_items', 0) or 0} items"
+            )
+
+            # Calculate success rate
+            total = summary.get('total_processed', 0) or 0
+            successful = summary.get('successful', 0) or 0
+            success_rate = (successful / total * 100) if total > 0 else 0
+            self._update_stat_card(
+                self.stats_success_label,
+                f"{success_rate:.1f}%",
+                f"{summary.get('templates_used', 0) or 0} templates"
+            )
+
+            # Get template statistics
+            template_stats = self.ocrmill_db.get_template_statistics()
+            self.template_stats_table.setRowCount(len(template_stats))
+
+            for row, stat in enumerate(template_stats):
+                self.template_stats_table.setItem(row, 0, QTableWidgetItem(stat.get('template_name', '')))
+                self.template_stats_table.setItem(row, 1, QTableWidgetItem(str(stat.get('total_uses', 0))))
+                self.template_stats_table.setItem(row, 2, QTableWidgetItem(str(stat.get('successful_uses', 0))))
+                self.template_stats_table.setItem(row, 3, QTableWidgetItem(str(stat.get('total_items', 0) or 0)))
+                self.template_stats_table.setItem(row, 4, QTableWidgetItem(f"{stat.get('avg_confidence', 0) or 0:.2f}"))
+                self.template_stats_table.setItem(row, 5, QTableWidgetItem(str(int(stat.get('avg_time_ms', 0) or 0))))
+
+                # Format last used date
+                last_used = stat.get('last_used', '')
+                if last_used:
+                    try:
+                        dt = datetime.fromisoformat(last_used)
+                        last_used = dt.strftime("%Y-%m-%d %H:%M")
+                    except Exception:
+                        pass
+                self.template_stats_table.setItem(row, 6, QTableWidgetItem(last_used))
+
+            # Get recent activity (get the most recent 20 entries from all templates)
+            conn = self.ocrmill_db._get_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM template_stats
+                ORDER BY processed_date DESC
+                LIMIT 20
+            """)
+            recent = [dict(row) for row in cursor.fetchall()]
+            conn.close()
+
+            self.recent_activity_table.setRowCount(len(recent))
+            for row, activity in enumerate(recent):
+                # Format date
+                date_str = activity.get('processed_date', '')
+                if date_str:
+                    try:
+                        dt = datetime.fromisoformat(date_str)
+                        date_str = dt.strftime("%m/%d %H:%M:%S")
+                    except Exception:
+                        pass
+
+                self.recent_activity_table.setItem(row, 0, QTableWidgetItem(date_str))
+                self.recent_activity_table.setItem(row, 1, QTableWidgetItem(activity.get('template_name', '')))
+                self.recent_activity_table.setItem(row, 2, QTableWidgetItem(activity.get('pdf_file', '') or ''))
+                self.recent_activity_table.setItem(row, 3, QTableWidgetItem(str(activity.get('items_extracted', 0))))
+                self.recent_activity_table.setItem(row, 4, QTableWidgetItem(f"{activity.get('confidence_score', 0) or 0:.2f}"))
+
+                # Status with color
+                status_item = QTableWidgetItem("Success" if activity.get('success') else "Failed")
+                if activity.get('success'):
+                    status_item.setForeground(QColor("#4caf50"))
+                else:
+                    status_item.setForeground(QColor("#f44336"))
+                    if activity.get('error_message'):
+                        status_item.setToolTip(activity.get('error_message'))
+                self.recent_activity_table.setItem(row, 5, status_item)
+
+            # Update corrections count
+            try:
+                correction_stats = self.ocrmill_db.get_correction_stats()
+                count = correction_stats.get('total_corrections', 0)
+                if count > 0:
+                    self.corrections_count_label.setText(
+                        f"{count} corrections recorded ({correction_stats.get('templates_with_corrections', 0)} templates)"
+                    )
+                else:
+                    self.corrections_count_label.setText("No corrections recorded yet")
+            except Exception:
+                pass
+
+        except Exception as e:
+            logger.error(f"Error refreshing processing stats: {e}")
+
+    def _show_corrections_dialog(self):
+        """Show dialog with learned corrections details."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Learned Corrections")
+        dialog.setMinimumSize(700, 500)
+
+        layout = QVBoxLayout(dialog)
+
+        # Info text
+        info_label = QLabel(
+            "The system learns from corrections you make to extracted data. "
+            "When the same error pattern is seen multiple times, the system can "
+            "suggest corrections automatically."
+        )
+        info_label.setWordWrap(True)
+        info_label.setStyleSheet("color: #888888; margin-bottom: 10px;")
+        layout.addWidget(info_label)
+
+        # Stats summary
+        try:
+            stats = self.ocrmill_db.get_correction_stats()
+            stats_text = (
+                f"Total Corrections: {stats.get('total_corrections', 0)}  |  "
+                f"Templates: {stats.get('templates_with_corrections', 0)}  |  "
+                f"Fields: {stats.get('fields_corrected', 0)}"
+            )
+            stats_label = QLabel(stats_text)
+            stats_label.setStyleSheet("font-weight: bold; margin-bottom: 5px;")
+            layout.addWidget(stats_label)
+        except Exception:
+            pass
+
+        # Corrections table
+        table = QTableWidget()
+        table.setColumnCount(5)
+        table.setHorizontalHeaderLabels([
+            "Template", "Field", "Original", "Corrected", "Frequency"
+        ])
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+        table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        table.setAlternatingRowColors(True)
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.verticalHeader().setVisible(False)
+
+        try:
+            corrections = self.ocrmill_db.get_common_corrections(limit=100)
+            table.setRowCount(len(corrections))
+            for row, corr in enumerate(corrections):
+                table.setItem(row, 0, QTableWidgetItem(corr.get('template_name', '')))
+                table.setItem(row, 1, QTableWidgetItem(corr.get('field_name', '')))
+                table.setItem(row, 2, QTableWidgetItem(corr.get('original_value', '') or ''))
+                table.setItem(row, 3, QTableWidgetItem(corr.get('corrected_value', '') or ''))
+                table.setItem(row, 4, QTableWidgetItem(str(corr.get('frequency', 0))))
+        except Exception as e:
+            logger.error(f"Error loading corrections: {e}")
+
+        layout.addWidget(table, 1)
+
+        # Close button
+        btn_close = QPushButton("Close")
+        btn_close.clicked.connect(dialog.accept)
+        layout.addWidget(btn_close)
+
+        dialog.exec_()
+
+    def _on_ocrmill_item_changed(self, item: QTableWidgetItem):
+        """Handle item changes in the OCRMill preview table for learning from corrections."""
+        if self._ocrmill_editing:
+            return
+
+        row = item.row()
+        col = item.column()
+        new_value = item.text()
+
+        # Get original value
+        original_value = self._ocrmill_original_values.get((row, col), '')
+
+        # Only record if value actually changed
+        if original_value == new_value:
+            return
+
+        # Get field name from header
+        field_name = ''
+        if hasattr(self, '_ocrmill_preview_headers') and col < len(self._ocrmill_preview_headers):
+            field_name = self._ocrmill_preview_headers[col]
+
+        # Get part number for this row (usually first column)
+        part_number = ''
+        if self.ocrmill_preview_table.item(row, 0):
+            part_number = self.ocrmill_preview_table.item(row, 0).text()
+
+        # Get current file name (to extract template name)
+        pdf_file = getattr(self, '_ocrmill_preview_file', '')
+
+        # Determine template name from file pattern or recent processing
+        template_name = 'unknown'
+        if hasattr(self, 'ocrmill_processor') and hasattr(self.ocrmill_processor, 'templates'):
+            # Try to get the most recently used template
+            try:
+                stats = self.ocrmill_db.get_template_statistics()
+                if stats:
+                    template_name = stats[0].get('template_name', 'unknown')
+            except Exception:
+                pass
+
+        # Record the correction
+        try:
+            self.ocrmill_db.record_correction(
+                template_name=template_name,
+                pdf_file=pdf_file,
+                field_name=field_name,
+                original_value=original_value,
+                corrected_value=new_value,
+                part_number=part_number
+            )
+            self.ocrmill_log(f"Correction recorded: {field_name} '{original_value}' -> '{new_value}'")
+
+            # Update original value tracking
+            self._ocrmill_original_values[(row, col)] = new_value
+        except Exception as e:
+            logger.error(f"Failed to record correction: {e}")
 
     def _update_ai_template_styles(self):
         """Update AI template tab styles based on current theme."""
@@ -12711,6 +14597,9 @@ EXPORT DETAILS
             }}
         """)
 
+        # Context label (shows which template AI is using)
+        self._update_ai_context_label()
+
         # Update syntax indicator color
         self.ai_syntax_indicator.setStyleSheet(f"color: {colors['success']}; font-size: 10px;")
 
@@ -12761,8 +14650,10 @@ EXPORT DETAILS
             self.ai_model_combo.addItems(["gpt-4o", "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo"])
         elif provider == "Anthropic":
             self.ai_model_combo.addItems(["claude-sonnet-4-20250514", "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022"])
-        elif provider == "Ollama (Local)":
-            self.ai_model_combo.addItems(["llama3.1", "llama3", "codellama", "mistral"])
+        elif provider == "Google Gemini":
+            self.ai_model_combo.addItems(["gemini-1.5-pro", "gemini-1.5-flash", "gemini-1.0-pro"])
+        elif provider == "Groq":
+            self.ai_model_combo.addItems(["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768", "gemma2-9b-it"])
 
     def _on_template_selected(self, item):
         """Handle template selection from list."""
@@ -12796,6 +14687,7 @@ EXPORT DETAILS
             self.ai_code_edit.setPlainText(code)
             self.ai_current_template_path = template_path
             self.ai_template_name_label.setText(template_info['name'])
+            self._update_ai_context_label()
 
             # Load AI metadata if exists
             ai_metadata_path = template_path.with_suffix('.ai_meta.json')
@@ -12834,6 +14726,10 @@ EXPORT DETAILS
         self.ai_cancel_gen_btn.setVisible(False)
         self.ai_save_new_btn.setEnabled(False)
 
+        # Clear template context for new template mode
+        self.ai_current_template_path = None
+        self._update_ai_context_label()
+
         # Update header
         self.ai_template_name_label.setText("New Template")
 
@@ -12846,6 +14742,7 @@ EXPORT DETAILS
         # Reset header if no template is selected
         if not self.ai_current_template_path:
             self.ai_template_name_label.setText("Select a template")
+        self._update_ai_context_label()
 
     def _ai_browse_sample_pdf(self):
         """Browse for a sample PDF invoice."""
@@ -13219,7 +15116,7 @@ Please fix this error in the template code. Return the complete corrected templa
     def _ai_get_api_key(self, provider: str) -> str:
         """Get API key for the provider from the AI Agents configuration."""
         # Use the same method as AI Agents tab for consistency
-        key_name = 'openai' if provider == "OpenAI" else 'anthropic'
+        key_name = {'OpenAI': 'openai', 'Anthropic': 'anthropic', 'Google Gemini': 'gemini', 'Groq': 'groq'}.get(provider, 'openai')
         api_key = self._get_ai_api_key(key_name)
         if api_key:
             return api_key
@@ -13228,6 +15125,10 @@ Please fix this error in the template code. Return the complete corrected templa
             return os.environ.get('OPENAI_API_KEY', '')
         elif provider == "Anthropic":
             return os.environ.get('ANTHROPIC_API_KEY', '')
+        elif provider == "Google Gemini":
+            return os.environ.get('GOOGLE_API_KEY', '')
+        elif provider == "Groq":
+            return os.environ.get('GROQ_API_KEY', '')
         return ""
 
     def _check_and_install_ai_package(self, package_name: str) -> bool:
@@ -13427,9 +15328,15 @@ Please fix this error in the template code. Return the complete corrected templa
         inline_code_bg = colors['bg_secondary']
         inline_code_text = colors['warning']
 
+        # Get font size from settings and scale up for chat readability
+        base_font_size = get_user_setting_int('font_size', 9)
+        font_size = base_font_size + 1  # Chat text slightly larger for readability
+        label_size = max(base_font_size - 1, 7)  # Label slightly smaller, minimum 7pt
+        code_size = base_font_size  # Code same size as base setting
+
         def replace_code_block(match):
             code = html_module.escape(match.group(1))
-            return f'</p><pre style="background-color: {code_bg}; color: {code_text}; padding: 8px; border-radius: 4px; font-family: Consolas; font-size: 9px; margin: 5px 0; border-left: 2px solid {code_accent}; white-space: pre-wrap;">{code}</pre><p style="margin: 0;">'
+            return f'</p><pre style="background-color: {code_bg}; color: {code_text}; padding: 8px; border-radius: 4px; font-family: Consolas; font-size: {code_size}pt; margin: 5px 0; border-left: 2px solid {code_accent}; white-space: pre-wrap;">{code}</pre><p style="margin: 0;">'
 
         formatted = re.sub(r'```(?:python)?\s*(.*?)\s*```', replace_code_block, content, flags=re.DOTALL)
 
@@ -13461,18 +15368,18 @@ Please fix this error in the template code. Return the complete corrected templa
         if role == 'user':
             return f'''<div style="margin: 8px 0; text-align: right;">
                 <div style="display: inline-block; max-width: 80%; text-align: left;">
-                    <div style="color: {label_color}; font-size: 8px;">You</div>
+                    <div style="color: {label_color}; font-size: {label_size}pt;">You</div>
                     <div style="background-color: {user_bubble_bg}; color: {user_bubble_text}; padding: 8px 10px; border-radius: 8px 8px 2px 8px;">
-                        <p style="margin: 0; font-size: 10px;">{formatted}</p>
+                        <p style="margin: 0; font-size: {font_size}pt;">{formatted}</p>
                     </div>
                 </div>
             </div>'''
         else:
             return f'''<div style="margin: 8px 0;">
                 <div style="display: inline-block; max-width: 80%;">
-                    <div style="color: {label_color}; font-size: 8px;">AI</div>
+                    <div style="color: {label_color}; font-size: {label_size}pt;">AI</div>
                     <div style="background-color: {ai_bubble_bg}; color: {ai_bubble_text}; padding: 8px 10px; border-radius: 8px 8px 8px 2px; border: 1px solid {ai_bubble_border};">
-                        <p style="margin: 0; font-size: 10px;">{formatted}</p>
+                        <p style="margin: 0; font-size: {font_size}pt;">{formatted}</p>
                     </div>
                 </div>
             </div>'''
@@ -13484,6 +15391,10 @@ Please fix this error in the template code. Return the complete corrected templa
             return
 
         colors = self._get_ai_theme_colors()
+        base_font_size = get_user_setting_int('font_size', 9)
+        font_size = base_font_size + 1  # Chat text slightly larger for readability
+        label_size = max(base_font_size - 1, 7)  # Label slightly smaller, minimum 7pt
+
         html = '<div style="font-family: Segoe UI;">'
         for msg in self.ai_conversation_history:
             html += self._ai_format_message_html(msg.get('role', 'user'), msg.get('content', ''))
@@ -13494,9 +15405,9 @@ Please fix this error in the template code. Return the complete corrected templa
             dots = '.' * thinking_dots
             html += f'''<div style="margin: 8px 0;">
                 <div style="display: inline-block; max-width: 80%;">
-                    <div style="color: {colors['text_muted']}; font-size: 8px;">AI</div>
+                    <div style="color: {colors['text_muted']}; font-size: {label_size}pt;">AI</div>
                     <div style="background-color: {colors['ai_bubble']}; color: {colors['text_muted']}; padding: 8px 10px; border-radius: 8px 8px 8px 2px; border: 1px solid {colors['border']};">
-                        <p style="margin: 0; font-size: 10px; font-style: italic;">Thinking{dots}</p>
+                        <p style="margin: 0; font-size: {font_size}pt; font-style: italic;">Thinking{dots}</p>
                     </div>
                 </div>
             </div>'''
@@ -13853,16 +15764,29 @@ Please fix this error in the template code. Return the complete corrected templa
             headers = rows[0] if rows else []
             data_rows = rows[1:] if len(rows) > 1 else []
 
+            # Store headers and current file for correction tracking
+            self._ocrmill_preview_headers = headers
+            self._ocrmill_preview_file = item.text()
+
+            # Block signals during population
+            self._ocrmill_editing = True
+
             # Update table columns based on CSV headers
             self.ocrmill_preview_table.setColumnCount(len(headers))
             self.ocrmill_preview_table.setHorizontalHeaderLabels(headers)
             self.ocrmill_preview_table.setRowCount(len(data_rows))
 
-            # Populate table
+            # Populate table and store original values
+            self._ocrmill_original_values = {}
             for row_idx, row_data in enumerate(data_rows):
                 for col_idx, cell_value in enumerate(row_data):
                     item_widget = QTableWidgetItem(str(cell_value))
                     self.ocrmill_preview_table.setItem(row_idx, col_idx, item_widget)
+                    # Store original value for correction tracking
+                    self._ocrmill_original_values[(row_idx, col_idx)] = str(cell_value)
+
+            # Re-enable signals
+            self._ocrmill_editing = False
 
             # Resize columns to content
             self.ocrmill_preview_table.resizeColumnsToContents()
@@ -13972,7 +15896,6 @@ Please fix this error in the template code. Return the complete corrected templa
         if all_items:
             self.ocrmill_last_items = all_items
             self.ocrmill_send_btn.setEnabled(True)
-            self.ocrmill_refresh_history()
 
     def ocrmill_process_folder_now(self):
         """Process all PDFs in the input folder immediately using parallel processing."""
@@ -14006,12 +15929,10 @@ Please fix this error in the template code. Return the complete corrected templa
     def _ocrmill_on_folder_finished(self, total_items: int):
         """Handle completion of parallel folder processing."""
         self.ocrmill_log(f"Folder processing complete: {total_items} total items")
-        self.ocrmill_refresh_history()
 
     def ocrmill_on_processing_finished(self, item_count: int):
         """Handle completion of batch processing."""
         self.ocrmill_log(f"Processing complete: {item_count} items extracted")
-        self.ocrmill_refresh_history()
 
     def ocrmill_on_items_extracted(self, items: list):
         """Handle extracted items from worker."""
@@ -14072,78 +15993,6 @@ Please fix this error in the template code. Return the complete corrected templa
             QMessageBox.information(self, "Files Moved",
                 f"Moved {moved_count} CSV file(s) to Tariffmill_Input.\n\n"
                 f"Destination: {tariffmill_input}")
-
-    def ocrmill_refresh_history(self):
-        """Refresh the parts history table."""
-        occurrences = self.ocrmill_db.get_recent_occurrences(500)
-
-        self.ocrmill_history_table.setRowCount(len(occurrences))
-        for row, occ in enumerate(occurrences):
-            self.ocrmill_history_table.setItem(row, 0, QTableWidgetItem(str(occ.get('part_number', ''))))
-            self.ocrmill_history_table.setItem(row, 1, QTableWidgetItem(str(occ.get('invoice_number', ''))))
-            self.ocrmill_history_table.setItem(row, 2, QTableWidgetItem(str(occ.get('project_number', ''))))
-            self.ocrmill_history_table.setItem(row, 3, QTableWidgetItem(str(occ.get('quantity', ''))))
-            price = occ.get('total_price', 0) or 0
-            self.ocrmill_history_table.setItem(row, 4, QTableWidgetItem(f"${price:,.2f}" if price else ""))
-            self.ocrmill_history_table.setItem(row, 5, QTableWidgetItem(str(occ.get('hts_code', ''))))
-            self.ocrmill_history_table.setItem(row, 6, QTableWidgetItem(str(occ.get('mid', ''))))
-            self.ocrmill_history_table.setItem(row, 7, QTableWidgetItem(str(occ.get('country_origin', ''))))
-            self.ocrmill_history_table.setItem(row, 8, QTableWidgetItem(str(occ.get('processed_date', ''))[:19]))
-            self.ocrmill_history_table.setItem(row, 9, QTableWidgetItem(str(occ.get('source_file', ''))))
-
-    def ocrmill_filter_history(self, search_text: str):
-        """Filter history table based on search text."""
-        search_lower = search_text.lower()
-        for row in range(self.ocrmill_history_table.rowCount()):
-            match = False
-            for col in range(3):  # Search first 3 columns (part, invoice, project)
-                item = self.ocrmill_history_table.item(row, col)
-                if item and search_lower in item.text().lower():
-                    match = True
-                    break
-            self.ocrmill_history_table.setRowHidden(row, not match and bool(search_text))
-
-    def ocrmill_export_history(self):
-        """Export selected history rows to CSV."""
-        selected_rows = set(idx.row() for idx in self.ocrmill_history_table.selectedIndexes())
-        if not selected_rows:
-            QMessageBox.information(self, "No Selection", "Please select rows to export.")
-            return
-
-        file_path, _ = QFileDialog.getSaveFileName(
-            self, "Export to CSV",
-            str(self.ocrmill_config.output_folder / "history_export.csv"),
-            "CSV Files (*.csv)"
-        )
-        if file_path:
-            import csv
-            with open(file_path, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f)
-                headers = [self.ocrmill_history_table.horizontalHeaderItem(i).text()
-                          for i in range(self.ocrmill_history_table.columnCount())]
-                writer.writerow(headers)
-                for row in sorted(selected_rows):
-                    row_data = [self.ocrmill_history_table.item(row, col).text() if self.ocrmill_history_table.item(row, col) else ""
-                               for col in range(self.ocrmill_history_table.columnCount())]
-                    writer.writerow(row_data)
-            self.ocrmill_log(f"Exported {len(selected_rows)} rows to {file_path}")
-
-    def ocrmill_load_invoice_to_process(self):
-        """Load selected invoice data into Process Shipment tab."""
-        selected_rows = set(idx.row() for idx in self.ocrmill_history_table.selectedIndexes())
-        if not selected_rows:
-            QMessageBox.information(self, "No Selection", "Please select rows to load.")
-            return
-
-        # Get invoice number from first selected row
-        first_row = min(selected_rows)
-        invoice_item = self.ocrmill_history_table.item(first_row, 1)
-        if invoice_item:
-            invoice_number = invoice_item.text()
-            items = self.ocrmill_db.get_parts_by_invoice(invoice_number)
-            if items:
-                self.ocrmill_last_items = items
-                self.ocrmill_send_to_tariffmill()
 
     def ocrmill_refresh_templates(self):
         """Refresh the templates list by re-scanning the templates directory."""
@@ -14484,6 +16333,105 @@ Please fix this error in the template code. Return the complete corrected templa
                     QMessageBox.critical(self, "Error", f"Failed to delete template:\n{str(e)}")
         else:
             QMessageBox.warning(self, "File Not Found", f"Template file not found: {template_path}")
+
+    def _duplicate_template(self):
+        """Create a copy of the selected template with a new name."""
+        current_row = self.ocrmill_templates_list.currentRow()
+        if current_row < 0:
+            QMessageBox.information(self, "No Selection", "Please select a template to duplicate.")
+            return
+
+        if current_row >= len(self.ocrmill_templates_data):
+            QMessageBox.warning(self, "Error", "Template data not found.")
+            return
+
+        template_info = self.ocrmill_templates_data[current_row]
+        template_path = Path(template_info['file_path'])
+        original_name = template_info['name']
+
+        if not template_path.exists():
+            QMessageBox.warning(self, "File Not Found", f"Template file not found: {template_path}")
+            return
+
+        # Prompt for new template name
+        new_name, ok = QInputDialog.getText(
+            self, "Duplicate Template",
+            f"Enter a name for the new template:\n\n(copying from: {original_name})",
+            QLineEdit.Normal,
+            f"{original_name}_copy"
+        )
+
+        if not ok or not new_name.strip():
+            return
+
+        new_name = new_name.strip()
+
+        # Validate name (lowercase, underscores only)
+        import re
+        safe_name = re.sub(r'[^a-z0-9_]', '_', new_name.lower())
+
+        # Create new filename
+        new_filename = f"{safe_name}.py"
+        new_path = template_path.parent / new_filename
+
+        if new_path.exists():
+            QMessageBox.warning(
+                self, "File Exists",
+                f"A template with this name already exists:\n{new_filename}\n\nPlease choose a different name."
+            )
+            return
+
+        try:
+            # Read original template
+            with open(template_path, 'r', encoding='utf-8') as f:
+                original_content = f.read()
+
+            # Replace class name
+            original_class = template_info.get('class_name', f"{original_name.title().replace('_', '')}Template")
+            new_class = f"{safe_name.title().replace('_', '')}Template"
+
+            # Replace the class name in content
+            new_content = original_content.replace(original_class, new_class)
+
+            # Also update any name = "..." or name = '...' references
+            new_content = re.sub(
+                r'(name\s*=\s*["\'])' + re.escape(original_name) + r'(["\'])',
+                r'\g<1>' + safe_name + r'\g<2>',
+                new_content
+            )
+
+            # Write new template
+            with open(new_path, 'w', encoding='utf-8') as f:
+                f.write(new_content)
+
+            # Copy AI metadata if exists
+            original_meta = template_path.with_suffix('.ai_meta.json')
+            if original_meta.exists():
+                import json
+                with open(original_meta, 'r', encoding='utf-8') as f:
+                    meta = json.load(f)
+                # Update metadata
+                meta['template_name'] = safe_name
+                meta['class_name'] = new_class
+                meta['duplicated_from'] = original_name
+                meta['duplicated_date'] = datetime.now().isoformat()
+                new_meta_path = new_path.with_suffix('.ai_meta.json')
+                with open(new_meta_path, 'w', encoding='utf-8') as f:
+                    json.dump(meta, f, indent=2)
+
+            self.ocrmill_log(f"Duplicated template: {original_name} -> {safe_name}")
+
+            # Refresh templates and select new one
+            self.ocrmill_processor.reload_templates()
+            self.ocrmill_refresh_templates()
+
+            QMessageBox.information(
+                self, "Template Duplicated",
+                f"Template duplicated successfully!\n\nNew template: {safe_name}\nFile: {new_filename}"
+            )
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to duplicate template:\n{str(e)}")
 
     def refresh_parts_table(self):
         try:
@@ -19110,16 +21058,61 @@ if __name__ == "__main__":
         app.processEvents()
 
         logger.info("Application started")
+
+        # ============================================================
+        # AUTHENTICATION CHECK
+        # ============================================================
+        splash_message.setText("Checking authentication...")
+        splash_progress.setValue(5)
+        app.processEvents()
+
+        # Initialize authentication manager
+        auth_manager = AuthenticationManager(DB_PATH)
+
+        # Try Windows domain authentication first
+        windows_auth_success, windows_msg, _ = auth_manager.try_windows_auth()
+
+        if windows_auth_success:
+            # Windows auth successful - skip login dialog
+            logger.info(f"Windows auth successful: {auth_manager.current_user}")
+        else:
+            # Windows auth failed - show login dialog
+            logger.debug(f"Windows auth not available: {windows_msg}")
+
+            # Hide splash temporarily to show login dialog
+            splash_widget.hide()
+            app.processEvents()
+
+            # Show login dialog
+            login_dialog = LoginDialog(auth_manager)
+            login_dialog.setWindowIcon(app.windowIcon())
+
+            if login_dialog.exec_() != QDialog.Accepted:
+                # User cancelled login - exit application
+                logger.info("User cancelled login, exiting application")
+                spinner.stop()
+                sys.exit(0)
+
+            # Show splash again
+            splash_widget.show()
+            app.processEvents()
+
+        # Authentication successful - continue with startup
+        logger.info(f"User authenticated: {auth_manager.current_user} (role: {auth_manager.current_role}, method: {auth_manager.auth_method})")
+        # ============================================================
+
         splash_message.setText("Creating main window...\nPlease wait...")
         splash_progress.setValue(10)
         app.processEvents()
-        
+
         # Create main window but keep it completely hidden during initialization
         splash_message.setText("Creating main window...")
         splash_progress.setValue(20)
         app.processEvents()
 
         win = TariffMill()
+        # Pass authentication manager to main window
+        win.auth_manager = auth_manager
         win.hide()  # Explicitly hide immediately after creation
         win.setWindowTitle(APP_NAME)
 
@@ -19187,6 +21180,9 @@ if __name__ == "__main__":
             win.raise_()
             win.activateWindow()
             win.status.setText("Ready")
+
+            # Update account menu to show logged-in user
+            win._update_account_menu()
 
             # Final aggressive enable after all initialization
             QTimer.singleShot(0, win._enable_input_fields)
