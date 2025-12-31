@@ -8,7 +8,8 @@ a = Analysis(
     ['tariffmill.py'],
     pathex=[],
     binaries=[
-        # Bundle VC++ runtime DLLs required by Python
+        # Bundle Python DLL and VC++ runtime DLLs required by Python
+        (os.path.join(PYTHON_DIR, 'python312.dll'), '.'),
         (os.path.join(PYTHON_DIR, 'vcruntime140.dll'), '.'),
         (os.path.join(PYTHON_DIR, 'vcruntime140_1.dll'), '.'),
     ],
