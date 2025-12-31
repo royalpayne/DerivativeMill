@@ -17978,6 +17978,12 @@ Please fix this error in the template code. Return the complete corrected templa
 
         hts_menu.addSeparator()
 
+        clean_units_action = hts_menu.addAction("Clean Unit of Qty Format")
+        clean_units_action.setToolTip("Clean up unit_of_quantity values in hts.db (remove JSON arrays and HTML tags)")
+        clean_units_action.triggered.connect(self.clean_hts_unit_format)
+
+        hts_menu.addSeparator()
+
         download_link_action = hts_menu.addAction("Open USITC Download Page")
         download_link_action.setToolTip("Open the USITC website to manually download HTS data")
         download_link_action.triggered.connect(lambda: QDesktopServices.openUrl(QUrl("https://hts.usitc.gov/export")))
@@ -18199,6 +18205,9 @@ Please fix this error in the template code. Return the complete corrected templa
                             display_value = f"{code[:4]}.{code[4:6]}.{code[6:]}"
                         elif len(code) >= 4:
                             display_value = f"{code[:4]}.{code[4:]}"
+                    # Parse unit_of_quantity (column 2) to clean format
+                    elif col_idx == 2 and display_value:
+                        display_value = parse_qty_unit(display_value)
                     item = QTableWidgetItem(display_value)
                     self.hts_db_table.setItem(row_idx, col_idx, item)
 
@@ -18823,6 +18832,112 @@ Please fix this error in the template code. Return the complete corrected templa
                 self, "Import Failed",
                 f"Failed to import HTS database:\n\n{str(e)}\n\n"
                 "If a backup exists, it has not been modified."
+            )
+
+    def clean_hts_unit_format(self):
+        """Clean up unit_of_quantity values in hts.db to remove JSON arrays and HTML tags."""
+        from PyQt5.QtWidgets import QProgressDialog
+        from PyQt5.QtCore import Qt
+
+        hts_db_path = RESOURCES_DIR / "References" / "hts.db"
+
+        if not hts_db_path.exists():
+            QMessageBox.warning(self, "Database Not Found", f"hts.db not found at: {hts_db_path}")
+            return
+
+        # Confirm action
+        reply = QMessageBox.question(
+            self,
+            "Clean Unit Format",
+            "This will clean up all unit_of_quantity values in the HTS database:\n\n"
+            '- JSON arrays like \'["kg"]\' will become "KG"\n'
+            '- HTML tags like \'<U>KG</U>\' will be removed\n'
+            '- Values like \'["doz.","<u>kg</u>"]\' will become "DOZ/KG"\n\n'
+            "Do you want to continue?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes
+        )
+
+        if reply != QMessageBox.Yes:
+            return
+
+        progress = QProgressDialog("Cleaning unit_of_quantity values...", "Cancel", 0, 100, self)
+        progress.setWindowTitle("Clean HTS Units")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setMinimumWidth(400)
+        progress.setValue(10)
+        QApplication.processEvents()
+
+        try:
+            conn = sqlite3.connect(str(hts_db_path))
+            cursor = conn.cursor()
+
+            # Find all records with unit_of_quantity that need cleaning
+            # (JSON arrays start with '[' or contain HTML tags '<')
+            cursor.execute("""
+                SELECT full_code, unit_of_quantity FROM hts_codes
+                WHERE unit_of_quantity LIKE '[%' OR unit_of_quantity LIKE '%<%'
+            """)
+            records_to_clean = cursor.fetchall()
+
+            progress.setValue(30)
+            progress.setLabelText(f"Found {len(records_to_clean)} records to clean...")
+            QApplication.processEvents()
+
+            if not records_to_clean:
+                progress.close()
+                QMessageBox.information(
+                    self, "No Changes Needed",
+                    "All unit_of_quantity values are already in clean format."
+                )
+                conn.close()
+                return
+
+            # Clean each record
+            cleaned_count = 0
+            for full_code, unit_raw in records_to_clean:
+                if progress.wasCanceled():
+                    conn.rollback()
+                    conn.close()
+                    return
+
+                cleaned_unit = parse_qty_unit(unit_raw)
+                cursor.execute("""
+                    UPDATE hts_codes SET unit_of_quantity = ? WHERE full_code = ?
+                """, (cleaned_unit, full_code))
+                cleaned_count += 1
+
+                if cleaned_count % 1000 == 0:
+                    pct = 30 + int((cleaned_count / len(records_to_clean)) * 60)
+                    progress.setValue(pct)
+                    progress.setLabelText(f"Cleaned {cleaned_count:,} / {len(records_to_clean):,} records...")
+                    QApplication.processEvents()
+
+            conn.commit()
+            conn.close()
+
+            progress.setValue(100)
+            progress.close()
+
+            QMessageBox.information(
+                self, "Cleanup Complete",
+                f"Successfully cleaned {cleaned_count:,} unit_of_quantity values.\n\n"
+                f"Examples of changes:\n"
+                f'- \'["kg"]\' → "KG"\n'
+                f'- \'["doz.","<u>kg</u>"]\' → "DOZ/KG"'
+            )
+
+            # Refresh the search results if any are displayed
+            if self.hts_db_table.rowCount() > 0:
+                self.search_hts_database()
+
+        except Exception as e:
+            progress.close()
+            logger.error(f"HTS unit cleanup failed: {e}")
+            QMessageBox.critical(
+                self, "Cleanup Failed",
+                f"Failed to clean unit_of_quantity values:\n\n{str(e)}"
             )
 
     def import_actions_csv(self):
