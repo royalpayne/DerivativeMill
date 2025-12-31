@@ -17472,8 +17472,8 @@ Please fix this error in the template code. Return the complete corrected templa
         self.parts_table.setRowCount(len(df))
         # Map table column headers to dataframe columns
         # Headers: part_number, description, hts_code, country_origin, mid, client_code,
-        #          steel_ratio, aluminum_ratio, copper_ratio, wood_ratio, non_steel_ratio,
-        #          qty_unit, updated_date
+        #          steel_%, aluminum_%, copper_%, wood_%, auto_%, non_steel_%,
+        #          qty_unit, hts_verified, Sec301_Exclusion_Tariff, updated_date
         for i, row in df.iterrows():
             # Column 0: part_number - store original in UserRole for rename detection
             part_number = str(row.get('part_number', '')) if pd.notna(row.get('part_number')) else ""
@@ -17504,10 +17504,12 @@ Please fix this error in the template code. Return the complete corrected templa
             self.parts_table.setItem(i, 11, QTableWidgetItem(str(row.get('non_steel_ratio', 0.0)) if pd.notna(row.get('non_steel_ratio')) else "0.0"))
             # Column 12: qty_unit
             self.parts_table.setItem(i, 12, QTableWidgetItem(str(row.get('qty_unit', '')) if pd.notna(row.get('qty_unit')) else ""))
-            # Column 13: Sec301_Exclusion_Tariff
-            self.parts_table.setItem(i, 13, QTableWidgetItem(str(row.get('Sec301_Exclusion_Tariff', '')) if pd.notna(row.get('Sec301_Exclusion_Tariff')) else ""))
-            # Column 14: updated_date
-            self.parts_table.setItem(i, 14, QTableWidgetItem(str(row.get('updated_date', '')) if pd.notna(row.get('updated_date')) else ""))
+            # Column 13: hts_verified
+            self.parts_table.setItem(i, 13, QTableWidgetItem(str(row.get('hts_verified', '')) if pd.notna(row.get('hts_verified')) else ""))
+            # Column 14: Sec301_Exclusion_Tariff
+            self.parts_table.setItem(i, 14, QTableWidgetItem(str(row.get('Sec301_Exclusion_Tariff', '')) if pd.notna(row.get('Sec301_Exclusion_Tariff')) else ""))
+            # Column 15: updated_date
+            self.parts_table.setItem(i, 15, QTableWidgetItem(str(row.get('updated_date', '')) if pd.notna(row.get('updated_date')) else ""))
         self.parts_table.blockSignals(False)
 
     # ...existing code...
