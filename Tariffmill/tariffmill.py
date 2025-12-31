@@ -8088,42 +8088,18 @@ class TariffMill(QMainWindow):
             if qty_unit in NO_QTY_UNITS:
                 return ''
 
-            # Get content_type safely - handle NaN, None, and various string formats
-            content_type_raw = row.get('_content_type', '')
-            if pd.notna(content_type_raw) and content_type_raw:
-                content_type = str(content_type_raw).strip().lower()
-            else:
-                content_type = ''
-
-            # Get HTS code to check material type by chapter
-            hts_raw = row.get('hts_code', '')
-            hts_code = str(hts_raw).replace('.', '').strip() if pd.notna(hts_raw) else ''
-            hts_chapter = hts_code[:2] if len(hts_code) >= 2 else ''
-
-            # Get CalcWtNet safely
-            calc_wt = row.get('CalcWtNet', 0)
-            if pd.isna(calc_wt):
-                calc_wt = 0
-
-            # CBP requires Qty2 (weight) for ALL derivative rows (including non_232)
-            # This includes steel, aluminum, copper, wood, auto, AND non_232 portions
-            # Also applies to items in specific HTS chapters:
-            # - Aluminum = HTS Chapter 76
-            # - Steel = HTS Chapters 72, 73
-            # - Copper = HTS Chapter 74
-            is_derivative_row = content_type in ['steel', 'aluminum', 'copper', 'wood', 'auto', 'non_232']
-            is_aluminum_hts = hts_chapter == '76'
-            is_steel_hts = hts_chapter in ['72', '73']
-            is_copper_hts = hts_chapter == '74'
-
-            # Include Qty2 for any derivative row OR specific HTS chapters
-            if is_derivative_row or is_aluminum_hts or is_steel_hts or is_copper_hts:
-                if calc_wt > 0:
-                    return str(int(round(calc_wt)))
+            # IMPORTANT: For single units (weight-only or count-only), Qty2 should always be empty
+            # Only dual units (like NO/KG) should have both Qty1 and Qty2
+            # Single weight units: KG, G, T - only Qty1 (weight)
+            # Single count units: NO, PCS, etc. - only Qty1 (count)
+            if qty_unit in WEIGHT_UNITS or qty_unit in COUNT_UNITS:
                 return ''
 
             # Dual units: Qty2 is net weight (minimum 1 KG)
             if qty_unit in DUAL_UNITS:
+                calc_wt = row.get('CalcWtNet', 0)
+                if pd.isna(calc_wt):
+                    calc_wt = 0
                 wt = int(round(calc_wt))
                 return str(max(wt, 1))  # Minimum 1 KG
 
