@@ -16906,7 +16906,7 @@ Please fix this error in the template code. Return the complete corrected templa
                                steel_ratio as 'steel_%', aluminum_ratio as 'aluminum_%',
                                copper_ratio as 'copper_%', wood_ratio as 'wood_%',
                                auto_ratio as 'auto_%', non_steel_ratio as 'non_steel_%',
-                               qty_unit, Sec301_Exclusion_Tariff, last_updated
+                               qty_unit, hts_verified, Sec301_Exclusion_Tariff, last_updated
                         FROM parts_master
                         WHERE client_code = ?
                         ORDER BY part_number
@@ -16917,7 +16917,7 @@ Please fix this error in the template code. Return the complete corrected templa
                                steel_ratio as 'steel_%', aluminum_ratio as 'aluminum_%',
                                copper_ratio as 'copper_%', wood_ratio as 'wood_%',
                                auto_ratio as 'auto_%', non_steel_ratio as 'non_steel_%',
-                               qty_unit, Sec301_Exclusion_Tariff, last_updated
+                               qty_unit, hts_verified, Sec301_Exclusion_Tariff, last_updated
                         FROM parts_master
                         ORDER BY client_code, part_number
                     """, conn)
