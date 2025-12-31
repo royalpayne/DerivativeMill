@@ -1507,6 +1507,51 @@ def get_232_info(hts_code):
     # No match found in tariff_232 database
     return None, "", ""
 
+def parse_qty_unit(qty_unit_raw):
+    """
+    Parse quantity unit from various formats including JSON arrays.
+
+    The HTS database may store unit_of_quantity as:
+    - Plain string: "KG", "NO", "M2"
+    - JSON array: '["kg"]', '["NO", "KG"]', '["no.", "kg"]'
+
+    Args:
+        qty_unit_raw: Raw quantity unit value from database
+
+    Returns:
+        Cleaned quantity unit string (e.g., "KG", "NO/KG") or empty string
+    """
+    if not qty_unit_raw or pd.isna(qty_unit_raw):
+        return ""
+
+    unit_str = str(qty_unit_raw).strip()
+    if not unit_str:
+        return ""
+
+    # Check if it's a JSON array format like '["kg"]' or '["NO", "KG"]'
+    if unit_str.startswith('[') and unit_str.endswith(']'):
+        try:
+            import json
+            units = json.loads(unit_str)
+            if isinstance(units, list) and len(units) > 0:
+                # Join multiple units with "/" and uppercase
+                # e.g., ["no.", "kg"] -> "NO/KG"
+                cleaned_units = []
+                for u in units:
+                    # Clean up each unit: remove trailing dots, uppercase
+                    clean_u = str(u).strip().rstrip('.').upper()
+                    if clean_u:
+                        cleaned_units.append(clean_u)
+                if cleaned_units:
+                    return "/".join(cleaned_units)
+        except (json.JSONDecodeError, TypeError):
+            # If JSON parsing fails, treat as plain string
+            pass
+
+    # Plain string format - just uppercase and clean
+    return unit_str.rstrip('.').upper()
+
+
 def get_hts_qty_unit(hts_code):
     """
     Lookup the quantity unit (Uom 1) for an HTS code from hts_units table.
@@ -1535,7 +1580,7 @@ def get_hts_qty_unit(hts_code):
             row = c.fetchone()
         conn.close()
         if row:
-            return row[0]
+            return parse_qty_unit(row[0])
     except Exception as e:
         logger.error(f"Error querying hts_units for HTS {hts_clean}: {e}")
 
@@ -1780,6 +1825,22 @@ def init_database():
                 logger.info("Added hts_verified column to parts_master")
         except Exception as e:
             logger.warning(f"Failed to check/add hts_verified column: {e}")
+
+        # Migration: Clean up qty_unit values with JSON array format (e.g., '["kg"]' -> 'KG')
+        try:
+            c.execute("SELECT part_number, qty_unit FROM parts_master WHERE qty_unit LIKE '[%'")
+            parts_to_clean = c.fetchall()
+            if parts_to_clean:
+                cleaned_count = 0
+                for part_number, qty_unit_raw in parts_to_clean:
+                    cleaned_unit = parse_qty_unit(qty_unit_raw)
+                    c.execute("UPDATE parts_master SET qty_unit=? WHERE part_number=?",
+                              (cleaned_unit, part_number))
+                    cleaned_count += 1
+                if cleaned_count > 0:
+                    logger.info(f"Cleaned {cleaned_count} qty_unit values from JSON array format")
+        except Exception as e:
+            logger.warning(f"Failed to clean qty_unit values: {e}")
 
         # Migration: Reset column visibility settings if we have outdated settings
         # (This handles upgrades from versions with fewer columns)
@@ -16471,11 +16532,12 @@ Please fix this error in the template code. Return the complete corrected templa
                     return ""
                 return str(hts).replace(".", "").strip()
 
-            # Load unit_of_quantity lookup from hts.db
+            # Load unit_of_quantity lookup from hts.db and parse to clean format
             hts_conn = sqlite3.connect(str(hts_db_path))
             hts_cursor = hts_conn.cursor()
             hts_cursor.execute("SELECT full_code, unit_of_quantity FROM hts_codes WHERE unit_of_quantity IS NOT NULL AND unit_of_quantity != ''")
-            hts_units = {row[0]: row[1] for row in hts_cursor.fetchall()}
+            # Parse qty_unit to clean format (handles JSON arrays like '["kg"]' -> 'KG')
+            hts_units = {row[0]: parse_qty_unit(row[1]) for row in hts_cursor.fetchall()}
             hts_conn.close()
 
             if not hts_units:
@@ -16498,8 +16560,9 @@ Please fix this error in the template code. Return the complete corrected templa
             for part_number, hts_code in parts:
                 normalized = normalize_hts(hts_code)
                 if normalized in hts_units:
+                    qty_unit_clean = hts_units[normalized]
                     c.execute("UPDATE parts_master SET qty_unit=? WHERE part_number=?",
-                              (hts_units[normalized], part_number))
+                              (qty_unit_clean, part_number))
                     updated += c.rowcount
 
             conn.commit()
@@ -16546,10 +16609,11 @@ Please fix this error in the template code. Return the complete corrected templa
                 return str(hts).replace(".", "").strip()
 
             # Load all valid HTS codes and their units from hts.db
+            # Parse qty_unit to clean format (handles JSON arrays like '["kg"]' -> 'KG')
             hts_conn = sqlite3.connect(str(hts_db_path))
             hts_cursor = hts_conn.cursor()
             hts_cursor.execute("SELECT full_code, unit_of_quantity FROM hts_codes")
-            hts_data = {row[0]: row[1] for row in hts_cursor.fetchall()}
+            hts_data = {row[0]: parse_qty_unit(row[1]) for row in hts_cursor.fetchall()}
             hts_conn.close()
 
             if not hts_data:
@@ -16575,7 +16639,7 @@ Please fix this error in the template code. Return the complete corrected templa
                 normalized = normalize_hts(hts_code)
 
                 if normalized in hts_data:
-                    # HTS is valid - update verified status and qty_unit
+                    # HTS is valid - update verified status and qty_unit (already parsed/cleaned)
                     qty_unit = hts_data[normalized] or ""
                     c.execute("""UPDATE parts_master
                                 SET hts_verified=?, qty_unit=?
