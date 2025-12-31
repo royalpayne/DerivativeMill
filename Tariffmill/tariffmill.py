@@ -13237,25 +13237,38 @@ Please fix this error in the template code. Return the complete corrected templa
         """
         import importlib
         import importlib.util
-        import subprocess
 
-        # Method 1: Try direct import (most reliable for already-loaded packages)
+        # Method 1: Try direct import (most reliable - works for bundled PyInstaller apps too)
         try:
             importlib.import_module(package_name)
+            logger.debug(f"Package {package_name} imported successfully")
             return True
-        except (ImportError, ModuleNotFoundError):
-            pass
+        except (ImportError, ModuleNotFoundError) as e:
+            logger.debug(f"Direct import of {package_name} failed: {e}")
 
-        # Method 2: Clear import caches and try find_spec (for newly installed packages)
+        # Method 2: Clear import caches and try find_spec
         try:
             importlib.invalidate_caches()
             spec = importlib.util.find_spec(package_name)
             if spec is not None:
+                logger.debug(f"Package {package_name} found via find_spec")
                 return True
-        except (ImportError, ModuleNotFoundError):
-            pass
+        except (ImportError, ModuleNotFoundError, ValueError) as e:
+            logger.debug(f"find_spec for {package_name} failed: {e}")
 
-        # Method 3: Use pip to check if package is installed (most reliable for fresh installs)
+        # If running as a frozen PyInstaller app, we can't install packages at runtime
+        # The package should have been bundled - if import failed, it's not available
+        if getattr(sys, 'frozen', False):
+            logger.warning(f"Package {package_name} not bundled in frozen app")
+            QMessageBox.warning(
+                self, "Package Not Available",
+                f"The {package_name} package is not available in this build.\n\n"
+                "Please contact support or use a development version."
+            )
+            return False
+
+        # Method 3: For non-frozen apps, use pip to check if package is installed
+        import subprocess
         try:
             startupinfo = None
             creationflags = 0

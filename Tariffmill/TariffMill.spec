@@ -13,7 +13,7 @@ a = Analysis(
         (os.path.join(PYTHON_DIR, 'vcruntime140_1.dll'), '.'),
     ],
     datas=[('Resources', 'Resources')],
-    hiddenimports=['pdfplumber', 'pdfplumber.utils', 'pdfminer', 'pdfminer.high_level', 'pdfminer.layout', 'pdfminer.pdfparser', 'pdfminer.pdfdocument', 'pdfminer.pdfpage', 'pdfminer.pdfinterp', 'pdfminer.converter', 'pdfminer.cmapdb', 'pdfminer.psparser', 'PIL', 'PIL.Image'],
+    hiddenimports=['pdfplumber', 'pdfplumber.utils', 'pdfminer', 'pdfminer.high_level', 'pdfminer.layout', 'pdfminer.pdfparser', 'pdfminer.pdfdocument', 'pdfminer.pdfpage', 'pdfminer.pdfinterp', 'pdfminer.converter', 'pdfminer.cmapdb', 'pdfminer.psparser', 'PIL', 'PIL.Image', 'anthropic', 'openai'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
