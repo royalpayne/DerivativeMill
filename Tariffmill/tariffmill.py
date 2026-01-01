@@ -3444,6 +3444,12 @@ class TariffMill(QMainWindow):
         log_action.triggered.connect(self.show_log_dialog)
         log_menu.addAction(log_action)
 
+        # Add Statistics action to Log View menu
+        stats_icon = self.style().standardIcon(QStyle.SP_ComputerIcon)
+        stats_action = QAction(stats_icon, "Statistics...", self)
+        stats_action.triggered.connect(self.show_statistics_dialog)
+        log_menu.addAction(stats_action)
+
         # Add References menu
         references_menu = menubar.addMenu("References")
         references_icon = self.style().standardIcon(QStyle.SP_FileDialogInfoView)
@@ -11718,65 +11724,12 @@ class TariffMill(QMainWindow):
         layout.addWidget(title)
 
         description = QLabel(
-            "Configure AI providers and API keys for the AI Template Generator and other AI features. "
+            "Configure Anthropic API key for the AI Template Generator. "
             "API keys are stored securely in the local database."
         )
         description.setWordWrap(True)
         description.setStyleSheet("color: #666; margin-bottom: 10px;")
         layout.addWidget(description)
-
-        # OpenAI Configuration
-        openai_group = QGroupBox("OpenAI")
-        openai_layout = QFormLayout()
-
-        # Package status row
-        openai_pkg_layout = QHBoxLayout()
-        self.openai_pkg_indicator = QLabel("●")
-        self.openai_pkg_label = QLabel("Checking...")
-        openai_pkg_layout.addWidget(self.openai_pkg_indicator)
-        openai_pkg_layout.addWidget(self.openai_pkg_label)
-        openai_pkg_layout.addStretch()
-        self.btn_install_openai = QPushButton("Install Package")
-        self.btn_install_openai.clicked.connect(lambda: self._install_ai_package('openai'))
-        self.btn_install_openai.setVisible(False)
-        openai_pkg_layout.addWidget(self.btn_install_openai)
-        openai_layout.addRow("Package:", openai_pkg_layout)
-
-        self.ai_openai_api_key = QLineEdit()
-        self.ai_openai_api_key.setEchoMode(QLineEdit.Password)
-        self.ai_openai_api_key.setPlaceholderText("sk-...")
-        saved_openai_key = self._get_ai_api_key('openai')
-        if saved_openai_key:
-            self.ai_openai_api_key.setText(saved_openai_key)
-        openai_layout.addRow("API Key:", self.ai_openai_api_key)
-
-        self.ai_openai_model = QComboBox()
-        self.ai_openai_model.setEditable(True)
-        self.ai_openai_model.addItems(["gpt-4o", "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo", "gpt-4o-mini"])
-        saved_openai_model = self._get_ai_setting('openai_default_model')
-        if saved_openai_model:
-            idx = self.ai_openai_model.findText(saved_openai_model)
-            if idx >= 0:
-                self.ai_openai_model.setCurrentIndex(idx)
-            else:
-                self.ai_openai_model.setCurrentText(saved_openai_model)
-        openai_layout.addRow("Default Model:", self.ai_openai_model)
-
-        # OpenAI status indicator
-        openai_status_layout = QHBoxLayout()
-        self.openai_status_indicator = QLabel("●")
-        self.openai_status_label = QLabel("Not configured")
-        openai_status_layout.addWidget(self.openai_status_indicator)
-        openai_status_layout.addWidget(self.openai_status_label)
-        openai_status_layout.addStretch()
-
-        btn_test_openai = QPushButton("Test Connection")
-        btn_test_openai.clicked.connect(lambda: self._test_ai_connection('openai'))
-        openai_status_layout.addWidget(btn_test_openai)
-        openai_layout.addRow("Status:", openai_status_layout)
-
-        openai_group.setLayout(openai_layout)
-        layout.addWidget(openai_group)
 
         # Anthropic Configuration
         anthropic_group = QGroupBox("Anthropic (Claude)")
@@ -11801,6 +11754,8 @@ class TariffMill(QMainWindow):
         saved_anthropic_key = self._get_ai_api_key('anthropic')
         if saved_anthropic_key:
             self.ai_anthropic_api_key.setText(saved_anthropic_key)
+        # Auto-save API key when editing is finished
+        self.ai_anthropic_api_key.editingFinished.connect(self._auto_save_ai_api_key)
         anthropic_layout.addRow("API Key:", self.ai_anthropic_api_key)
 
         self.ai_anthropic_model = QComboBox()
@@ -11831,118 +11786,12 @@ class TariffMill(QMainWindow):
         anthropic_group.setLayout(anthropic_layout)
         layout.addWidget(anthropic_group)
 
-        # Google Gemini Configuration
-        gemini_group = QGroupBox("Google Gemini")
-        gemini_layout = QFormLayout()
-
-        # Package status row
-        gemini_pkg_layout = QHBoxLayout()
-        self.gemini_pkg_indicator = QLabel("●")
-        self.gemini_pkg_label = QLabel("Checking...")
-        gemini_pkg_layout.addWidget(self.gemini_pkg_indicator)
-        gemini_pkg_layout.addWidget(self.gemini_pkg_label)
-        gemini_pkg_layout.addStretch()
-        self.btn_install_gemini = QPushButton("Install Package")
-        self.btn_install_gemini.clicked.connect(lambda: self._install_ai_package('google-generativeai'))
-        self.btn_install_gemini.setVisible(False)
-        gemini_pkg_layout.addWidget(self.btn_install_gemini)
-        gemini_layout.addRow("Package:", gemini_pkg_layout)
-
-        self.ai_gemini_api_key = QLineEdit()
-        self.ai_gemini_api_key.setEchoMode(QLineEdit.Password)
-        self.ai_gemini_api_key.setPlaceholderText("AI...")
-        saved_gemini_key = self._get_ai_api_key('gemini')
-        if saved_gemini_key:
-            self.ai_gemini_api_key.setText(saved_gemini_key)
-        gemini_layout.addRow("API Key:", self.ai_gemini_api_key)
-
-        self.ai_gemini_model = QComboBox()
-        self.ai_gemini_model.setEditable(True)
-        self.ai_gemini_model.addItems(["gemini-1.5-pro", "gemini-1.5-flash", "gemini-1.0-pro"])
-        saved_gemini_model = self._get_ai_setting('gemini_default_model')
-        if saved_gemini_model:
-            idx = self.ai_gemini_model.findText(saved_gemini_model)
-            if idx >= 0:
-                self.ai_gemini_model.setCurrentIndex(idx)
-            else:
-                self.ai_gemini_model.setCurrentText(saved_gemini_model)
-        gemini_layout.addRow("Default Model:", self.ai_gemini_model)
-
-        # Gemini status indicator
-        gemini_status_layout = QHBoxLayout()
-        self.gemini_status_indicator = QLabel("●")
-        self.gemini_status_label = QLabel("Not configured")
-        gemini_status_layout.addWidget(self.gemini_status_indicator)
-        gemini_status_layout.addWidget(self.gemini_status_label)
-        gemini_status_layout.addStretch()
-
-        btn_test_gemini = QPushButton("Test Connection")
-        btn_test_gemini.clicked.connect(lambda: self._test_ai_connection('gemini'))
-        gemini_status_layout.addWidget(btn_test_gemini)
-        gemini_layout.addRow("Status:", gemini_status_layout)
-
-        gemini_group.setLayout(gemini_layout)
-        layout.addWidget(gemini_group)
-
-        # Groq Configuration
-        groq_group = QGroupBox("Groq")
-        groq_layout = QFormLayout()
-
-        # Package status row
-        groq_pkg_layout = QHBoxLayout()
-        self.groq_pkg_indicator = QLabel("●")
-        self.groq_pkg_label = QLabel("Checking...")
-        groq_pkg_layout.addWidget(self.groq_pkg_indicator)
-        groq_pkg_layout.addWidget(self.groq_pkg_label)
-        groq_pkg_layout.addStretch()
-        self.btn_install_groq = QPushButton("Install Package")
-        self.btn_install_groq.clicked.connect(lambda: self._install_ai_package('groq'))
-        self.btn_install_groq.setVisible(False)
-        groq_pkg_layout.addWidget(self.btn_install_groq)
-        groq_layout.addRow("Package:", groq_pkg_layout)
-
-        self.ai_groq_api_key = QLineEdit()
-        self.ai_groq_api_key.setEchoMode(QLineEdit.Password)
-        self.ai_groq_api_key.setPlaceholderText("gsk_...")
-        saved_groq_key = self._get_ai_api_key('groq')
-        if saved_groq_key:
-            self.ai_groq_api_key.setText(saved_groq_key)
-        groq_layout.addRow("API Key:", self.ai_groq_api_key)
-
-        self.ai_groq_model = QComboBox()
-        self.ai_groq_model.setEditable(True)
-        self.ai_groq_model.addItems(["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768", "gemma2-9b-it"])
-        saved_groq_model = self._get_ai_setting('groq_default_model')
-        if saved_groq_model:
-            idx = self.ai_groq_model.findText(saved_groq_model)
-            if idx >= 0:
-                self.ai_groq_model.setCurrentIndex(idx)
-            else:
-                self.ai_groq_model.setCurrentText(saved_groq_model)
-        groq_layout.addRow("Default Model:", self.ai_groq_model)
-
-        # Groq status indicator
-        groq_status_layout = QHBoxLayout()
-        self.groq_status_indicator = QLabel("●")
-        self.groq_status_label = QLabel("Not configured")
-        groq_status_layout.addWidget(self.groq_status_indicator)
-        groq_status_layout.addWidget(self.groq_status_label)
-        groq_status_layout.addStretch()
-
-        btn_test_groq = QPushButton("Test Connection")
-        btn_test_groq.clicked.connect(lambda: self._test_ai_connection('groq'))
-        groq_status_layout.addWidget(btn_test_groq)
-        groq_layout.addRow("Status:", groq_status_layout)
-
-        groq_group.setLayout(groq_layout)
-        layout.addWidget(groq_group)
-
-        # Default Provider Selection
+        # Default Provider Selection (Anthropic only)
         default_group = QGroupBox("Default Settings")
         default_layout = QFormLayout()
 
         self.ai_default_provider = QComboBox()
-        self.ai_default_provider.addItems(["OpenAI", "Anthropic", "Google Gemini", "Groq"])
+        self.ai_default_provider.addItems(["Anthropic"])
         saved_default_provider = self._get_ai_setting('default_provider')
         if saved_default_provider:
             idx = self.ai_default_provider.findText(saved_default_provider)
@@ -12030,33 +11879,9 @@ class TariffMill(QMainWindow):
             logger.error(f"Failed to save AI setting: {e}")
 
     def _test_ai_connection(self, provider: str):
-        """Test connection to AI provider."""
+        """Test connection to AI provider (Anthropic only)."""
         try:
-            if provider == 'openai':
-                api_key = self.ai_openai_api_key.text().strip()
-                if not api_key:
-                    QMessageBox.warning(self, "Test Failed", "Please enter an OpenAI API key.")
-                    return
-                # Test with a simple API call
-                import urllib.request
-                import json
-                request = urllib.request.Request(
-                    "https://api.openai.com/v1/models",
-                    headers={
-                        'Authorization': f'Bearer {api_key}',
-                        'Content-Type': 'application/json'
-                    }
-                )
-                with urllib.request.urlopen(request, timeout=10) as response:
-                    data = json.loads(response.read().decode())
-                    model_count = len(data.get('data', []))
-                    QMessageBox.information(self, "Connection Successful",
-                        f"Successfully connected to OpenAI API.\n{model_count} models available.")
-                    self.openai_status_indicator.setStyleSheet("color: #27ae60; font-size: 16px; font-weight: bold;")
-                    self.openai_status_label.setText("Connected")
-                    self.openai_status_label.setStyleSheet("color: #27ae60;")
-
-            elif provider == 'anthropic':
+            if provider == 'anthropic':
                 api_key = self.ai_anthropic_api_key.text().strip()
                 if not api_key:
                     QMessageBox.warning(self, "Test Failed", "Please enter an Anthropic API key.")
@@ -12072,97 +11897,19 @@ class TariffMill(QMainWindow):
                     QMessageBox.warning(self, "Invalid Key Format",
                         "Anthropic API keys should start with 'sk-ant-'")
 
-            elif provider == 'gemini':
-                api_key = self.ai_gemini_api_key.text().strip()
-                if not api_key:
-                    QMessageBox.warning(self, "Test Failed", "Please enter a Google AI API key.")
-                    return
-                # Test with a simple API call to list models
-                import urllib.request
-                import json
-                request = urllib.request.Request(
-                    f"https://generativelanguage.googleapis.com/v1/models?key={api_key}",
-                    headers={'Content-Type': 'application/json'}
-                )
-                with urllib.request.urlopen(request, timeout=10) as response:
-                    data = json.loads(response.read().decode())
-                    model_count = len(data.get('models', []))
-                    QMessageBox.information(self, "Connection Successful",
-                        f"Successfully connected to Google AI API.\n{model_count} models available.")
-                    self.gemini_status_indicator.setStyleSheet("color: #27ae60; font-size: 16px; font-weight: bold;")
-                    self.gemini_status_label.setText("Connected")
-                    self.gemini_status_label.setStyleSheet("color: #27ae60;")
-
-            elif provider == 'groq':
-                api_key = self.ai_groq_api_key.text().strip()
-                if not api_key:
-                    QMessageBox.warning(self, "Test Failed", "Please enter a Groq API key.")
-                    return
-                # Test with a simple API call to list models
-                import urllib.request
-                import json
-                request = urllib.request.Request(
-                    "https://api.groq.com/openai/v1/models",
-                    headers={
-                        'Authorization': f'Bearer {api_key}',
-                        'Content-Type': 'application/json'
-                    }
-                )
-                with urllib.request.urlopen(request, timeout=10) as response:
-                    data = json.loads(response.read().decode())
-                    model_count = len(data.get('data', []))
-                    QMessageBox.information(self, "Connection Successful",
-                        f"Successfully connected to Groq API.\n{model_count} models available.")
-                    self.groq_status_indicator.setStyleSheet("color: #27ae60; font-size: 16px; font-weight: bold;")
-                    self.groq_status_label.setText("Connected")
-                    self.groq_status_label.setStyleSheet("color: #27ae60;")
-
-        except urllib.error.HTTPError as e:
-            QMessageBox.warning(self, "Connection Failed", f"HTTP Error: {e.code}\n{e.reason}")
-            self._set_provider_status_error(provider)
-        except urllib.error.URLError as e:
-            QMessageBox.warning(self, "Connection Failed", f"Could not connect: {e.reason}")
-            self._set_provider_status_error(provider)
         except Exception as e:
             QMessageBox.warning(self, "Connection Failed", f"Error: {str(e)}")
             self._set_provider_status_error(provider)
 
     def _set_provider_status_error(self, provider: str):
         """Set provider status indicator to error state."""
-        if provider == 'openai':
-            self.openai_status_indicator.setStyleSheet("color: #e74c3c; font-size: 16px; font-weight: bold;")
-            self.openai_status_label.setText("Connection failed")
-            self.openai_status_label.setStyleSheet("color: #e74c3c;")
-        elif provider == 'anthropic':
+        if provider == 'anthropic':
             self.anthropic_status_indicator.setStyleSheet("color: #e74c3c; font-size: 16px; font-weight: bold;")
             self.anthropic_status_label.setText("Connection failed")
             self.anthropic_status_label.setStyleSheet("color: #e74c3c;")
-        elif provider == 'gemini':
-            self.gemini_status_indicator.setStyleSheet("color: #e74c3c; font-size: 16px; font-weight: bold;")
-            self.gemini_status_label.setText("Connection failed")
-            self.gemini_status_label.setStyleSheet("color: #e74c3c;")
-        elif provider == 'groq':
-            self.groq_status_indicator.setStyleSheet("color: #e74c3c; font-size: 16px; font-weight: bold;")
-            self.groq_status_label.setText("Connection failed")
-            self.groq_status_label.setStyleSheet("color: #e74c3c;")
 
     def _update_ai_status_indicators(self):
-        """Update all AI status indicators based on current configuration."""
-        # OpenAI
-        openai_key = self.ai_openai_api_key.text().strip()
-        if openai_key and openai_key.startswith('sk-'):
-            self.openai_status_indicator.setStyleSheet("color: #f39c12; font-size: 16px; font-weight: bold;")
-            self.openai_status_label.setText("Key configured - test to verify")
-            self.openai_status_label.setStyleSheet("color: #f39c12;")
-        elif openai_key:
-            self.openai_status_indicator.setStyleSheet("color: #e74c3c; font-size: 16px; font-weight: bold;")
-            self.openai_status_label.setText("Invalid key format")
-            self.openai_status_label.setStyleSheet("color: #e74c3c;")
-        else:
-            self.openai_status_indicator.setStyleSheet("color: #95a5a6; font-size: 16px; font-weight: bold;")
-            self.openai_status_label.setText("Not configured")
-            self.openai_status_label.setStyleSheet("color: #95a5a6;")
-
+        """Update AI status indicators based on current configuration."""
         # Anthropic
         anthropic_key = self.ai_anthropic_api_key.text().strip()
         if anthropic_key and anthropic_key.startswith('sk-ant-'):
@@ -12178,49 +11925,23 @@ class TariffMill(QMainWindow):
             self.anthropic_status_label.setText("Not configured")
             self.anthropic_status_label.setStyleSheet("color: #95a5a6;")
 
-        # Google Gemini
-        gemini_key = self.ai_gemini_api_key.text().strip()
-        if gemini_key and gemini_key.startswith('AI'):
-            self.gemini_status_indicator.setStyleSheet("color: #f39c12; font-size: 16px; font-weight: bold;")
-            self.gemini_status_label.setText("Key configured - test to verify")
-            self.gemini_status_label.setStyleSheet("color: #f39c12;")
-        elif gemini_key:
-            self.gemini_status_indicator.setStyleSheet("color: #f39c12; font-size: 16px; font-weight: bold;")
-            self.gemini_status_label.setText("Key configured - test to verify")
-            self.gemini_status_label.setStyleSheet("color: #f39c12;")
-        else:
-            self.gemini_status_indicator.setStyleSheet("color: #95a5a6; font-size: 16px; font-weight: bold;")
-            self.gemini_status_label.setText("Not configured")
-            self.gemini_status_label.setStyleSheet("color: #95a5a6;")
-
-        # Groq
-        groq_key = self.ai_groq_api_key.text().strip()
-        if groq_key and groq_key.startswith('gsk_'):
-            self.groq_status_indicator.setStyleSheet("color: #f39c12; font-size: 16px; font-weight: bold;")
-            self.groq_status_label.setText("Key configured - test to verify")
-            self.groq_status_label.setStyleSheet("color: #f39c12;")
-        elif groq_key:
-            self.groq_status_indicator.setStyleSheet("color: #e74c3c; font-size: 16px; font-weight: bold;")
-            self.groq_status_label.setText("Invalid key format (should start with gsk_)")
-            self.groq_status_label.setStyleSheet("color: #e74c3c;")
-        else:
-            self.groq_status_indicator.setStyleSheet("color: #95a5a6; font-size: 16px; font-weight: bold;")
-            self.groq_status_label.setText("Not configured")
-            self.groq_status_label.setStyleSheet("color: #95a5a6;")
+    def _auto_save_ai_api_key(self):
+        """Auto-save the Anthropic API key when editing is finished (no dialog)."""
+        try:
+            api_key = self.ai_anthropic_api_key.text().strip()
+            self._save_ai_api_key('anthropic', api_key)
+            self._update_ai_status_indicators()
+            logger.info("Anthropic API key auto-saved")
+        except Exception as e:
+            logger.error(f"Failed to auto-save API key: {e}")
 
     def _save_ai_settings(self):
-        """Save all AI settings from the Configuration dialog tab."""
-        # Save API keys
-        self._save_ai_api_key('openai', self.ai_openai_api_key.text().strip())
+        """Save AI settings from the Configuration dialog tab."""
+        # Save API key (Anthropic only)
         self._save_ai_api_key('anthropic', self.ai_anthropic_api_key.text().strip())
-        self._save_ai_api_key('gemini', self.ai_gemini_api_key.text().strip())
-        self._save_ai_api_key('groq', self.ai_groq_api_key.text().strip())
 
-        # Save default models
-        self._save_ai_setting('openai_default_model', self.ai_openai_model.currentText())
+        # Save default model
         self._save_ai_setting('anthropic_default_model', self.ai_anthropic_model.currentText())
-        self._save_ai_setting('gemini_default_model', self.ai_gemini_model.currentText())
-        self._save_ai_setting('groq_default_model', self.ai_groq_model.currentText())
 
         # Save default provider
         self._save_ai_setting('default_provider', self.ai_default_provider.currentText())
@@ -12231,47 +11952,19 @@ class TariffMill(QMainWindow):
         self._update_ai_status_indicators()
 
     def _update_package_indicators(self):
-        """Update package availability indicators for all AI providers."""
-        packages = {
-            'openai': ('openai', self.openai_pkg_indicator, self.openai_pkg_label, self.btn_install_openai),
-            'anthropic': ('anthropic', self.anthropic_pkg_indicator, self.anthropic_pkg_label, self.btn_install_anthropic),
-            'gemini': ('google-generativeai', self.gemini_pkg_indicator, self.gemini_pkg_label, self.btn_install_gemini),
-            'groq': ('groq', self.groq_pkg_indicator, self.groq_pkg_label, self.btn_install_groq),
-        }
-
-        for provider, (pkg_name, indicator, label, btn) in packages.items():
-            try:
-                if provider == 'openai':
-                    import openai
-                    version = getattr(openai, '__version__', 'installed')
-                    indicator.setStyleSheet("color: #27ae60; font-size: 16px; font-weight: bold;")
-                    label.setText(f"openai v{version} installed")
-                    label.setStyleSheet("color: #27ae60;")
-                    btn.setVisible(False)
-                elif provider == 'anthropic':
-                    import anthropic
-                    version = getattr(anthropic, '__version__', 'installed')
-                    indicator.setStyleSheet("color: #27ae60; font-size: 16px; font-weight: bold;")
-                    label.setText(f"anthropic v{version} installed")
-                    label.setStyleSheet("color: #27ae60;")
-                    btn.setVisible(False)
-                elif provider == 'gemini':
-                    import google.generativeai as genai
-                    indicator.setStyleSheet("color: #27ae60; font-size: 16px; font-weight: bold;")
-                    label.setText("google-generativeai installed")
-                    label.setStyleSheet("color: #27ae60;")
-                    btn.setVisible(False)
-                elif provider == 'groq':
-                    from groq import Groq
-                    indicator.setStyleSheet("color: #27ae60; font-size: 16px; font-weight: bold;")
-                    label.setText("groq installed")
-                    label.setStyleSheet("color: #27ae60;")
-                    btn.setVisible(False)
-            except ImportError:
-                indicator.setStyleSheet("color: #e74c3c; font-size: 16px; font-weight: bold;")
-                label.setText(f"{pkg_name} not installed")
-                label.setStyleSheet("color: #e74c3c;")
-                btn.setVisible(True)
+        """Update package availability indicator for Anthropic."""
+        try:
+            import anthropic
+            version = getattr(anthropic, '__version__', 'installed')
+            self.anthropic_pkg_indicator.setStyleSheet("color: #27ae60; font-size: 16px; font-weight: bold;")
+            self.anthropic_pkg_label.setText(f"anthropic v{version} installed")
+            self.anthropic_pkg_label.setStyleSheet("color: #27ae60;")
+            self.btn_install_anthropic.setVisible(False)
+        except ImportError:
+            self.anthropic_pkg_indicator.setStyleSheet("color: #e74c3c; font-size: 16px; font-weight: bold;")
+            self.anthropic_pkg_label.setText("anthropic not installed")
+            self.anthropic_pkg_label.setStyleSheet("color: #e74c3c;")
+            self.btn_install_anthropic.setVisible(True)
 
     def _install_ai_package(self, package_name: str):
         """Install an AI package using pip."""
@@ -13625,11 +13318,11 @@ EXPORT DETAILS
 
         header_layout.addStretch()
 
-        # AI Provider selection
+        # AI Provider selection (Anthropic only for agent mode)
         self.ai_provider_label = QLabel("AI:")
         header_layout.addWidget(self.ai_provider_label)
         self.ai_provider_combo = QComboBox()
-        self.ai_provider_combo.addItems(["Anthropic", "OpenAI", "Google Gemini", "Groq"])
+        self.ai_provider_combo.addItems(["Anthropic"])  # Anthropic only for agentic AI
         self.ai_provider_combo.setFixedWidth(120)
         self.ai_provider_combo.currentTextChanged.connect(self._on_ai_provider_changed)
         header_layout.addWidget(self.ai_provider_combo)
@@ -13766,6 +13459,12 @@ EXPORT DETAILS
         self.ai_cancel_btn.setEnabled(False)
         self.ai_cancel_btn.clicked.connect(self._ai_cancel_request)
         chat_btn_layout.addWidget(self.ai_cancel_btn)
+
+        self.ai_clear_btn = QPushButton("Clear")
+        self.ai_clear_btn.setStyleSheet(self._get_small_button_style("default"))
+        self.ai_clear_btn.setToolTip("Clear conversation history")
+        self.ai_clear_btn.clicked.connect(self._ai_clear_conversation)
+        chat_btn_layout.addWidget(self.ai_clear_btn)
 
         chat_btn_layout.addStretch()
 
@@ -14530,6 +14229,280 @@ EXPORT DETAILS
 
         dialog.exec_()
 
+    def show_statistics_dialog(self):
+        """Show the Statistics dialog with TariffMill and OCRMill processing stats."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("TariffMill Statistics")
+        dialog.setMinimumSize(900, 700)
+        dialog.setStyleSheet("""
+            QDialog {
+                background-color: #1a1a2e;
+            }
+            QGroupBox {
+                font-weight: bold;
+                font-size: 12px;
+                color: #cccccc;
+                border: 1px solid #3c3c3c;
+                border-radius: 6px;
+                margin-top: 10px;
+                padding-top: 10px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+            }
+            QLabel {
+                color: #cccccc;
+            }
+        """)
+
+        layout = QVBoxLayout(dialog)
+        layout.setSpacing(10)
+        layout.setContentsMargins(15, 15, 15, 15)
+
+        # Header with title and refresh button
+        header_layout = QHBoxLayout()
+        title_label = QLabel("TariffMill Statistics")
+        title_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #00d4ff;")
+        header_layout.addWidget(title_label)
+        header_layout.addStretch()
+
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.setIcon(self.style().standardIcon(QStyle.SP_BrowserReload))
+        refresh_btn.setStyleSheet(self._get_small_button_style("primary"))
+        header_layout.addWidget(refresh_btn)
+        layout.addLayout(header_layout)
+
+        # Create scroll area for content
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setStyleSheet("QScrollArea { background-color: transparent; border: none; }")
+        scroll_widget = QWidget()
+        scroll_widget.setStyleSheet("background-color: transparent;")
+        scroll_layout = QVBoxLayout(scroll_widget)
+        scroll_layout.setSpacing(15)
+
+        # === TariffMill Processing Section ===
+        tm_group = QGroupBox("TariffMill Processing")
+        tm_layout = QVBoxLayout(tm_group)
+
+        # TariffMill summary cards
+        tm_cards_layout = QHBoxLayout()
+        parts_card = self._create_stats_dialog_card("Parts Master", "0", "total parts")
+        clients_card = self._create_stats_dialog_card("Clients", "0", "active clients")
+        today_card = self._create_stats_dialog_card("Today", "0", "invoices processed")
+        value_card = self._create_stats_dialog_card("Total Value", "$0", "all invoices")
+        tm_cards_layout.addWidget(parts_card)
+        tm_cards_layout.addWidget(clients_card)
+        tm_cards_layout.addWidget(today_card)
+        tm_cards_layout.addWidget(value_card)
+        tm_layout.addLayout(tm_cards_layout)
+
+        # Recent exports table
+        exports_label = QLabel("Recent Exports")
+        exports_label.setStyleSheet("font-weight: bold; margin-top: 10px;")
+        tm_layout.addWidget(exports_label)
+
+        exports_table = QTableWidget()
+        exports_table.setColumnCount(5)
+        exports_table.setHorizontalHeaderLabels([
+            "Date/Time", "Client", "Export Type", "Parts Count", "Status"
+        ])
+        exports_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        exports_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        exports_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        exports_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        exports_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        exports_table.setAlternatingRowColors(True)
+        exports_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        exports_table.verticalHeader().setVisible(False)
+        exports_table.setMaximumHeight(150)
+        self._apply_stats_table_style(exports_table)
+        tm_layout.addWidget(exports_table)
+
+        scroll_layout.addWidget(tm_group)
+
+        # === PDF Processing (OCRMill) Section ===
+        ocr_group = QGroupBox("PDF Processing (OCRMill)")
+        ocr_layout = QVBoxLayout(ocr_group)
+
+        # OCRMill summary cards
+        ocr_cards_layout = QHBoxLayout()
+        ocr_today_card = self._create_stats_dialog_card("Today", "0 files", "0 items")
+        ocr_week_card = self._create_stats_dialog_card("This Week", "0 files", "0 items")
+        ocr_total_card = self._create_stats_dialog_card("All Time", "0 files", "0 items")
+        ocr_success_card = self._create_stats_dialog_card("Success Rate", "0%", "0 templates")
+        ocr_cards_layout.addWidget(ocr_today_card)
+        ocr_cards_layout.addWidget(ocr_week_card)
+        ocr_cards_layout.addWidget(ocr_total_card)
+        ocr_cards_layout.addWidget(ocr_success_card)
+        ocr_layout.addLayout(ocr_cards_layout)
+
+        # Template usage table
+        template_label = QLabel("Template Usage Statistics")
+        template_label.setStyleSheet("font-weight: bold; margin-top: 10px;")
+        ocr_layout.addWidget(template_label)
+
+        template_table = QTableWidget()
+        template_table.setColumnCount(7)
+        template_table.setHorizontalHeaderLabels([
+            "Template", "Total Uses", "Successful", "Items Extracted",
+            "Avg Confidence", "Avg Time (ms)", "Last Used"
+        ])
+        template_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        for i in range(1, 7):
+            template_table.horizontalHeader().setSectionResizeMode(i, QHeaderView.ResizeToContents)
+        template_table.setAlternatingRowColors(True)
+        template_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        template_table.verticalHeader().setVisible(False)
+        self._apply_stats_table_style(template_table)
+        ocr_layout.addWidget(template_table)
+
+        scroll_layout.addWidget(ocr_group)
+
+        scroll_layout.addStretch()
+        scroll.setWidget(scroll_widget)
+        layout.addWidget(scroll, 1)
+
+        # Close button
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        close_btn = QPushButton("Close")
+        close_btn.setStyleSheet(self._get_small_button_style("default"))
+        close_btn.clicked.connect(dialog.accept)
+        btn_layout.addWidget(close_btn)
+        layout.addLayout(btn_layout)
+
+        # Function to refresh statistics
+        def refresh_stats():
+            # TariffMill Stats
+            parts_count = 0
+            clients_count = 0
+            if hasattr(self, 'db') and self.db:
+                try:
+                    cursor = self.db.cursor()
+                    cursor.execute("SELECT COUNT(*) FROM parts_master")
+                    parts_count = cursor.fetchone()[0] or 0
+                    cursor.execute("SELECT COUNT(DISTINCT client_name) FROM parts_master WHERE client_name IS NOT NULL AND client_name != ''")
+                    clients_count = cursor.fetchone()[0] or 0
+                except Exception:
+                    pass
+
+            self._update_stats_dialog_card(parts_card, f"{parts_count:,}", "total parts")
+            self._update_stats_dialog_card(clients_card, str(clients_count), "active clients")
+            self._update_stats_dialog_card(today_card, "0", "invoices processed")
+            self._update_stats_dialog_card(value_card, "$0", "all invoices")
+            exports_table.setRowCount(0)
+
+            # OCRMill Stats
+            if hasattr(self, 'ocrmill_db') and self.ocrmill_db:
+                try:
+                    summary = self.ocrmill_db.get_processing_summary()
+                    self._update_stats_dialog_card(ocr_today_card, f"{summary.get('processed_today', 0) or 0} files", f"{summary.get('items_today', 0) or 0} items")
+                    self._update_stats_dialog_card(ocr_week_card, f"{summary.get('processed_week', 0) or 0} files", f"{summary.get('items_week', 0) or 0} items")
+                    self._update_stats_dialog_card(ocr_total_card, f"{summary.get('total_processed', 0) or 0} files", f"{summary.get('total_items', 0) or 0} items")
+
+                    total = summary.get('total_processed', 0) or 0
+                    successful = summary.get('successful', 0) or 0
+                    success_rate = (successful / total * 100) if total > 0 else 0
+                    self._update_stats_dialog_card(ocr_success_card, f"{success_rate:.0f}%", f"{summary.get('templates_used', 0) or 0} templates")
+
+                    # Template statistics
+                    template_stats = self.ocrmill_db.get_template_statistics()
+                    template_table.setRowCount(len(template_stats))
+                    for row, stat in enumerate(template_stats):
+                        template_table.setItem(row, 0, QTableWidgetItem(stat.get('template_name', '')))
+                        template_table.setItem(row, 1, QTableWidgetItem(str(stat.get('total_uses', 0))))
+                        template_table.setItem(row, 2, QTableWidgetItem(str(stat.get('successful_uses', 0))))
+                        template_table.setItem(row, 3, QTableWidgetItem(str(stat.get('total_items', 0) or 0)))
+                        template_table.setItem(row, 4, QTableWidgetItem(f"{stat.get('avg_confidence', 0) or 0:.2f}"))
+                        template_table.setItem(row, 5, QTableWidgetItem(str(int(stat.get('avg_time_ms', 0) or 0))))
+                        last_used = stat.get('last_used', '')
+                        if last_used:
+                            try:
+                                dt = datetime.fromisoformat(last_used)
+                                last_used = dt.strftime("%Y-%m-%d %H:%M")
+                            except Exception:
+                                pass
+                        template_table.setItem(row, 6, QTableWidgetItem(last_used))
+                except Exception as e:
+                    logger.error(f"Error loading OCRMill stats: {e}")
+
+        refresh_btn.clicked.connect(refresh_stats)
+
+        # Initial load
+        QTimer.singleShot(100, refresh_stats)
+
+        dialog.exec_()
+
+    def _create_stats_dialog_card(self, title: str, value: str, subtitle: str) -> QFrame:
+        """Create a statistics card for the Statistics dialog."""
+        card = QFrame()
+        card.setStyleSheet("""
+            QFrame {
+                background-color: #1e3a5f;
+                border: 1px solid #2a5a8f;
+                border-radius: 6px;
+            }
+        """)
+        card_layout = QVBoxLayout(card)
+        card_layout.setSpacing(2)
+        card_layout.setContentsMargins(12, 8, 12, 8)
+
+        title_lbl = QLabel(title)
+        title_lbl.setObjectName("title")
+        title_lbl.setStyleSheet("color: #aaaaaa; font-size: 10px; background: transparent;")
+        card_layout.addWidget(title_lbl)
+
+        value_lbl = QLabel(value)
+        value_lbl.setObjectName("value")
+        value_lbl.setStyleSheet("color: #00d4ff; font-size: 20px; font-weight: bold; background: transparent;")
+        card_layout.addWidget(value_lbl)
+
+        subtitle_lbl = QLabel(subtitle)
+        subtitle_lbl.setObjectName("subtitle")
+        subtitle_lbl.setStyleSheet("color: #888888; font-size: 9px; background: transparent;")
+        card_layout.addWidget(subtitle_lbl)
+
+        return card
+
+    def _update_stats_dialog_card(self, card: QFrame, value: str, subtitle: str):
+        """Update a statistics dialog card's values."""
+        value_lbl = card.findChild(QLabel, "value")
+        subtitle_lbl = card.findChild(QLabel, "subtitle")
+        if value_lbl:
+            value_lbl.setText(value)
+        if subtitle_lbl:
+            subtitle_lbl.setText(subtitle)
+
+    def _apply_stats_table_style(self, table: QTableWidget):
+        """Apply dark theme styling to a statistics table."""
+        table.setStyleSheet("""
+            QTableWidget {
+                background-color: #1e1e1e;
+                color: #cccccc;
+                gridline-color: #3c3c3c;
+                border: 1px solid #3c3c3c;
+                border-radius: 4px;
+            }
+            QTableWidget::item {
+                padding: 4px;
+            }
+            QTableWidget::item:selected {
+                background-color: #264f78;
+            }
+            QHeaderView::section {
+                background-color: #2d2d2d;
+                color: #cccccc;
+                padding: 6px;
+                border: none;
+                border-right: 1px solid #3c3c3c;
+                border-bottom: 1px solid #3c3c3c;
+            }
+        """)
+
     def _on_ocrmill_item_changed(self, item: QTableWidgetItem):
         """Handle item changes in the OCRMill preview table for learning from corrections."""
         if self._ocrmill_editing:
@@ -14696,6 +14669,7 @@ EXPORT DETAILS
         # Update buttons
         self.ai_send_btn.setStyleSheet(self._get_small_button_style("primary"))
         self.ai_cancel_btn.setStyleSheet(self._get_small_button_style("default"))
+        self.ai_clear_btn.setStyleSheet(self._get_small_button_style("default"))
         self.ai_apply_btn.setStyleSheet(self._get_small_button_style("success"))
         self.ai_save_btn.setStyleSheet(self._get_small_button_style("success"))
 
@@ -15523,31 +15497,31 @@ Please fix this error in the template code. Return the complete corrected templa
         sb.setValue(sb.maximum())
 
     def _ai_stop_thinking_animation(self):
-        """Stop the thinking dots animation."""
+        """Stop the thinking dots animation.
+
+        Note: This only stops the timer. It does NOT rebuild the chat display.
+        The caller is responsible for updating the display after adding
+        any new content to ai_conversation_history.
+        """
         if hasattr(self, '_ai_thinking_timer'):
             self._ai_thinking_timer.stop()
-        self._ai_display_chat_history(show_thinking=False)
 
     def _ai_send_message(self):
-        """Send a message to the AI."""
+        """Send a message to the AI using agentic mode."""
         message = self.ai_message_input.toPlainText().strip()
         if not message:
             return
 
-        provider = self.ai_provider_combo.currentText()
+        provider = self.ai_provider_combo.currentText()  # Always "Anthropic"
         api_key = self._ai_get_api_key(provider)
 
-        # Check if required package is installed
-        if provider == "OpenAI":
-            if not self._check_and_install_ai_package("openai"):
-                return
-        elif provider == "Anthropic":
-            if not self._check_and_install_ai_package("anthropic"):
-                return
+        # Check if anthropic package is installed
+        if not self._check_and_install_ai_package("anthropic"):
+            return
 
-        if provider in ["OpenAI", "Anthropic"] and not api_key:
+        if not api_key:
             QMessageBox.warning(self, "Missing API Key",
-                              f"No API key found for {provider}.\n"
+                              "No Anthropic API key found.\n"
                               "Configure it in Configuration > AI Agents tab.")
             return
 
@@ -15584,20 +15558,8 @@ Please fix this error in the template code. Return the complete corrected templa
         if invoice_text:
             ai_message = f"{message}\n\nHere is the extracted text from the PDF file(s):\n\n{invoice_text}"
 
-        # Start AI request
-        from ai_template_generator import AITemplateChatThread
-        self.ai_chat_thread = AITemplateChatThread(
-            provider=provider,
-            model=self.ai_model_combo.currentText(),
-            api_key=api_key,
-            current_code=self.ai_code_edit.toPlainText(),
-            user_message=ai_message,
-            conversation_history=self.ai_conversation_history[:-1],
-            invoice_text=invoice_text
-        )
-        self.ai_chat_thread.finished.connect(self._ai_on_response)
-        self.ai_chat_thread.error.connect(self._ai_on_error)
-        self.ai_chat_thread.start()
+        # Always use agent mode for Anthropic
+        self._ai_send_agent_message(ai_message, api_key, invoice_text)
 
     def _ai_extract_pdf_paths(self, message: str) -> list:
         """Extract PDF file paths from a message."""
@@ -15644,8 +15606,35 @@ Please fix this error in the template code. Return the complete corrected templa
         if self.ai_chat_thread:
             self.ai_chat_thread.cancel()
             self.ai_chat_thread = None
+        # Also cancel agent if running
+        if hasattr(self, '_agent_manager') and self._agent_manager and self._agent_manager.is_running():
+            self._agent_manager.cancel()
         self.ai_send_btn.setEnabled(True)
         self.ai_cancel_btn.setEnabled(False)
+
+    def _ai_clear_conversation(self):
+        """Clear the conversation history and chat display."""
+        # Clear local conversation history
+        self.ai_conversation_history = []
+
+        # Clear agent manager conversation if it exists
+        if hasattr(self, '_agent_manager') and self._agent_manager:
+            self._agent_manager.clear_conversation()
+
+        # Reset chat display to initial state
+        self.ai_chat_display.setHtml(f'''
+            <div style="color: #888; font-style: italic; padding: 20px; text-align: center;">
+                Start a conversation with the AI assistant.<br>
+                Ask questions about the template, request changes, or get help with extraction patterns.
+            </div>
+        ''')
+
+        # Reset accumulated text
+        self._agent_accumulated_text = ""
+        self._agent_tool_results = []
+
+        # Clear message input
+        self.ai_message_input.clear()
 
     def _ai_on_response(self, response: str):
         """Handle AI response."""
@@ -15703,12 +15692,284 @@ Please fix this error in the template code. Return the complete corrected templa
         self.ai_cancel_btn.setEnabled(False)
         self._ai_append_system_message(f"Error: {error}", is_error=True)
 
+    # =========================================================================
+    # Agent Mode Methods
+    # =========================================================================
+
+    def _ai_send_agent_message(self, message: str, api_key: str, invoice_text: str = ""):
+        """Send a message using the agent system with tool use."""
+        try:
+            from ai_agent_integration import AgentManager, create_anthropic_client, ANTHROPIC_MODELS
+
+            # Initialize agent manager if needed
+            if not hasattr(self, '_agent_manager') or self._agent_manager is None:
+                from PyQt5.QtCore import Qt
+                self._agent_manager = AgentManager(self)
+                self._agent_manager.assistant_text.connect(self._ai_on_agent_text, Qt.QueuedConnection)
+                self._agent_manager.tool_started.connect(self._ai_on_tool_started, Qt.QueuedConnection)
+                self._agent_manager.tool_completed.connect(self._ai_on_tool_completed, Qt.QueuedConnection)
+                self._agent_manager.agent_finished.connect(self._ai_on_agent_finished, Qt.QueuedConnection)
+                self._agent_manager.agent_error.connect(self._ai_on_agent_error, Qt.QueuedConnection)
+                self._agent_manager.code_changed.connect(self._ai_on_agent_code_changed, Qt.QueuedConnection)
+
+            # Create API client
+            client = create_anthropic_client(api_key)
+            model_display = self.ai_model_combo.currentText()
+            model = ANTHROPIC_MODELS.get(model_display, "claude-sonnet-4-20250514")
+
+            self._agent_manager.set_api_client(client, model)
+
+            # Set context
+            self._agent_manager.set_template_code(self.ai_code_edit.toPlainText())
+            if invoice_text:
+                self._agent_manager.set_invoice(invoice_text)
+
+            # Set database connection if available
+            if hasattr(self, 'db') and self.db:
+                self._agent_manager.set_database_connection(self.db)
+
+            # Track accumulated agent response for chat history
+            self._agent_accumulated_text = ""
+            self._agent_tool_results = []
+
+            # Send message
+            self._agent_manager.send_message(message)
+
+        except ImportError as e:
+            self._ai_stop_thinking_animation()
+            self.ai_send_btn.setEnabled(True)
+            self.ai_cancel_btn.setEnabled(False)
+            self._ai_append_system_message(f"Agent mode requires additional setup: {e}", is_error=True)
+        except Exception as e:
+            self._ai_stop_thinking_animation()
+            self.ai_send_btn.setEnabled(True)
+            self.ai_cancel_btn.setEnabled(False)
+            self._ai_append_system_message(f"Agent error: {e}", is_error=True)
+
+    def _ai_on_agent_text(self, text: str):
+        """Handle text response from agent."""
+        self._agent_accumulated_text += text
+        # Update display with accumulated text
+        self._ai_display_agent_progress()
+
+    def _ai_on_tool_started(self, tool_name: str, tool_input: dict):
+        """Handle tool invocation start."""
+        # Show tool name and key input parameters
+        input_summary = ""
+        if tool_name == "edit_template":
+            edit_type = tool_input.get("edit_type", "unknown")
+            input_summary = f" ({edit_type})"
+        elif tool_name == "read_template":
+            template = tool_input.get("template_name", "")
+            input_summary = f" ({template})"
+        self._ai_append_system_message(f"🔧 Using tool: {tool_name}{input_summary}")
+
+    def _ai_on_tool_completed(self, tool_name: str, tool_input: dict, tool_result: dict):
+        """Handle tool completion."""
+        self._agent_tool_results.append({
+            "name": tool_name,
+            "input": tool_input,
+            "result": tool_result
+        })
+        is_error = tool_result.get("is_error", False)
+        content = tool_result.get("content", {})
+
+        # Parse JSON string if needed
+        if isinstance(content, str):
+            try:
+                import json
+                content = json.loads(content)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        logger.debug(f"Tool {tool_name} result: is_error={is_error}, content_type={type(content)}, content={content}")
+
+        if is_error:
+            error_msg = content if isinstance(content, str) else content.get("error", "Unknown error")
+            self._ai_append_system_message(f"❌ Tool {tool_name} failed: {error_msg}", is_error=True)
+        else:
+            # Parse content for better display
+            if isinstance(content, dict):
+                success = content.get("success", True)
+                if not success:
+                    error_msg = content.get("error", "Unknown error")
+                    self._ai_append_system_message(f"❌ Tool {tool_name}: {error_msg}", is_error=True)
+                else:
+                    # Show success with details
+                    if tool_name == "edit_template":
+                        edit_type = content.get("edit_type", "")
+                        if edit_type == "surgical":
+                            self._ai_append_system_message(f"✅ Code edited (surgical): {content.get('replaced', 0)} replacement(s)")
+                        else:
+                            self._ai_append_system_message(f"✅ Code rewritten: {content.get('new_line_count', 0)} lines")
+                    elif tool_name == "validate_syntax":
+                        if content.get("valid", False):
+                            self._ai_append_system_message(f"✅ Syntax valid")
+                        else:
+                            self._ai_append_system_message(f"❌ Syntax error: {content.get('error_message', '')}", is_error=True)
+                    elif tool_name == "test_template":
+                        items = content.get("items", [])
+                        self._ai_append_system_message(f"✅ Test complete: {len(items)} items extracted")
+                    else:
+                        self._ai_append_system_message(f"✅ Tool {tool_name} completed")
+            else:
+                self._ai_append_system_message(f"✅ Tool {tool_name} completed")
+
+    def _ai_on_agent_finished(self, result: dict):
+        """Handle agent loop completion."""
+        self._ai_stop_thinking_animation()
+        self.ai_send_btn.setEnabled(True)
+        self.ai_cancel_btn.setEnabled(False)
+
+        # Remove the in-progress marker from display
+        html = self.ai_chat_display.toHtml()
+        if '<!-- AGENT_PROGRESS -->' in html:
+            import re
+            html = re.sub(
+                r'<!-- AGENT_PROGRESS -->.*?<!-- /AGENT_PROGRESS -->',
+                '',
+                html,
+                flags=re.DOTALL
+            )
+            self.ai_chat_display.setHtml(html)
+
+        # Add final response to conversation history
+        final_text = result.get("final_text", self._agent_accumulated_text)
+        if final_text:
+            # Check for code block and auto-apply
+            import re
+            code_match = re.search(r'```python\s*(.*?)\s*```', final_text, re.DOTALL)
+            if code_match:
+                new_code = code_match.group(1).strip()
+                self.ai_code_edit.setPlainText(new_code)
+                response_for_chat = re.sub(r'```python\s*.*?\s*```', '[Code applied to editor]', final_text, flags=re.DOTALL)
+                self.ai_conversation_history.append({"role": "assistant", "content": response_for_chat})
+                self._ai_display_chat_history()
+                self._ai_append_system_message("Code changes automatically applied to the editor.")
+            else:
+                self.ai_conversation_history.append({"role": "assistant", "content": final_text})
+                self._ai_display_chat_history()
+
+        iterations = result.get("iterations", 0)
+        tool_count = len(result.get("tool_calls", []))
+        if tool_count > 0:
+            self._ai_append_system_message(f"Agent completed: {iterations} iterations, {tool_count} tool calls")
+
+        sb = self.ai_chat_display.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def _ai_on_agent_error(self, error: str):
+        """Handle agent error."""
+        self._ai_stop_thinking_animation()
+        self.ai_send_btn.setEnabled(True)
+        self.ai_cancel_btn.setEnabled(False)
+        self._ai_append_system_message(f"Agent error: {error}", is_error=True)
+
+    def _ai_on_agent_code_changed(self, new_code: str):
+        """Handle code change from agent tool."""
+        logger.info(f"_ai_on_agent_code_changed received {len(new_code)} chars")
+        self.ai_code_edit.setPlainText(new_code)
+        self._ai_append_system_message("Template code updated by AI")
+        logger.info("Code editor updated")
+
+        # Test syntax after AI edit
+        self._ai_test_syntax(new_code)
+
+        # Autosave after AI edit
+        self._ai_autosave_template()
+
+    def _ai_test_syntax(self, code: str):
+        """Test syntax of code and display result in chat."""
+        try:
+            compile(code, '<template>', 'exec')
+            self._ai_append_system_message("Syntax check passed")
+            logger.info("Syntax check passed")
+        except SyntaxError as e:
+            error_msg = f"Syntax error at line {e.lineno}: {e.msg}"
+            self._ai_append_system_message(error_msg, is_error=True)
+            logger.warning(f"Syntax check failed: {error_msg}")
+
+    def _ai_display_agent_progress(self):
+        """Display agent progress in chat - show streaming text."""
+        if not self._agent_accumulated_text:
+            return
+
+        # Update or create the in-progress message in the chat display
+        # Find and update existing progress message or create new one
+        html = self.ai_chat_display.toHtml()
+
+        # Create formatted progress message
+        progress_text = self._agent_accumulated_text.replace('\n', '<br>')
+        progress_html = f'''
+        <div style="background-color: #1e3a5f; border-left: 3px solid #00d4ff;
+                    padding: 10px; margin: 5px 0; border-radius: 4px;">
+            <span style="color: #00d4ff; font-weight: bold;">AI (in progress):</span><br>
+            <span style="color: #e0e0e0;">{progress_text}</span>
+        </div>
+        '''
+
+        # Check if we have an in-progress marker
+        if '<!-- AGENT_PROGRESS -->' in html:
+            # Replace existing progress section
+            import re
+            html = re.sub(
+                r'<!-- AGENT_PROGRESS -->.*?<!-- /AGENT_PROGRESS -->',
+                f'<!-- AGENT_PROGRESS -->{progress_html}<!-- /AGENT_PROGRESS -->',
+                html,
+                flags=re.DOTALL
+            )
+            self.ai_chat_display.setHtml(html)
+        else:
+            # Append new progress section
+            self.ai_chat_display.append(f'<!-- AGENT_PROGRESS -->{progress_html}<!-- /AGENT_PROGRESS -->')
+
+        # Scroll to bottom
+        sb = self.ai_chat_display.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
     def _ai_apply_changes(self):
         """Apply AI-suggested code changes."""
         if self.ai_pending_code:
             self.ai_code_edit.setPlainText(self.ai_pending_code)
             self.ai_apply_btn.setEnabled(False)
             self.ai_pending_code = None
+
+    def _ai_autosave_template(self):
+        """Silently autosave template after AI edits. No dialogs shown."""
+        if not self.ai_current_template_path:
+            logger.debug("Autosave skipped: no template path")
+            return False
+
+        code = self.ai_code_edit.toPlainText()
+        if not code.strip():
+            logger.debug("Autosave skipped: empty code")
+            return False
+
+        # Skip syntax validation for autosave - AI may be making incremental changes
+        try:
+            import json
+            # Save code
+            with open(self.ai_current_template_path, 'w', encoding='utf-8') as f:
+                f.write(code)
+
+            # Save metadata
+            metadata = {
+                'provider': self.ai_provider_combo.currentText(),
+                'model': self.ai_model_combo.currentText(),
+                'conversation_history': self.ai_conversation_history,
+                'last_modified': datetime.now().isoformat()
+            }
+            metadata_path = self.ai_current_template_path.with_suffix('.ai_meta.json')
+            with open(metadata_path, 'w', encoding='utf-8') as f:
+                json.dump(metadata, f, indent=2)
+
+            logger.info(f"Autosaved template: {self.ai_current_template_path.name}")
+            self._ai_append_system_message("Template autosaved")
+            return True
+
+        except Exception as e:
+            logger.error(f"Autosave failed: {e}")
+            return False
 
     def _ai_save_template(self):
         """Save the current template."""
