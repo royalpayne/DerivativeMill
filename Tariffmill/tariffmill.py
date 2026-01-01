@@ -8170,7 +8170,11 @@ class TariffMill(QMainWindow):
                 qty = row.get('quantity', '')
                 if pd.notna(qty) and str(qty).strip():
                     try:
-                        return str(int(float(str(qty).replace(',', '').strip())))
+                        qty_val = float(str(qty).replace(',', '').strip())
+                        # Allow 2 decimal places for DOZ, PRS, DOZ. PRS, DOZ PRS units
+                        if qty_unit in {'DOZ', 'PRS', 'DOZ. PRS', 'DOZ PRS', 'DZ PCS'}:
+                            return f"{qty_val:.2f}"
+                        return str(int(qty_val))
                     except (ValueError, TypeError):
                         return ''
                 return ''
