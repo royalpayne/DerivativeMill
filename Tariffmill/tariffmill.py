@@ -1701,6 +1701,18 @@ def init_database():
             value TEXT
         )""")
 
+        # Create export_log table to track export history for statistics
+        c.execute("""CREATE TABLE IF NOT EXISTS export_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT DEFAULT (datetime('now', 'localtime')),
+            client_code TEXT,
+            export_type TEXT,
+            parts_count INTEGER,
+            status TEXT,
+            file_path TEXT,
+            user_name TEXT
+        )""")
+
         # Migration: Add manufacturer_name and customer_id columns to mid_table if they don't exist
         try:
             c.execute("PRAGMA table_info(mid_table)")
@@ -3527,6 +3539,8 @@ class TariffMill(QMainWindow):
         self.tabs.addTab(self.tab_process, "Invoice Processing")
         self.tabs.addTab(self.tab_ocrmill, "PDF Processing")
         self.tabs.addTab(self.tab_master, "Parts View")
+        self.tab_statistics = QWidget()
+        self.tabs.addTab(self.tab_statistics, "Statistics")
         # Invoice Mapping, Output Mapping, and Parts Import moved to Configuration menu
         # Customs Config and Section 232 Actions moved to References menu
         
@@ -3651,10 +3665,11 @@ class TariffMill(QMainWindow):
             return
 
         # Map tab index to setup method
-        # Tab order: 0=Invoice Processing, 1=PDF Processing, 2=Parts View
+        # Tab order: 0=Invoice Processing, 1=PDF Processing, 2=Parts View, 3=Statistics
         tab_setup_methods = {
             1: self.setup_ocrmill_tab,
-            2: self.setup_master_tab
+            2: self.setup_master_tab,
+            3: self.setup_statistics_tab
             # Invoice Mapping, Output Mapping, and Parts Import moved to Configuration menu
             # Customs Config and Section 232 Actions moved to References menu
         }
@@ -13519,9 +13534,7 @@ EXPORT DETAILS
         self.setup_ai_template_tab()
         self.ocrmill_tabs.addTab(self.ai_template_widget, "AI Templates")
 
-        # ===== TAB 3: PROCESSING STATISTICS =====
-        self.setup_processing_stats_tab()
-        self.ocrmill_tabs.addTab(self.processing_stats_widget, "Statistics")
+        # Statistics tab moved to main tab view
 
         layout.addWidget(self.ocrmill_tabs, 1)
 
@@ -14169,6 +14182,320 @@ EXPORT DETAILS
                 }}
             """)
             self.ai_context_label.setToolTip("Select a template to provide context for the AI")
+
+    def setup_statistics_tab(self):
+        """Setup the main Statistics tab with TariffMill and OCRMill processing statistics."""
+        layout = QVBoxLayout(self.tab_statistics)
+        layout.setSpacing(10)
+        layout.setContentsMargins(10, 10, 10, 10)
+
+        # Header with refresh button
+        header_layout = QHBoxLayout()
+        stats_header = QLabel("TariffMill Statistics")
+        stats_header.setStyleSheet("font-weight: bold; font-size: 16px;")
+        header_layout.addWidget(stats_header)
+        header_layout.addStretch()
+
+        self.main_stats_refresh_btn = QPushButton("Refresh")
+        self.main_stats_refresh_btn.setIcon(self.style().standardIcon(QStyle.SP_BrowserReload))
+        self.main_stats_refresh_btn.clicked.connect(self._refresh_main_statistics)
+        header_layout.addWidget(self.main_stats_refresh_btn)
+        layout.addLayout(header_layout)
+
+        # ===== TARIFFMILL STATISTICS SECTION =====
+        tariffmill_group = QGroupBox("TariffMill Processing")
+        tariffmill_layout = QVBoxLayout(tariffmill_group)
+
+        # TariffMill summary cards
+        self.tm_stats_frame = QFrame()
+        tm_summary_layout = QHBoxLayout(self.tm_stats_frame)
+
+        # Parts Master stats
+        self.tm_parts_card = self._create_stat_card("Parts Master", "0", "total parts")
+        tm_summary_layout.addWidget(self.tm_parts_card)
+
+        # Clients stats
+        self.tm_clients_card = self._create_stat_card("Clients", "0", "active clients")
+        tm_summary_layout.addWidget(self.tm_clients_card)
+
+        # Invoices processed today
+        self.tm_today_card = self._create_stat_card("Today", "0", "invoices processed")
+        tm_summary_layout.addWidget(self.tm_today_card)
+
+        # Total invoice value
+        self.tm_value_card = self._create_stat_card("Total Value", "$0", "all invoices")
+        tm_summary_layout.addWidget(self.tm_value_card)
+
+        tariffmill_layout.addWidget(self.tm_stats_frame)
+
+        # Recent exports table
+        exports_label = QLabel("Recent Exports")
+        exports_label.setStyleSheet("font-weight: bold; font-size: 12px; margin-top: 10px;")
+        tariffmill_layout.addWidget(exports_label)
+
+        self.tm_exports_table = QTableWidget()
+        self.tm_exports_table.setColumnCount(5)
+        self.tm_exports_table.setHorizontalHeaderLabels([
+            "Date/Time", "Client", "Export Type", "Parts Count", "Status"
+        ])
+        self.tm_exports_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.tm_exports_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.tm_exports_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.tm_exports_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.tm_exports_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.tm_exports_table.setAlternatingRowColors(True)
+        self.tm_exports_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.tm_exports_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.tm_exports_table.verticalHeader().setVisible(False)
+        self.tm_exports_table.setMaximumHeight(150)
+        tariffmill_layout.addWidget(self.tm_exports_table)
+
+        layout.addWidget(tariffmill_group)
+
+        # ===== OCRMILL/PDF PROCESSING STATISTICS SECTION =====
+        ocrmill_group = QGroupBox("PDF Processing (OCRMill)")
+        ocrmill_layout = QVBoxLayout(ocrmill_group)
+
+        # OCRMill summary cards
+        self.ocr_stats_frame = QFrame()
+        ocr_summary_layout = QHBoxLayout(self.ocr_stats_frame)
+
+        # Today's PDF processing stats
+        self.ocr_today_card = self._create_stat_card("Today", "0 files", "0 items")
+        ocr_summary_layout.addWidget(self.ocr_today_card)
+
+        # This week's stats
+        self.ocr_week_card = self._create_stat_card("This Week", "0 files", "0 items")
+        ocr_summary_layout.addWidget(self.ocr_week_card)
+
+        # All time stats
+        self.ocr_total_card = self._create_stat_card("All Time", "0 files", "0 items")
+        ocr_summary_layout.addWidget(self.ocr_total_card)
+
+        # Success rate
+        self.ocr_success_card = self._create_stat_card("Success Rate", "0%", "0 templates")
+        ocr_summary_layout.addWidget(self.ocr_success_card)
+
+        ocrmill_layout.addWidget(self.ocr_stats_frame)
+
+        # Template statistics table
+        template_label = QLabel("Template Usage Statistics")
+        template_label.setStyleSheet("font-weight: bold; font-size: 12px; margin-top: 10px;")
+        ocrmill_layout.addWidget(template_label)
+
+        self.main_template_stats_table = QTableWidget()
+        self.main_template_stats_table.setColumnCount(7)
+        self.main_template_stats_table.setHorizontalHeaderLabels([
+            "Template", "Total Uses", "Successful", "Items Extracted",
+            "Avg Confidence", "Avg Time (ms)", "Last Used"
+        ])
+        self.main_template_stats_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        for i in range(1, 7):
+            self.main_template_stats_table.horizontalHeader().setSectionResizeMode(i, QHeaderView.ResizeToContents)
+        self.main_template_stats_table.setAlternatingRowColors(True)
+        self.main_template_stats_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.main_template_stats_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.main_template_stats_table.verticalHeader().setVisible(False)
+        ocrmill_layout.addWidget(self.main_template_stats_table, 1)
+
+        layout.addWidget(ocrmill_group, 1)
+
+        # Apply theme-aware styles
+        self._update_main_stats_styles()
+
+        # Initial data load
+        QTimer.singleShot(500, self._refresh_main_statistics)
+
+    def _update_main_stats_styles(self):
+        """Update main Statistics tab styles based on current theme."""
+        colors = self._get_ai_theme_colors()
+
+        # TariffMill stats frame
+        self.tm_stats_frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: {colors['bg_secondary']};
+                border-radius: 6px;
+                padding: 10px;
+            }}
+        """)
+
+        # OCRMill stats frame
+        self.ocr_stats_frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: {colors['bg_secondary']};
+                border-radius: 6px;
+                padding: 10px;
+            }}
+        """)
+
+        # Stat cards styling
+        all_cards = [
+            self.tm_parts_card, self.tm_clients_card, self.tm_today_card, self.tm_value_card,
+            self.ocr_today_card, self.ocr_week_card, self.ocr_total_card, self.ocr_success_card
+        ]
+        for card in all_cards:
+            card.setStyleSheet(f"""
+                QFrame {{
+                    background-color: {colors['bg_input']};
+                    border-radius: 6px;
+                    padding: 8px;
+                    border: 1px solid {colors['border']};
+                }}
+            """)
+            title_lbl = card.findChild(QLabel, "title")
+            value_lbl = card.findChild(QLabel, "value")
+            subtitle_lbl = card.findChild(QLabel, "subtitle")
+            if title_lbl:
+                title_lbl.setStyleSheet(f"color: {colors['text_muted']}; font-size: 10px;")
+            if value_lbl:
+                value_lbl.setStyleSheet(f"color: {colors['accent']}; font-size: 18px; font-weight: bold;")
+            if subtitle_lbl:
+                subtitle_lbl.setStyleSheet(f"color: {colors['text_muted']}; font-size: 10px;")
+
+        # Table styles
+        table_style = f"""
+            QTableWidget {{
+                background-color: {colors['bg_code']};
+                color: {colors['text']};
+                border: 1px solid {colors['border']};
+                border-radius: 4px;
+                gridline-color: {colors['border']};
+            }}
+            QTableWidget::item {{
+                padding: 5px;
+            }}
+            QTableWidget::item:selected {{
+                background-color: {colors['selection']};
+            }}
+            QHeaderView::section {{
+                background-color: {colors['bg_secondary']};
+                color: {colors['text']};
+                padding: 6px;
+                border: none;
+                border-bottom: 1px solid {colors['border']};
+            }}
+        """
+        self.tm_exports_table.setStyleSheet(table_style)
+        self.main_template_stats_table.setStyleSheet(table_style)
+
+    def _refresh_main_statistics(self):
+        """Refresh all main statistics tab data."""
+        try:
+            # ===== TARIFFMILL STATISTICS =====
+            conn = sqlite3.connect(str(DB_PATH))
+
+            # Get total parts count
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM parts_master")
+            total_parts = cursor.fetchone()[0] or 0
+            self._update_stat_card(self.tm_parts_card, f"{total_parts:,}", "total parts")
+
+            # Get unique clients count
+            cursor.execute("SELECT COUNT(DISTINCT client_code) FROM parts_master WHERE client_code IS NOT NULL AND client_code != ''")
+            total_clients = cursor.fetchone()[0] or 0
+            self._update_stat_card(self.tm_clients_card, str(total_clients), "active clients")
+
+            # Get invoices processed today (from process log)
+            today = datetime.now().strftime("%Y-%m-%d")
+            cursor.execute("""
+                SELECT COUNT(*) FROM process_log
+                WHERE date(timestamp) = ?
+            """, (today,))
+            today_invoices = cursor.fetchone()[0] or 0
+            self._update_stat_card(self.tm_today_card, str(today_invoices), "invoices processed")
+
+            # Get total invoice value (sum of all invoice values from process log)
+            cursor.execute("SELECT SUM(total_value) FROM process_log WHERE total_value IS NOT NULL")
+            total_value = cursor.fetchone()[0] or 0
+            if total_value >= 1000000:
+                value_str = f"${total_value/1000000:.1f}M"
+            elif total_value >= 1000:
+                value_str = f"${total_value/1000:.1f}K"
+            else:
+                value_str = f"${total_value:,.2f}"
+            self._update_stat_card(self.tm_value_card, value_str, "all invoices")
+
+            # Get recent exports from export_log table (if exists)
+            try:
+                cursor.execute("""
+                    SELECT timestamp, client_code, export_type, parts_count, status
+                    FROM export_log
+                    ORDER BY timestamp DESC
+                    LIMIT 10
+                """)
+                exports = cursor.fetchall()
+                self.tm_exports_table.setRowCount(len(exports))
+                for row, export in enumerate(exports):
+                    timestamp, client, export_type, parts, status = export
+                    self.tm_exports_table.setItem(row, 0, QTableWidgetItem(str(timestamp or "")))
+                    self.tm_exports_table.setItem(row, 1, QTableWidgetItem(str(client or "")))
+                    self.tm_exports_table.setItem(row, 2, QTableWidgetItem(str(export_type or "")))
+                    self.tm_exports_table.setItem(row, 3, QTableWidgetItem(str(parts or 0)))
+                    status_item = QTableWidgetItem(str(status or ""))
+                    if status == "Success":
+                        status_item.setForeground(QColor("#4caf50"))
+                    self.tm_exports_table.setItem(row, 4, status_item)
+            except sqlite3.OperationalError:
+                # export_log table doesn't exist yet
+                self.tm_exports_table.setRowCount(1)
+                self.tm_exports_table.setItem(0, 0, QTableWidgetItem("No export history available"))
+                self.tm_exports_table.setSpan(0, 0, 1, 5)
+
+            conn.close()
+
+            # ===== OCRMILL STATISTICS =====
+            if hasattr(self, 'ocrmill_db'):
+                summary = self.ocrmill_db.get_processing_stats_summary()
+
+                self._update_stat_card(
+                    self.ocr_today_card,
+                    str(summary.get('processed_today', 0) or 0),
+                    f"{summary.get('items_today', 0) or 0} items"
+                )
+                self._update_stat_card(
+                    self.ocr_week_card,
+                    str(summary.get('processed_week', 0) or 0),
+                    f"{summary.get('items_week', 0) or 0} items"
+                )
+                self._update_stat_card(
+                    self.ocr_total_card,
+                    str(summary.get('total_processed', 0) or 0),
+                    f"{summary.get('total_items', 0) or 0} items"
+                )
+
+                # Calculate success rate
+                total = summary.get('total_processed', 0) or 0
+                successful = summary.get('successful', 0) or 0
+                success_rate = (successful / total * 100) if total > 0 else 0
+                self._update_stat_card(
+                    self.ocr_success_card,
+                    f"{success_rate:.1f}%",
+                    f"{summary.get('templates_used', 0) or 0} templates"
+                )
+
+                # Get template statistics
+                template_stats = self.ocrmill_db.get_template_statistics()
+                self.main_template_stats_table.setRowCount(len(template_stats))
+
+                for row, stat in enumerate(template_stats):
+                    self.main_template_stats_table.setItem(row, 0, QTableWidgetItem(stat.get('template_name', '')))
+                    self.main_template_stats_table.setItem(row, 1, QTableWidgetItem(str(stat.get('total_uses', 0))))
+                    self.main_template_stats_table.setItem(row, 2, QTableWidgetItem(str(stat.get('successful_uses', 0))))
+                    self.main_template_stats_table.setItem(row, 3, QTableWidgetItem(str(stat.get('total_items', 0) or 0)))
+                    self.main_template_stats_table.setItem(row, 4, QTableWidgetItem(f"{stat.get('avg_confidence', 0) or 0:.2f}"))
+                    self.main_template_stats_table.setItem(row, 5, QTableWidgetItem(str(int(stat.get('avg_time_ms', 0) or 0))))
+
+                    last_used = stat.get('last_used', '')
+                    if last_used:
+                        try:
+                            dt = datetime.fromisoformat(last_used)
+                            last_used = dt.strftime("%Y-%m-%d %H:%M")
+                        except Exception:
+                            pass
+                    self.main_template_stats_table.setItem(row, 6, QTableWidgetItem(last_used))
+
+        except Exception as e:
+            logger.error(f"Error refreshing main statistics: {e}")
 
     def setup_processing_stats_tab(self):
         """Setup the Processing Statistics tab to display template usage and processing metrics."""
@@ -16845,6 +17172,19 @@ Please fix this error in the template code. Return the complete corrected templa
             else:
                 df_export.to_excel(file_path, index=False)
 
+            # Log the export for statistics
+            try:
+                log_conn = sqlite3.connect(str(DB_PATH))
+                log_c = log_conn.cursor()
+                log_c.execute("""
+                    INSERT INTO export_log (client_code, export_type, parts_count, status, file_path, user_name)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, ("ALL", "HTS Issues", len(export_data), "Success", file_path, self.current_user_name or ""))
+                log_conn.commit()
+                log_conn.close()
+            except Exception as log_e:
+                logger.warning(f"Failed to log export: {log_e}")
+
             # Show summary
             msg = f"Exported {len(export_data)} parts with HTS issues:\n\n"
             if invalid_parts:
@@ -16973,6 +17313,19 @@ Please fix this error in the template code. Return the complete corrected templa
                 try:
                     df.to_excel(save_path, index=False)
                     dialog.accept()
+
+                    # Log the export for statistics
+                    try:
+                        log_conn = sqlite3.connect(str(DB_PATH))
+                        log_c = log_conn.cursor()
+                        log_c.execute("""
+                            INSERT INTO export_log (client_code, export_type, parts_count, status, file_path, user_name)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                        """, (selected_client or "ALL", "Client Parts", len(df), "Success", save_path, self.current_user_name or ""))
+                        log_conn.commit()
+                        log_conn.close()
+                    except Exception as log_e:
+                        logger.warning(f"Failed to log export: {log_e}")
 
                     QMessageBox.information(self, "Export Complete",
                         f"Exported {len(df)} parts to:\n{save_path}")
@@ -20423,6 +20776,19 @@ Please fix this error in the template code. Return the complete corrected templa
                 logger.info(f"Recorded billing event for {out.name}: {len(export_data)} lines, ${running_total:,.2f}")
             except Exception as billing_err:
                 logger.warning(f"Failed to record billing event: {billing_err}")
+
+            # Log the export for statistics
+            try:
+                log_conn = sqlite3.connect(str(DB_PATH))
+                log_c = log_conn.cursor()
+                log_c.execute("""
+                    INSERT INTO export_log (client_code, export_type, parts_count, status, file_path, user_name)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, ("", "Invoice Export", len(export_data), "Success", str(out), self.current_user_name or ""))
+                log_conn.commit()
+                log_conn.close()
+            except Exception as log_e:
+                logger.warning(f"Failed to log export: {log_e}")
 
             # Hide progress indicator after brief delay
             QTimer.singleShot(500, self.export_progress_widget.hide)
