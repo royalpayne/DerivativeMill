@@ -2,7 +2,7 @@
 ; Build with: "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" tariffmill_setup.iss
 
 #define MyAppName "TariffMill"
-#define MyAppVersion "0.97.8"
+#define MyAppVersion "0.97.9"
 #define MyAppPublisher "TariffMill"
 #define MyAppExeName "TariffMill.exe"
 #define SourceDir "dist\TariffMill"
