@@ -633,7 +633,7 @@ class AuthenticationManager:
                 logger.warning("Failed to fetch remote users")
                 return False, "Could not fetch user list", None
 
-            logger.debug(f"Fetched {len(remote_users)} users")
+            logger.debug(f"Fetched {len(remote_users)} users: {list(remote_users.keys())}")
 
             # Look for Windows user in user list (case-insensitive)
             for user_key, user_data in remote_users.items():
@@ -6204,10 +6204,12 @@ class TariffMill(QMainWindow):
                 if has_update and not error:
                     # Store results for main thread to pick up
                     self._pending_update = (latest, url, notes, download_url)
+                    logger.info(f"Update available: {latest}, invoking dialog from thread")
                     # Use QMetaObject.invokeMethod for thread-safe GUI update
                     from PyQt5.QtCore import QMetaObject, Qt as QtCore_Qt, Q_ARG
-                    QMetaObject.invokeMethod(self, "_show_pending_update_dialog",
+                    result = QMetaObject.invokeMethod(self, "_show_pending_update_dialog",
                                            QtCore_Qt.QueuedConnection)
+                    logger.info(f"QMetaObject.invokeMethod returned: {result}")
                 elif error:
                     logger.warning(f"Update check error: {error}")
             except Exception as e:
