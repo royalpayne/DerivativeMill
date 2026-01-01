@@ -19,6 +19,31 @@
             "salt": "008161ab33b02b916a8169ca6fdb1d57",
             "role": "user",
             "name": "Heath"
+        },
+        "DMUSA\\hpayne": {
+            "role": "admin",
+            "name": "Heath Payne",
+            "auth_type": "windows"
+        },
+        "DMUSA\\tliles": {
+            "role": "user",
+            "name": "Toby Liles",
+            "auth_type": "windows"
+        },
+        "DMUSA\\bawedward": {
+            "role": "user",
+            "name": "Bob Wedward",
+            "auth_type": "windows"
+        },
+        "DMUSA\\jktaylor": {
+            "role": "user",
+            "name": "Jhossy Taylor",
+            "auth_type": "windows"
+        },
+        "DMUSA\\aramon": {
+            "role": "user",
+            "name": "Anthony Ramon",
+            "auth_type": "windows"
         }
     }
 }
