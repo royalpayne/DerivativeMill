@@ -11,7 +11,7 @@
 # reproduction, distribution, or disclosure of this software, in whole or in
 # part, is strictly prohibited.
 #
-# This software is l icensed, not sold. Use of this software is subject to the
+# This software is licensed, not sold. Use of this software is subject to the
 # End User License Agreement (EULA) provided with this software.
 #
 # NO WARRANTY: This software is provided "as is" without warranty of any kind,
@@ -593,9 +593,6 @@ AUTH_GITHUB_TOKEN = os.environ.get('TARIFFMILL_GITHUB_TOKEN', '')
 class AuthenticationManager:
     """Manages user authentication with Windows domain auth, remote user list, and local caching."""
 
-    # Allowed Windows domains for auto-authentication
-    ALLOWED_DOMAINS = ['DMUSA']
-
     def __init__(self, db_path):
         self.db_path = db_path
         self.current_user = None
@@ -603,6 +600,21 @@ class AuthenticationManager:
         self.current_name = None
         self.is_authenticated = False
         self.auth_method = None  # 'windows' or 'password'
+
+    def get_allowed_domains(self) -> list:
+        """Get allowed Windows domains from settings."""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT value FROM billing_settings WHERE key = 'allowed_domains'")
+            row = cursor.fetchone()
+            conn.close()
+            if row and row[0]:
+                # Domains stored as comma-separated list
+                return [d.strip() for d in row[0].split(',') if d.strip()]
+        except Exception:
+            pass
+        return []  # No domains configured = no auto-login allowed
 
     def try_windows_auth(self) -> tuple:
         """Try to authenticate using Windows domain credentials.
@@ -619,7 +631,11 @@ class AuthenticationManager:
                 return False, "Windows credentials not available", None
 
             # Check if domain is in allowed list
-            if domain.upper() not in [d.upper() for d in self.ALLOWED_DOMAINS]:
+            allowed_domains = self.get_allowed_domains()
+            if not allowed_domains:
+                logger.debug("No allowed domains configured")
+                return False, "No domains configured for auto-login", None
+            if domain.upper() not in [d.upper() for d in allowed_domains]:
                 logger.debug(f"Domain {domain} not in allowed list")
                 return False, f"Domain {domain} not authorized for auto-login", None
 
@@ -1813,6 +1829,40 @@ def init_database():
         c.execute("""CREATE TABLE IF NOT EXISTS billing_settings (
             key TEXT PRIMARY KEY,
             value TEXT
+        )""")
+
+        # Create billing_duplicate_attempts table to track potential billing bypass
+        c.execute("""CREATE TABLE IF NOT EXISTS billing_duplicate_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_number TEXT NOT NULL,
+            attempt_date TEXT NOT NULL,
+            attempt_time TEXT NOT NULL,
+            user_name TEXT,
+            machine_id TEXT,
+            file_name TEXT,
+            line_count INTEGER DEFAULT 0,
+            total_value REAL DEFAULT 0.0,
+            original_export_date TEXT,
+            days_since_original INTEGER DEFAULT 0
+        )""")
+
+        # Create export_audit_log table to track ALL export attempts (for security/compliance)
+        c.execute("""CREATE TABLE IF NOT EXISTS export_audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type TEXT NOT NULL,
+            event_date TEXT NOT NULL,
+            event_time TEXT NOT NULL,
+            file_number TEXT,
+            file_name TEXT,
+            line_count INTEGER DEFAULT 0,
+            total_value REAL DEFAULT 0.0,
+            user_name TEXT,
+            machine_id TEXT,
+            ip_address TEXT,
+            success INTEGER DEFAULT 0,
+            failure_reason TEXT,
+            billing_recorded INTEGER DEFAULT 0,
+            additional_info TEXT
         )""")
 
         # Migration: Add manufacturer_name and customer_id columns to mid_table if they don't exist
@@ -3623,6 +3673,12 @@ class TariffMill(QMainWindow):
         layout.setMenuBar(menubar)
         self.settings_action = settings_action
 
+        # Hidden admin shortcut (Ctrl+Shift+A)
+        from PyQt5.QtWidgets import QShortcut
+        from PyQt5.QtGui import QKeySequence
+        self._admin_shortcut = QShortcut(QKeySequence("Ctrl+Shift+A"), self)
+        self._admin_shortcut.activated.connect(self.show_admin_dialog)
+
         # Top status bar removed per user request
         # Create a dummy status object that ignores all calls
         class DummyStatus:
@@ -4116,6 +4172,9 @@ class TariffMill(QMainWindow):
         # Load saved column widths
         self.load_column_widths()
 
+        # Apply saved column visibility settings
+        self.apply_column_visibility()
+
         # Apply green focus color stylesheet
         self.update_table_stylesheet()
 
@@ -4575,6 +4634,255 @@ class TariffMill(QMainWindow):
         for row in range(self.mid_table_widget.rowCount()):
             self.mid_table_widget.setRowHidden(row, False)
 
+    def show_admin_dialog(self):
+        """Show the hidden Administration dialog (Ctrl+Shift+A).
+
+        This dialog contains sensitive billing, user management, and audit functions
+        that should only be accessible to administrators.
+        """
+        # Verify admin access
+        if not self._is_billing_admin():
+            QMessageBox.warning(self, "Access Denied",
+                              "You do not have administrator privileges.\n\n"
+                              "Please contact your system administrator.")
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Administration")
+        dialog.resize(900, 650)
+        layout = QVBoxLayout(dialog)
+
+        # Header with warning
+        header_layout = QHBoxLayout()
+        warning_icon = self.style().standardIcon(QStyle.SP_MessageBoxWarning)
+        icon_label = QLabel()
+        icon_label.setPixmap(warning_icon.pixmap(24, 24))
+        header_layout.addWidget(icon_label)
+        header_label = QLabel("<b>Administration Panel</b> - Restricted Access")
+        header_label.setStyleSheet("color: #dc3545; font-size: 14px;")
+        header_layout.addWidget(header_label)
+        header_layout.addStretch()
+        layout.addLayout(header_layout)
+
+        # Create tab widget
+        tabs = QTabWidget()
+
+        # Billing Configuration tab
+        tab_billing = QWidget()
+        self.setup_billing_tab(tab_billing)
+        tabs.addTab(tab_billing, "Billing Configuration")
+
+        # Audit Log tab
+        tab_audit = QWidget()
+        self._setup_admin_audit_tab(tab_audit)
+        tabs.addTab(tab_audit, "Audit Log")
+
+        # System Info tab
+        tab_system = QWidget()
+        self._setup_admin_system_tab(tab_system)
+        tabs.addTab(tab_system, "System Info")
+
+        layout.addWidget(tabs)
+
+        # Close button
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        btn_close = QPushButton("Close")
+        btn_close.clicked.connect(dialog.accept)
+        btn_close.setStyleSheet(self.get_button_style("default"))
+        btn_layout.addWidget(btn_close)
+        layout.addLayout(btn_layout)
+
+        self.center_dialog(dialog)
+        dialog.exec_()
+
+    def _setup_admin_audit_tab(self, tab_widget):
+        """Setup the Audit Log tab for the Admin dialog."""
+        layout = QVBoxLayout(tab_widget)
+
+        # Header
+        header = QLabel("<h3>Export Audit Log</h3>")
+        layout.addWidget(header)
+
+        info = QLabel("View all export attempts, including blocked attempts and billing bypass detection.")
+        info.setStyleSheet("color: #666;")
+        layout.addWidget(info)
+
+        # Filter controls
+        filter_layout = QHBoxLayout()
+        filter_layout.addWidget(QLabel("Filter:"))
+
+        event_filter = QComboBox()
+        event_filter.addItem("All Events", "")
+        event_filter.addItem("Successful Exports", "EXPORT_SUCCESS")
+        event_filter.addItem("Blocked - No File Number", "EXPORT_BLOCKED_NO_FILE_NUMBER")
+        event_filter.addItem("Blocked - Totals Mismatch", "EXPORT_BLOCKED_TOTALS_MISMATCH")
+        event_filter.addItem("Blocked - Empty", "EXPORT_BLOCKED_EMPTY")
+        filter_layout.addWidget(event_filter)
+
+        filter_layout.addWidget(QLabel("Days:"))
+        days_spin = QSpinBox()
+        days_spin.setRange(1, 365)
+        days_spin.setValue(30)
+        filter_layout.addWidget(days_spin)
+
+        refresh_btn = QPushButton("Refresh")
+        filter_layout.addWidget(refresh_btn)
+        filter_layout.addStretch()
+        layout.addLayout(filter_layout)
+
+        # Stats row
+        stats_layout = QHBoxLayout()
+        total_label = QLabel("Total: 0")
+        total_label.setStyleSheet("font-weight: bold;")
+        stats_layout.addWidget(total_label)
+        success_label = QLabel("Successful: 0")
+        success_label.setStyleSheet("color: green;")
+        stats_layout.addWidget(success_label)
+        blocked_label = QLabel("Blocked: 0")
+        blocked_label.setStyleSheet("color: red;")
+        stats_layout.addWidget(blocked_label)
+        stats_layout.addStretch()
+        layout.addLayout(stats_layout)
+
+        # Audit table
+        audit_table = QTableWidget()
+        audit_table.setColumnCount(9)
+        audit_table.setHorizontalHeaderLabels([
+            "Date", "Time", "Event", "File #", "File Name", "Lines", "Value", "User", "Info"
+        ])
+        audit_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
+        audit_table.horizontalHeader().setSectionResizeMode(8, QHeaderView.Stretch)
+        audit_table.setAlternatingRowColors(True)
+        audit_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        layout.addWidget(audit_table)
+
+        def refresh_audit():
+            try:
+                conn = sqlite3.connect(str(DB_PATH))
+                c = conn.cursor()
+                days = days_spin.value()
+                event_type = event_filter.currentData()
+
+                query = """SELECT event_date, event_time, event_type, file_number, file_name,
+                                  line_count, total_value, user_name, failure_reason, additional_info, success
+                           FROM export_audit_log WHERE event_date >= date('now', ?)"""
+                params = [f'-{days} days']
+                if event_type:
+                    query += " AND event_type = ?"
+                    params.append(event_type)
+                query += " ORDER BY event_date DESC, event_time DESC LIMIT 500"
+
+                c.execute(query, params)
+                records = c.fetchall()
+
+                c.execute("""SELECT COUNT(*), SUM(success), SUM(CASE WHEN success=0 THEN 1 ELSE 0 END)
+                            FROM export_audit_log WHERE event_date >= date('now', ?)""", [f'-{days} days'])
+                stats = c.fetchone()
+                conn.close()
+
+                total_label.setText(f"Total: {stats[0] or 0}")
+                success_label.setText(f"Successful: {stats[1] or 0}")
+                blocked_label.setText(f"Blocked: {stats[2] or 0}")
+
+                audit_table.setRowCount(len(records))
+                for row_idx, record in enumerate(records):
+                    date, time, evt, file_num, fname, lines, value, user, fail_reason, add_info, success = record
+                    audit_table.setItem(row_idx, 0, QTableWidgetItem(str(date or '')))
+                    audit_table.setItem(row_idx, 1, QTableWidgetItem(str(time or '')))
+                    evt_item = QTableWidgetItem(str(evt or '').replace('EXPORT_', ''))
+                    if success:
+                        evt_item.setForeground(QColor('green'))
+                    else:
+                        evt_item.setForeground(QColor('red'))
+                    audit_table.setItem(row_idx, 2, evt_item)
+                    audit_table.setItem(row_idx, 3, QTableWidgetItem(str(file_num or '')))
+                    audit_table.setItem(row_idx, 4, QTableWidgetItem(str(fname or '')[:35]))
+                    audit_table.setItem(row_idx, 5, QTableWidgetItem(str(lines or 0)))
+                    audit_table.setItem(row_idx, 6, QTableWidgetItem(f"${value or 0:,.2f}"))
+                    audit_table.setItem(row_idx, 7, QTableWidgetItem(str(user or '')))
+                    audit_table.setItem(row_idx, 8, QTableWidgetItem(str(fail_reason or add_info or '')[:40]))
+            except Exception as e:
+                logger.error(f"Failed to load audit log: {e}")
+
+        event_filter.currentIndexChanged.connect(refresh_audit)
+        days_spin.valueChanged.connect(refresh_audit)
+        refresh_btn.clicked.connect(refresh_audit)
+        QTimer.singleShot(100, refresh_audit)
+
+    def _setup_admin_system_tab(self, tab_widget):
+        """Setup the System Info tab for the Admin dialog."""
+        layout = QVBoxLayout(tab_widget)
+
+        header = QLabel("<h3>System Information</h3>")
+        layout.addWidget(header)
+
+        import platform
+        import getpass
+
+        info_text = f"""
+        <table style="font-size: 12px;">
+        <tr><td><b>Application:</b></td><td>{APP_NAME} {VERSION}</td></tr>
+        <tr><td><b>User:</b></td><td>{getpass.getuser()}</td></tr>
+        <tr><td><b>Machine:</b></td><td>{platform.node()}</td></tr>
+        <tr><td><b>Platform:</b></td><td>{platform.system()} {platform.release()}</td></tr>
+        <tr><td><b>Python:</b></td><td>{platform.python_version()}</td></tr>
+        <tr><td><b>Database:</b></td><td>{DB_PATH}</td></tr>
+        <tr><td><b>Output Dir:</b></td><td>{OUTPUT_DIR}</td></tr>
+        </table>
+        """
+        info_label = QLabel(info_text)
+        info_label.setTextFormat(Qt.RichText)
+        layout.addWidget(info_label)
+
+        # Database stats
+        layout.addWidget(QLabel("<h4>Database Statistics</h4>"))
+
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+
+            c.execute("SELECT COUNT(*) FROM parts_master")
+            parts_count = c.fetchone()[0]
+
+            c.execute("SELECT COUNT(*) FROM billing_records")
+            billing_count = c.fetchone()[0]
+
+            c.execute("SELECT COUNT(*) FROM export_audit_log")
+            audit_count = c.fetchone()[0]
+
+            c.execute("SELECT COUNT(*) FROM billing_duplicate_attempts")
+            dup_count = c.fetchone()[0]
+
+            conn.close()
+
+            db_stats = f"""
+            <table style="font-size: 12px;">
+            <tr><td><b>Parts in Database:</b></td><td>{parts_count:,}</td></tr>
+            <tr><td><b>Billing Records:</b></td><td>{billing_count:,}</td></tr>
+            <tr><td><b>Audit Log Entries:</b></td><td>{audit_count:,}</td></tr>
+            <tr><td><b>Duplicate Attempts Logged:</b></td><td style="color: {'red' if dup_count > 0 else 'green'};">{dup_count:,}</td></tr>
+            </table>
+            """
+            db_label = QLabel(db_stats)
+            db_label.setTextFormat(Qt.RichText)
+            layout.addWidget(db_label)
+        except Exception as e:
+            layout.addWidget(QLabel(f"Error loading database stats: {e}"))
+
+        # Remote sync settings
+        layout.addWidget(QLabel("<h4>Remote Sync</h4>"))
+        sync_enabled = self.get_billing_setting('remote_sync_enabled', 'false').lower() == 'true'
+        sync_checkbox = QCheckBox("Enable remote billing data sync to GitHub")
+        sync_checkbox.setChecked(sync_enabled)
+        sync_checkbox.stateChanged.connect(lambda state: self.set_billing_setting('remote_sync_enabled', 'true' if state == 2 else 'false'))
+        layout.addWidget(sync_checkbox)
+        sync_note = QLabel("<small>Syncs billing records to TariffMill_Config repository for backup/audit.</small>")
+        sync_note.setStyleSheet("color: #666;")
+        layout.addWidget(sync_note)
+
+        layout.addStretch()
+
     def show_configuration_dialog(self, initial_tab=0):
         """Show the Configuration dialog with Invoice Mapping, Output Mapping, Parts Import, and MID Management tabs"""
         dialog = QDialog(self)
@@ -4617,11 +4925,7 @@ class TariffMill(QMainWindow):
         tabs.addTab(tab_import, "Parts Import")
         tabs.addTab(tab_mid_management, "MID Management")
 
-        # Add Billing tab (only visible to admin)
-        if self._is_billing_admin():
-            tab_billing = QWidget()
-            self.setup_billing_tab(tab_billing)
-            tabs.addTab(tab_billing, "Billing")
+        # Billing tab moved to hidden Admin dialog (Ctrl+Shift+A)
 
         # Add AI Agents tab
         tab_ai_agents = QWidget()
@@ -5603,6 +5907,167 @@ class TariffMill(QMainWindow):
 
         updates_layout.addStretch()
         tabs.addTab(updates_widget, "Updates")
+
+        # ===== TAB 4: TEMPLATES =====
+        templates_widget = QWidget()
+        templates_layout = QVBoxLayout(templates_widget)
+
+        # Shared Templates Folder Group
+        shared_templates_group = QGroupBox("Shared Templates (Network)")
+        shared_templates_layout = QVBoxLayout()
+
+        shared_templates_info = QLabel(
+            "Configure a shared network folder to share invoice templates across users.\n"
+            "Templates from the shared folder will appear in the template list with a network indicator."
+        )
+        shared_templates_info.setWordWrap(True)
+        shared_templates_layout.addWidget(shared_templates_info)
+
+        # Shared templates folder input row
+        shared_folder_row = QHBoxLayout()
+        shared_folder_label = QLabel("Shared Folder:")
+        shared_folder_label.setFixedWidth(90)
+        shared_folder_row.addWidget(shared_folder_label)
+
+        shared_templates_input = QLineEdit()
+        shared_templates_input.setPlaceholderText("e.g., \\\\server\\tariffmill\\templates or /mnt/shared/templates")
+        shared_templates_input.setText(self.get_billing_setting('shared_templates_folder', ''))
+        shared_folder_row.addWidget(shared_templates_input)
+
+        shared_browse_btn = QPushButton("Browse...")
+        def browse_shared_templates():
+            folder = QFileDialog.getExistingDirectory(
+                dialog, "Select Shared Templates Folder",
+                shared_templates_input.text() or str(Path.home())
+            )
+            if folder:
+                shared_templates_input.setText(folder)
+        shared_browse_btn.clicked.connect(browse_shared_templates)
+        shared_folder_row.addWidget(shared_browse_btn)
+        shared_templates_layout.addLayout(shared_folder_row)
+
+        # Save button row
+        templates_btn_row = QHBoxLayout()
+        templates_btn_row.addStretch()
+
+        save_templates_btn = QPushButton("Save && Refresh Templates")
+        save_templates_btn.setStyleSheet(self.get_button_style("primary"))
+        def save_shared_templates_setting():
+            folder_path = shared_templates_input.text().strip()
+            self.set_billing_setting('shared_templates_folder', folder_path)
+            if folder_path:
+                # Validate the path exists
+                if not Path(folder_path).exists():
+                    QMessageBox.warning(dialog, "Path Not Found",
+                        f"The specified folder does not exist or is not accessible:\n{folder_path}\n\n"
+                        "Please check the path and ensure the network share is mounted.")
+                else:
+                    QMessageBox.information(dialog, "Saved",
+                        f"Shared templates folder saved.\n\nTemplates from:\n{folder_path}\n\n"
+                        "will now appear in the template list with a (Shared) indicator.")
+            else:
+                QMessageBox.information(dialog, "Saved", "Shared templates folder cleared.")
+            # Refresh templates list
+            if hasattr(self, 'ocrmill_refresh_templates'):
+                self.ocrmill_refresh_templates()
+        save_templates_btn.clicked.connect(save_shared_templates_setting)
+        templates_btn_row.addWidget(save_templates_btn)
+        shared_templates_layout.addLayout(templates_btn_row)
+
+        # Note about template sharing
+        templates_note = QLabel(
+            "<small><b>Note:</b> Shared templates are read-only. To modify a shared template, "
+            "right-click and select 'Copy to Local' to create an editable local copy.</small>"
+        )
+        templates_note.setWordWrap(True)
+        templates_note.setStyleSheet(f"color:{info_text_color}; padding:5px;")
+        shared_templates_layout.addWidget(templates_note)
+
+        shared_templates_group.setLayout(shared_templates_layout)
+        templates_layout.addWidget(shared_templates_group)
+
+        # Local Templates Info Group
+        local_templates_group = QGroupBox("Local Templates")
+        local_templates_layout = QFormLayout()
+
+        source_templates_dir = Path(__file__).parent / "templates"
+        install_templates_dir = BASE_DIR / "templates"
+        local_dir = source_templates_dir if source_templates_dir.exists() else install_templates_dir
+
+        local_path_label = QLabel(str(local_dir))
+        local_path_label.setWordWrap(True)
+        local_path_label.setStyleSheet("font-family: monospace; font-size: 10px;")
+        local_templates_layout.addRow("Location:", local_path_label)
+
+        # Count local templates
+        local_count = 0
+        excluded = {'__init__.py', 'base_template.py', 'sample_template.py'}
+        if local_dir.exists():
+            local_count = len([f for f in local_dir.glob("*.py") if f.name not in excluded])
+        local_count_label = QLabel(str(local_count))
+        local_templates_layout.addRow("Templates:", local_count_label)
+
+        local_templates_group.setLayout(local_templates_layout)
+        templates_layout.addWidget(local_templates_group)
+
+        templates_layout.addStretch()
+        tabs.addTab(templates_widget, "Templates")
+
+        # ===== TAB 5: AUTHENTICATION =====
+        auth_widget = QWidget()
+        auth_layout = QVBoxLayout(auth_widget)
+
+        # Windows Domain Authentication Group
+        domain_group = QGroupBox("Windows Domain Authentication")
+        domain_layout = QVBoxLayout()
+
+        domain_info = QLabel(
+            "<small>Configure which Windows domains are allowed for automatic login. "
+            "Users on these domains can authenticate automatically using their Windows credentials.</small>"
+        )
+        domain_info.setWordWrap(True)
+        domain_info.setStyleSheet(f"color:{info_text_color}; padding:5px;")
+        domain_layout.addWidget(domain_info)
+
+        # Allowed domains input
+        domains_form = QFormLayout()
+        domains_input = QLineEdit()
+        domains_input.setPlaceholderText("e.g., MYCOMPANY, CORP, DOMAIN1")
+        current_domains = self.get_billing_setting('allowed_domains', '')
+        domains_input.setText(current_domains)
+        domains_form.addRow("Allowed Domains:", domains_input)
+
+        domains_help = QLabel("<small>Enter domain names separated by commas. Case-insensitive.</small>")
+        domains_help.setStyleSheet(f"color:{info_text_color};")
+        domains_form.addRow("", domains_help)
+
+        domain_layout.addLayout(domains_form)
+
+        # Save button
+        save_domains_btn = QPushButton("Save Domain Settings")
+        save_domains_btn.setStyleSheet(self.get_button_style("primary"))
+        def save_domain_settings():
+            domains = domains_input.text().strip()
+            self.set_billing_setting('allowed_domains', domains)
+            if domains:
+                domain_list = [d.strip() for d in domains.split(',') if d.strip()]
+                QMessageBox.information(
+                    dialog, "Saved",
+                    f"Allowed domains updated:\n{', '.join(domain_list)}\n\nUsers on these domains can now auto-login."
+                )
+            else:
+                QMessageBox.information(
+                    dialog, "Saved",
+                    "No domains configured. Windows auto-login is disabled."
+                )
+        save_domains_btn.clicked.connect(save_domain_settings)
+        domain_layout.addWidget(save_domains_btn)
+
+        domain_group.setLayout(domain_layout)
+        auth_layout.addWidget(domain_group)
+
+        auth_layout.addStretch()
+        tabs.addTab(auth_widget, "Authentication")
 
         # OCRMill settings moved to OCRMill tab's Settings sub-tab
 
@@ -11268,10 +11733,49 @@ class TariffMill(QMainWindow):
             c = conn.cursor()
 
             # Check if this file number has already been billed
-            c.execute("SELECT COUNT(*) FROM billing_records WHERE file_number = ?", (file_number,))
-            existing_count = c.fetchone()[0]
+            c.execute("SELECT COUNT(*), MIN(export_date) FROM billing_records WHERE file_number = ?", (file_number,))
+            result = c.fetchone()
+            existing_count = result[0]
+            original_export_date = result[1]
 
             if existing_count > 0:
+                # Log this duplicate attempt for monitoring
+                try:
+                    now = datetime.now()
+                    attempt_date = now.strftime("%Y-%m-%d")
+                    attempt_time = now.strftime("%H:%M:%S")
+                    user_name = getpass.getuser()
+
+                    # Calculate days since original export
+                    days_since = 0
+                    if original_export_date:
+                        try:
+                            orig_date = datetime.strptime(original_export_date, "%Y-%m-%d")
+                            days_since = (now - orig_date).days
+                        except:
+                            pass
+
+                    # Get machine ID
+                    machine_id = ""
+                    try:
+                        import hashlib
+                        import platform
+                        machine_info = f"{platform.node()}-{platform.machine()}"
+                        machine_id = hashlib.md5(machine_info.encode()).hexdigest()[:12]
+                    except:
+                        pass
+
+                    c.execute("""INSERT INTO billing_duplicate_attempts
+                                (file_number, attempt_date, attempt_time, user_name, machine_id,
+                                 file_name, line_count, total_value, original_export_date, days_since_original)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                             (file_number, attempt_date, attempt_time, user_name, machine_id,
+                              file_name, line_count, total_value, original_export_date, days_since))
+                    conn.commit()
+                    logger.warning(f"Duplicate export attempt logged: File #{file_number} (originally exported {original_export_date}, {days_since} days ago)")
+                except Exception as dup_err:
+                    logger.warning(f"Failed to log duplicate attempt: {dup_err}")
+
                 conn.close()
                 logger.info(f"File #{file_number} already billed, skipping duplicate billing record")
                 return
@@ -11312,8 +11816,183 @@ class TariffMill(QMainWindow):
 
             logger.info(f"Billing record created: File #{file_number}, {line_count} lines, ${total_value:,.2f}")
 
+            # Sync to remote if enabled
+            self._sync_billing_to_remote()
+
         except Exception as e:
             logger.warning(f"Failed to record billing event: {e}")
+
+    def log_export_audit(self, event_type: str, file_number: str = "", file_name: str = "",
+                         line_count: int = 0, total_value: float = 0.0, success: bool = True,
+                         failure_reason: str = "", billing_recorded: bool = False, additional_info: str = ""):
+        """Log an export attempt to the audit log for security/compliance tracking.
+
+        Args:
+            event_type: Type of event (EXPORT_ATTEMPT, EXPORT_SUCCESS, EXPORT_FAILED, NO_FILE_NUMBER, etc.)
+            file_number: File number used (may be empty)
+            file_name: Name of the file being exported
+            line_count: Number of line items
+            total_value: Total value of export
+            success: Whether the export was successful
+            failure_reason: Reason for failure if applicable
+            billing_recorded: Whether a billing record was created
+            additional_info: Any additional context
+        """
+        try:
+            import getpass
+
+            now = datetime.now()
+            event_date = now.strftime("%Y-%m-%d")
+            event_time = now.strftime("%H:%M:%S")
+            user_name = getpass.getuser()
+
+            # Get machine ID
+            machine_id = ""
+            try:
+                import hashlib
+                import platform
+                machine_info = f"{platform.node()}-{platform.machine()}"
+                machine_id = hashlib.md5(machine_info.encode()).hexdigest()[:12]
+            except:
+                pass
+
+            # Try to get IP address
+            ip_address = ""
+            try:
+                import socket
+                ip_address = socket.gethostbyname(socket.gethostname())
+            except:
+                pass
+
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+            c.execute("""INSERT INTO export_audit_log
+                        (event_type, event_date, event_time, file_number, file_name,
+                         line_count, total_value, user_name, machine_id, ip_address,
+                         success, failure_reason, billing_recorded, additional_info)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                     (event_type, event_date, event_time, file_number, file_name,
+                      line_count, total_value, user_name, machine_id, ip_address,
+                      1 if success else 0, failure_reason, 1 if billing_recorded else 0, additional_info))
+            conn.commit()
+            conn.close()
+
+            logger.debug(f"Audit log: {event_type} - File #{file_number or 'NONE'} - Success: {success}")
+
+        except Exception as e:
+            logger.warning(f"Failed to log export audit: {e}")
+
+    def validate_file_number(self, file_number: str) -> tuple:
+        """Validate file number format and return (is_valid, error_message).
+
+        File number requirements:
+        - Must not be empty
+        - Must be at least 3 characters
+        - Must contain at least one alphanumeric character
+        - Cannot be common test values like 'test', 'xxx', '123', 'abc'
+
+        Returns:
+            tuple: (is_valid: bool, error_message: str)
+        """
+        import re
+
+        if not file_number or not file_number.strip():
+            return False, "File number is required for billing purposes."
+
+        file_number = file_number.strip()
+
+        if len(file_number) < 3:
+            return False, "File number must be at least 3 characters."
+
+        # Check for at least one alphanumeric character
+        if not re.search(r'[a-zA-Z0-9]', file_number):
+            return False, "File number must contain at least one letter or number."
+
+        # Block common test/placeholder values
+        blocked_patterns = [
+            r'^test$', r'^xxx+$', r'^123$', r'^abc$', r'^asdf$',
+            r'^none$', r'^null$', r'^n/a$', r'^na$', r'^\d{1,2}$'
+        ]
+        for pattern in blocked_patterns:
+            if re.match(pattern, file_number.lower()):
+                return False, f"'{file_number}' is not a valid file number. Please enter the actual file/reference number."
+
+        return True, ""
+
+    def _sync_billing_to_remote(self):
+        """Sync billing data to remote GitHub repository for backup/audit."""
+        try:
+            # Check if sync is enabled
+            sync_enabled = self.get_billing_setting('remote_sync_enabled', 'false').lower() == 'true'
+            if not sync_enabled:
+                return
+
+            # Get the config repo path
+            config_repo = Path.home() / 'TariffMill_Config'
+            if not config_repo.exists():
+                logger.debug("TariffMill_Config repo not found, skipping remote sync")
+                return
+
+            # Export recent billing records to JSON
+            billing_export_path = config_repo / 'billing_data.json'
+
+            conn = sqlite3.connect(str(DB_PATH))
+            c = conn.cursor()
+
+            # Get billing records from last 90 days
+            c.execute("""SELECT * FROM billing_records
+                        WHERE export_date >= date('now', '-90 days')
+                        ORDER BY export_date DESC, export_time DESC""")
+            columns = [desc[0] for desc in c.description]
+            records = [dict(zip(columns, row)) for row in c.fetchall()]
+
+            # Get duplicate attempts
+            c.execute("""SELECT * FROM billing_duplicate_attempts
+                        WHERE attempt_date >= date('now', '-90 days')
+                        ORDER BY attempt_date DESC""")
+            dup_columns = [desc[0] for desc in c.description]
+            dup_records = [dict(zip(dup_columns, row)) for row in c.fetchall()]
+
+            # Get audit log
+            c.execute("""SELECT * FROM export_audit_log
+                        WHERE event_date >= date('now', '-90 days')
+                        ORDER BY event_date DESC, event_time DESC""")
+            audit_columns = [desc[0] for desc in c.description]
+            audit_records = [dict(zip(audit_columns, row)) for row in c.fetchall()]
+
+            conn.close()
+
+            # Build export data
+            import getpass
+            import platform
+
+            export_data = {
+                '_metadata': {
+                    'exported_at': datetime.now().isoformat(),
+                    'machine': platform.node(),
+                    'user': getpass.getuser(),
+                    'app_version': VERSION if 'VERSION' in dir() else 'unknown'
+                },
+                'billing_records': records,
+                'duplicate_attempts': dup_records,
+                'audit_log': audit_records
+            }
+
+            # Write to file
+            with open(billing_export_path, 'w', encoding='utf-8') as f:
+                json.dump(export_data, f, indent=2, default=str)
+
+            # Git commit and push
+            import subprocess
+            subprocess.run(['git', 'add', 'billing_data.json'], cwd=config_repo, capture_output=True)
+            subprocess.run(['git', 'commit', '-m', f'Billing data sync {datetime.now():%Y-%m-%d %H:%M}'],
+                          cwd=config_repo, capture_output=True)
+            subprocess.run(['git', 'push'], cwd=config_repo, capture_output=True)
+
+            logger.info("Billing data synced to remote repository")
+
+        except Exception as e:
+            logger.debug(f"Remote billing sync skipped: {e}")
 
     def get_billing_summary(self, month: str = None):
         """Get billing summary for a specific month.
@@ -11571,7 +12250,13 @@ class TariffMill(QMainWindow):
         self.billing_smtp_password = QLineEdit()
         self.billing_smtp_password.setEchoMode(QLineEdit.Password)
         self.billing_smtp_password.setText(self.get_billing_setting('smtp_password', ''))
+        self.billing_smtp_password.setPlaceholderText("App password (not user password)")
+        self.billing_smtp_password.setToolTip("This is the SMTP app password, not your email account password.\nContact administrator for password.")
         email_layout.addRow("SMTP Password:", self.billing_smtp_password)
+
+        smtp_password_note = QLabel("<small><i>This is the app password, not your account password. Contact administrator for password.</i></small>")
+        smtp_password_note.setStyleSheet("color:#888; margin-left: 10px;")
+        email_layout.addRow("", smtp_password_note)
 
         email_info = QLabel("<small>Configure SMTP settings to enable automatic monthly billing reports.</small>")
         email_info.setWordWrap(True)
@@ -11593,6 +12278,10 @@ class TariffMill(QMainWindow):
         btn_view_report = QPushButton("View Billing Report")
         btn_view_report.clicked.connect(self.show_billing_report_dialog)
         btn_layout.addWidget(btn_view_report)
+
+        btn_view_audit = QPushButton("View Audit Log")
+        btn_view_audit.clicked.connect(self.show_audit_log_dialog)
+        btn_layout.addWidget(btn_view_audit)
 
         btn_save = QPushButton("Save Settings")
         btn_save.setStyleSheet(self.get_button_style("primary"))
@@ -11838,8 +12527,11 @@ class TariffMill(QMainWindow):
 
         # Windows domain input (for domain users)
         domain_input = QLineEdit()
-        domain_input.setPlaceholderText("DMUSA")
-        domain_input.setText("DMUSA")
+        # Get first configured domain as default, or empty
+        configured_domains = self.get_billing_setting('allowed_domains', '')
+        first_domain = configured_domains.split(',')[0].strip() if configured_domains else ''
+        domain_input.setPlaceholderText("MYDOMAIN")
+        domain_input.setText(first_domain)
         domain_label = QLabel("Domain:")
         domain_input.setVisible(False)
         domain_label.setVisible(False)
@@ -12573,6 +13265,161 @@ class TariffMill(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Email Failed", f"Failed to send test email:\n{str(e)}")
 
+    def show_audit_log_dialog(self):
+        """Show dialog with export audit log for security/compliance review."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Export Audit Log")
+        dialog.setMinimumSize(1000, 600)
+
+        layout = QVBoxLayout(dialog)
+
+        # Header
+        header_layout = QHBoxLayout()
+        header_layout.addWidget(QLabel("<h3>Export Audit Log</h3>"))
+        header_layout.addStretch()
+
+        # Filter controls
+        filter_layout = QHBoxLayout()
+        filter_layout.addWidget(QLabel("Filter:"))
+
+        event_filter = QComboBox()
+        event_filter.addItem("All Events", "")
+        event_filter.addItem("Successful Exports", "EXPORT_SUCCESS")
+        event_filter.addItem("Blocked - No File Number", "EXPORT_BLOCKED_NO_FILE_NUMBER")
+        event_filter.addItem("Blocked - Totals Mismatch", "EXPORT_BLOCKED_TOTALS_MISMATCH")
+        event_filter.addItem("Blocked - Empty", "EXPORT_BLOCKED_EMPTY")
+        filter_layout.addWidget(event_filter)
+
+        filter_layout.addWidget(QLabel("Days:"))
+        days_spin = QSpinBox()
+        days_spin.setRange(1, 365)
+        days_spin.setValue(30)
+        filter_layout.addWidget(days_spin)
+
+        refresh_btn = QPushButton("Refresh")
+        filter_layout.addWidget(refresh_btn)
+
+        filter_layout.addStretch()
+        header_layout.addLayout(filter_layout)
+        layout.addLayout(header_layout)
+
+        # Summary stats
+        stats_layout = QHBoxLayout()
+        total_label = QLabel("Total: 0")
+        total_label.setStyleSheet("font-weight: bold;")
+        stats_layout.addWidget(total_label)
+
+        success_label = QLabel("Successful: 0")
+        success_label.setStyleSheet("color: green; font-weight: bold;")
+        stats_layout.addWidget(success_label)
+
+        blocked_label = QLabel("Blocked: 0")
+        blocked_label.setStyleSheet("color: red; font-weight: bold;")
+        stats_layout.addWidget(blocked_label)
+
+        stats_layout.addStretch()
+        layout.addLayout(stats_layout)
+
+        # Audit log table
+        audit_table = QTableWidget()
+        audit_table.setColumnCount(10)
+        audit_table.setHorizontalHeaderLabels([
+            "Date", "Time", "Event Type", "File #", "File Name",
+            "Lines", "Value", "User", "Success", "Reason/Info"
+        ])
+        audit_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        audit_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        audit_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        audit_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        audit_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
+        audit_table.horizontalHeader().setSectionResizeMode(9, QHeaderView.Stretch)
+        audit_table.setAlternatingRowColors(True)
+        audit_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        layout.addWidget(audit_table)
+
+        def refresh_audit_log():
+            try:
+                conn = sqlite3.connect(str(DB_PATH))
+                c = conn.cursor()
+
+                days = days_spin.value()
+                event_type = event_filter.currentData()
+
+                query = """SELECT event_date, event_time, event_type, file_number, file_name,
+                                  line_count, total_value, user_name, success, failure_reason, additional_info
+                           FROM export_audit_log
+                           WHERE event_date >= date('now', ?)"""
+                params = [f'-{days} days']
+
+                if event_type:
+                    query += " AND event_type = ?"
+                    params.append(event_type)
+
+                query += " ORDER BY event_date DESC, event_time DESC LIMIT 500"
+
+                c.execute(query, params)
+                records = c.fetchall()
+
+                # Get stats
+                c.execute("""SELECT COUNT(*), SUM(success), SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END)
+                            FROM export_audit_log WHERE event_date >= date('now', ?)""", [f'-{days} days'])
+                stats = c.fetchone()
+                conn.close()
+
+                total_label.setText(f"Total: {stats[0] or 0}")
+                success_label.setText(f"Successful: {stats[1] or 0}")
+                blocked_label.setText(f"Blocked: {stats[2] or 0}")
+
+                audit_table.setRowCount(len(records))
+                for row_idx, record in enumerate(records):
+                    (date, time, evt_type, file_num, file_name, lines, value,
+                     user, success, failure_reason, additional_info) = record
+
+                    audit_table.setItem(row_idx, 0, QTableWidgetItem(str(date or '')))
+                    audit_table.setItem(row_idx, 1, QTableWidgetItem(str(time or '')))
+
+                    # Color-code event type
+                    evt_item = QTableWidgetItem(str(evt_type or ''))
+                    if 'SUCCESS' in (evt_type or ''):
+                        evt_item.setForeground(QColor('green'))
+                    elif 'BLOCKED' in (evt_type or ''):
+                        evt_item.setForeground(QColor('red'))
+                    audit_table.setItem(row_idx, 2, evt_item)
+
+                    audit_table.setItem(row_idx, 3, QTableWidgetItem(str(file_num or '')))
+                    audit_table.setItem(row_idx, 4, QTableWidgetItem(str(file_name or '')[:40]))
+                    audit_table.setItem(row_idx, 5, QTableWidgetItem(str(lines or 0)))
+                    audit_table.setItem(row_idx, 6, QTableWidgetItem(f"${value or 0:,.2f}"))
+                    audit_table.setItem(row_idx, 7, QTableWidgetItem(str(user or '')))
+
+                    # Success indicator
+                    success_item = QTableWidgetItem("Yes" if success else "No")
+                    success_item.setForeground(QColor('green') if success else QColor('red'))
+                    audit_table.setItem(row_idx, 8, success_item)
+
+                    # Reason/Info
+                    info = failure_reason or additional_info or ''
+                    audit_table.setItem(row_idx, 9, QTableWidgetItem(str(info)[:50]))
+
+            except Exception as e:
+                logger.error(f"Failed to load audit log: {e}")
+                QMessageBox.warning(dialog, "Error", f"Failed to load audit log: {e}")
+
+        # Connect signals
+        event_filter.currentIndexChanged.connect(refresh_audit_log)
+        days_spin.valueChanged.connect(refresh_audit_log)
+        refresh_btn.clicked.connect(refresh_audit_log)
+
+        # Close button
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dialog.accept)
+        layout.addWidget(close_btn, alignment=Qt.AlignRight)
+
+        # Initial load
+        refresh_audit_log()
+
+        dialog.exec_()
+
     def show_billing_report_dialog(self):
         """Show dialog with billing report for the selected month."""
         dialog = QDialog(self)
@@ -12647,6 +13494,24 @@ class TariffMill(QMainWindow):
         details_group.setLayout(details_layout)
         layout.addWidget(details_group)
 
+        # Duplicate Attempts section (potential billing bypass)
+        dup_group = QGroupBox("Duplicate File Number Attempts (Potential Billing Bypass)")
+        dup_group.setStyleSheet("QGroupBox { color: #dc3545; font-weight: bold; }")
+        dup_layout = QVBoxLayout()
+
+        dup_table = QTableWidget()
+        dup_table.setColumnCount(8)
+        dup_table.setHorizontalHeaderLabels([
+            "File #", "Attempt Date", "Time", "User", "File Name", "Lines", "Value", "Days Since Original"
+        ])
+        dup_table.horizontalHeader().setStretchLastSection(True)
+        dup_table.setAlternatingRowColors(True)
+        dup_table.setMaximumHeight(150)
+
+        dup_layout.addWidget(dup_table)
+        dup_group.setLayout(dup_layout)
+        layout.addWidget(dup_group)
+
         # Function to refresh the report
         def refresh_report():
             selected_month = month_combo.currentData()
@@ -12671,6 +13536,45 @@ class TariffMill(QMainWindow):
                 details_table.setItem(row_idx, 6, QTableWidgetItem(record.get('mid', '')))
 
             details_table.resizeColumnsToContents()
+
+            # Populate duplicate attempts table
+            try:
+                conn = sqlite3.connect(str(DB_PATH))
+                c = conn.cursor()
+                c.execute("""SELECT file_number, attempt_date, attempt_time, user_name,
+                                    file_name, line_count, total_value, days_since_original
+                             FROM billing_duplicate_attempts
+                             WHERE attempt_date LIKE ?
+                             ORDER BY attempt_date DESC, attempt_time DESC""",
+                         (selected_month + '%',))
+                dup_records = c.fetchall()
+                conn.close()
+
+                dup_table.setRowCount(len(dup_records))
+                for row_idx, record in enumerate(dup_records):
+                    file_num, att_date, att_time, user, fname, lines, value, days = record
+                    dup_table.setItem(row_idx, 0, QTableWidgetItem(str(file_num or '')))
+                    dup_table.setItem(row_idx, 1, QTableWidgetItem(str(att_date or '')))
+                    dup_table.setItem(row_idx, 2, QTableWidgetItem(str(att_time or '')))
+                    dup_table.setItem(row_idx, 3, QTableWidgetItem(str(user or '')))
+                    dup_table.setItem(row_idx, 4, QTableWidgetItem(str(fname or '')[:30]))
+                    dup_table.setItem(row_idx, 5, QTableWidgetItem(str(lines or 0)))
+                    dup_table.setItem(row_idx, 6, QTableWidgetItem(f"${value or 0:,.2f}"))
+                    days_item = QTableWidgetItem(str(days or 0))
+                    if days and days > 30:
+                        days_item.setForeground(QColor("#dc3545"))  # Red for old re-exports
+                    dup_table.setItem(row_idx, 7, days_item)
+
+                dup_table.resizeColumnsToContents()
+
+                # Update group box title with count
+                if dup_records:
+                    dup_group.setTitle(f"Duplicate File Number Attempts ({len(dup_records)} found)")
+                else:
+                    dup_group.setTitle("Duplicate File Number Attempts (None)")
+
+            except Exception as e:
+                logger.error(f"Failed to load duplicate attempts: {e}")
 
         # Connect signals
         month_combo.currentIndexChanged.connect(refresh_report)
@@ -12899,14 +13803,291 @@ class TariffMill(QMainWindow):
             QMessageBox.critical(self, "Error", f"Failed to generate report:\n{str(e)}")
             logger.error(f"Failed to generate billing report: {e}")
 
+    def _generate_pdf_invoice(self, month: str, output_path: str = None) -> str:
+        """Generate a professional PDF invoice with TariffMill branding.
+
+        Args:
+            month: The billing month (YYYY-MM format)
+            output_path: Optional path for the PDF. If None, creates a temp file.
+
+        Returns:
+            Path to the generated PDF file
+        """
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import letter
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import inch
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage
+        from reportlab.lib.enums import TA_CENTER, TA_RIGHT, TA_LEFT
+        import tempfile
+
+        summary = self.get_billing_summary(month)
+        rate = float(self.get_billing_setting('rate_per_file', '0'))
+        amount_due = summary['export_count'] * rate
+        customer_name = self.get_billing_setting('customer_name', 'Valued Customer')
+        customer_email = self.get_billing_setting('customer_email', '')
+        company_name = self.get_billing_setting('company_name', 'Process Logic Labs, LLC')
+
+        # Create output path if not provided
+        if output_path is None:
+            temp_dir = tempfile.gettempdir()
+            output_path = os.path.join(temp_dir, f"TariffMill_Invoice_{month}.pdf")
+
+        # Define brand colors
+        brand_blue = colors.HexColor('#1E3C64')
+        brand_purple = colors.HexColor('#7C5CFF')
+        light_gray = colors.HexColor('#F5F7FA')
+        dark_gray = colors.HexColor('#374151')
+
+        # Create PDF document
+        doc = SimpleDocTemplate(
+            output_path,
+            pagesize=letter,
+            rightMargin=0.75*inch,
+            leftMargin=0.75*inch,
+            topMargin=0.5*inch,
+            bottomMargin=0.5*inch
+        )
+
+        # Define styles
+        styles = getSampleStyleSheet()
+
+        title_style = ParagraphStyle(
+            'InvoiceTitle',
+            parent=styles['Heading1'],
+            fontSize=28,
+            textColor=brand_blue,
+            alignment=TA_CENTER,
+            spaceAfter=20
+        )
+
+        company_style = ParagraphStyle(
+            'CompanyName',
+            parent=styles['Normal'],
+            fontSize=16,
+            textColor=brand_blue,
+            alignment=TA_RIGHT,
+            fontName='Helvetica-Bold'
+        )
+
+        company_url_style = ParagraphStyle(
+            'CompanyURL',
+            parent=styles['Normal'],
+            fontSize=10,
+            textColor=colors.HexColor('#666666'),
+            alignment=TA_RIGHT
+        )
+
+        section_header_style = ParagraphStyle(
+            'SectionHeader',
+            parent=styles['Heading2'],
+            fontSize=12,
+            textColor=colors.white,
+            backColor=brand_blue,
+            alignment=TA_LEFT,
+            leftIndent=5,
+            rightIndent=5,
+            spaceBefore=15,
+            spaceAfter=5,
+            fontName='Helvetica-Bold'
+        )
+
+        label_style = ParagraphStyle(
+            'Label',
+            parent=styles['Normal'],
+            fontSize=10,
+            textColor=brand_blue,
+            fontName='Helvetica-Bold'
+        )
+
+        value_style = ParagraphStyle(
+            'Value',
+            parent=styles['Normal'],
+            fontSize=10,
+            textColor=dark_gray
+        )
+
+        footer_style = ParagraphStyle(
+            'Footer',
+            parent=styles['Normal'],
+            fontSize=9,
+            textColor=colors.HexColor('#666666'),
+            alignment=TA_CENTER,
+            fontName='Helvetica-Oblique'
+        )
+
+        # Build document elements
+        elements = []
+
+        # Header with logo and company info
+        logo_path = RESOURCES_DIR / "tariffmill_logo_small.svg"
+        icon_path = RESOURCES_DIR / "tariffmill_icon.png"
+
+        # Try to add logo/icon
+        header_data = []
+        logo_cell = ""
+
+        if icon_path.exists():
+            try:
+                logo_cell = RLImage(str(icon_path), width=1.2*inch, height=1.2*inch)
+            except Exception as e:
+                logger.warning(f"Could not load icon for PDF: {e}")
+                logo_cell = ""
+
+        company_info = f"""<b>{company_name}</b><br/>
+        <font size="9" color="#666666">www.processlogiclabs.com</font><br/>
+        <font size="9" color="#666666">admin@processlogiclabs.com</font>"""
+
+        header_table = Table(
+            [[logo_cell, Paragraph(company_info, company_style)]],
+            colWidths=[1.5*inch, 5.5*inch]
+        )
+        header_table.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('ALIGN', (1, 0), (1, 0), 'RIGHT'),
+        ]))
+        elements.append(header_table)
+        elements.append(Spacer(1, 0.3*inch))
+
+        # Invoice title
+        elements.append(Paragraph("INVOICE", title_style))
+        elements.append(Spacer(1, 0.2*inch))
+
+        # Invoice details row
+        invoice_number = f"INV-{month.replace('-', '')}"
+        invoice_date = datetime.now().strftime('%B %d, %Y')
+
+        details_data = [
+            [Paragraph("<b>Invoice Number:</b>", label_style), invoice_number,
+             Paragraph("<b>Invoice Date:</b>", label_style), invoice_date],
+            [Paragraph("<b>Billing Period:</b>", label_style), month,
+             Paragraph("<b>Due Date:</b>", label_style), "Upon Receipt"]
+        ]
+
+        details_table = Table(details_data, colWidths=[1.3*inch, 2*inch, 1.3*inch, 2*inch])
+        details_table.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ]))
+        elements.append(details_table)
+        elements.append(Spacer(1, 0.25*inch))
+
+        # Bill To section
+        elements.append(Paragraph("BILL TO", section_header_style))
+        bill_to_text = f"<b>{customer_name}</b>"
+        if customer_email:
+            bill_to_text += f"<br/>{customer_email}"
+        elements.append(Paragraph(bill_to_text, value_style))
+        elements.append(Spacer(1, 0.25*inch))
+
+        # Invoice Summary section
+        elements.append(Paragraph("INVOICE SUMMARY", section_header_style))
+
+        summary_data = [
+            ["Total Exports:", str(summary['export_count'])],
+            ["Lines Processed:", f"{summary['total_lines']:,}"],
+            ["Total Value Processed:", f"${summary['total_value']:,.2f}"],
+            ["Rate per Export:", f"${rate:.2f}"],
+        ]
+
+        summary_table = Table(summary_data, colWidths=[2.5*inch, 2*inch])
+        summary_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), light_gray),
+            ('TEXTCOLOR', (0, 0), (0, -1), brand_blue),
+            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('PADDING', (0, 0), (-1, -1), 8),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#D1D5DB')),
+        ]))
+        elements.append(summary_table)
+
+        # Amount Due (highlighted)
+        amount_due_data = [["AMOUNT DUE:", f"${amount_due:,.2f}"]]
+        amount_due_table = Table(amount_due_data, colWidths=[2.5*inch, 2*inch])
+        amount_due_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), brand_purple),
+            ('TEXTCOLOR', (0, 0), (-1, -1), colors.white),
+            ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 12),
+            ('ALIGN', (1, 0), (1, 0), 'RIGHT'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('PADDING', (0, 0), (-1, -1), 10),
+        ]))
+        elements.append(amount_due_table)
+        elements.append(Spacer(1, 0.25*inch))
+
+        # Export Details section
+        elements.append(Paragraph("EXPORT DETAILS", section_header_style))
+
+        # Table headers
+        detail_headers = ["#", "File #", "Date", "File Name", "Lines", "Value"]
+        detail_data = [detail_headers]
+
+        for idx, record in enumerate(summary['records'], 1):
+            file_name = record.get('file_name', '')
+            if len(file_name) > 25:
+                file_name = file_name[:22] + "..."
+            detail_data.append([
+                str(idx),
+                str(record.get('file_number', '')),
+                record.get('export_date', ''),
+                file_name,
+                str(record.get('line_count', 0)),
+                f"${record.get('total_value', 0):,.2f}"
+            ])
+
+        detail_table = Table(detail_data, colWidths=[0.4*inch, 0.8*inch, 1*inch, 2.5*inch, 0.7*inch, 1.1*inch])
+        detail_style = [
+            # Header row
+            ('BACKGROUND', (0, 0), (-1, 0), brand_blue),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 9),
+            ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+            # Data rows
+            ('FONTSIZE', (0, 1), (-1, -1), 8),
+            ('ALIGN', (0, 1), (0, -1), 'CENTER'),  # # column
+            ('ALIGN', (4, 1), (4, -1), 'CENTER'),  # Lines column
+            ('ALIGN', (5, 1), (5, -1), 'RIGHT'),   # Value column
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('PADDING', (0, 0), (-1, -1), 6),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#D1D5DB')),
+        ]
+
+        # Alternate row colors
+        for i in range(1, len(detail_data)):
+            if i % 2 == 0:
+                detail_style.append(('BACKGROUND', (0, i), (-1, i), colors.HexColor('#F9FAFB')))
+
+        detail_table.setStyle(TableStyle(detail_style))
+        elements.append(detail_table)
+        elements.append(Spacer(1, 0.4*inch))
+
+        # Footer
+        elements.append(Paragraph("Thank you for using TariffMill!", footer_style))
+        elements.append(Spacer(1, 0.1*inch))
+        elements.append(Paragraph(
+            f"Generated by TariffMill on {datetime.now().strftime('%Y-%m-%d %H:%M')} | © {COPYRIGHT_YEAR} {COPYRIGHT_HOLDER}",
+            ParagraphStyle('SmallFooter', parent=footer_style, fontSize=8, textColor=colors.HexColor('#999999'))
+        ))
+
+        # Build PDF
+        doc.build(elements)
+        logger.info(f"Generated PDF invoice: {output_path}")
+
+        return output_path
+
     def _send_billing_invoice(self, month: str):
-        """Send billing invoice email for the specified month."""
+        """Send billing invoice email with professional PDF attachment for the specified month."""
         customer_email = self.get_billing_setting('customer_email', '')
         admin_email = self.get_billing_setting('admin_email', '')
         smtp_server = self.get_billing_setting('smtp_server', '')
         smtp_port = int(self.get_billing_setting('smtp_port', '587'))
         smtp_user = self.get_billing_setting('smtp_user', '')
         smtp_password = self.get_billing_setting('smtp_password', '')
+        customer_name = self.get_billing_setting('customer_name', 'Valued Customer')
 
         if not all([customer_email, smtp_server, smtp_user, smtp_password]):
             QMessageBox.warning(self, "Missing Settings",
@@ -12925,6 +14106,12 @@ class TariffMill(QMainWindow):
             import smtplib
             from email.mime.text import MIMEText
             from email.mime.multipart import MIMEMultipart
+            from email.mime.base import MIMEBase
+            from email import encoders
+            import tempfile
+
+            # Generate PDF invoice
+            pdf_path = self._generate_pdf_invoice(month)
 
             msg = MIMEMultipart()
             msg['From'] = smtp_user
@@ -12933,30 +14120,61 @@ class TariffMill(QMainWindow):
                 msg['Cc'] = admin_email
             msg['Subject'] = f"TariffMill Invoice - {month}"
 
-            # Build email body
-            body = f"""TariffMill Billing Invoice
+            # Build HTML email body
+            html_body = f"""
+            <html>
+            <head>
+                <style>
+                    body {{ font-family: Arial, sans-serif; color: #374151; line-height: 1.6; }}
+                    .header {{ color: #1E3C64; font-size: 24px; font-weight: bold; margin-bottom: 20px; }}
+                    .summary-box {{ background: #F5F7FA; padding: 15px; border-radius: 8px; margin: 20px 0; }}
+                    .amount-due {{ background: #7C5CFF; color: white; padding: 15px; border-radius: 8px; font-size: 18px; font-weight: bold; text-align: center; }}
+                    .footer {{ color: #666; font-size: 12px; margin-top: 30px; border-top: 1px solid #ddd; padding-top: 15px; }}
+                </style>
+            </head>
+            <body>
+                <div class="header">TariffMill Invoice</div>
 
-Period: {month}
-Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}
+                <p>Dear {customer_name},</p>
 
-SUMMARY
--------
-Total Exports: {summary['export_count']}
-Total Lines Processed: {summary['total_lines']}
-Total Value Processed: ${summary['total_value']:,.2f}
-Rate per Export: ${rate:.2f}
+                <p>Please find attached your TariffMill invoice for <strong>{month}</strong>.</p>
 
-AMOUNT DUE: ${amount_due:,.2f}
+                <div class="summary-box">
+                    <strong>Invoice Summary:</strong><br/>
+                    Total Exports: {summary['export_count']}<br/>
+                    Lines Processed: {summary['total_lines']:,}<br/>
+                    Total Value Processed: ${summary['total_value']:,.2f}<br/>
+                    Rate per Export: ${rate:.2f}
+                </div>
 
-EXPORT DETAILS
---------------
-"""
-            for record in summary['records']:
-                body += f"File #{record.get('file_number', 'N/A')} - {record.get('export_date', '')} - {record.get('file_name', '')} ({record.get('line_count', 0)} lines, ${record.get('total_value', 0):,.2f})\n"
+                <div class="amount-due">
+                    Amount Due: ${amount_due:,.2f}
+                </div>
 
-            body += f"\n\nThank you for using TariffMill."
+                <p>The detailed invoice is attached as a PDF for your records.</p>
 
-            msg.attach(MIMEText(body, 'plain'))
+                <p>Thank you for using TariffMill!</p>
+
+                <div class="footer">
+                    <strong>Process Logic Labs, LLC</strong><br/>
+                    www.processlogiclabs.com<br/>
+                    admin@processlogiclabs.com
+                </div>
+            </body>
+            </html>
+            """
+
+            # Attach HTML body
+            msg.attach(MIMEText(html_body, 'html'))
+
+            # Attach PDF invoice
+            with open(pdf_path, 'rb') as pdf_file:
+                pdf_attachment = MIMEBase('application', 'pdf')
+                pdf_attachment.set_payload(pdf_file.read())
+                encoders.encode_base64(pdf_attachment)
+                pdf_filename = f"TariffMill_Invoice_{month}.pdf"
+                pdf_attachment.add_header('Content-Disposition', f'attachment; filename="{pdf_filename}"')
+                msg.attach(pdf_attachment)
 
             # Send email
             recipients = [customer_email]
@@ -12969,6 +14187,12 @@ EXPORT DETAILS
             server.send_message(msg)
             server.quit()
 
+            # Clean up temp PDF file
+            try:
+                os.remove(pdf_path)
+            except:
+                pass
+
             # Mark records as invoiced
             try:
                 conn = sqlite3.connect(str(DB_PATH))
@@ -12979,8 +14203,10 @@ EXPORT DETAILS
             except:
                 pass
 
-            QMessageBox.information(self, "Invoice Sent", f"Invoice sent successfully to {customer_email}!")
-            logger.info(f"Sent billing invoice for {month} to {customer_email}")
+            QMessageBox.information(self, "Invoice Sent",
+                                    f"Invoice sent successfully to {customer_email}!\n\n"
+                                    f"A professional PDF invoice has been attached.")
+            logger.info(f"Sent billing invoice with PDF attachment for {month} to {customer_email}")
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to send invoice:\n{str(e)}")
@@ -13778,6 +15004,8 @@ EXPORT DETAILS
         """)
         self.ocrmill_templates_list.itemClicked.connect(self._on_template_selected)
         self.ocrmill_templates_list.itemDoubleClicked.connect(self._on_template_double_clicked)
+        self.ocrmill_templates_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.ocrmill_templates_list.customContextMenuRequested.connect(self._on_template_context_menu)
         left_layout.addWidget(self.ocrmill_templates_list, 1)
 
         # Template list buttons
@@ -14505,6 +15733,83 @@ EXPORT DETAILS
 
         scroll_layout.addWidget(ocr_group)
 
+        # === Time Savings Analysis Section ===
+        savings_group = QGroupBox("Time Savings Analysis")
+        savings_layout = QVBoxLayout(savings_group)
+
+        # Time savings explanation
+        savings_info = QLabel(
+            "Compares TariffMill processing time against industry benchmarks for manual entry processing."
+        )
+        savings_info.setStyleSheet("color: #888; font-size: 10px; margin-bottom: 10px;")
+        savings_info.setWordWrap(True)
+        savings_layout.addWidget(savings_info)
+
+        # Time savings cards
+        savings_cards_layout = QHBoxLayout()
+        manual_time_card = self._create_stats_dialog_card("Manual Processing", "0 hrs", "estimated without TariffMill")
+        tariffmill_time_card = self._create_stats_dialog_card("TariffMill Time", "0 min", "actual processing time")
+        time_saved_card = self._create_stats_dialog_card("Time Saved", "0 hrs", "0% reduction")
+        money_saved_card = self._create_stats_dialog_card("Labor Savings", "$0", "at $35/hr rate")
+        savings_cards_layout.addWidget(manual_time_card)
+        savings_cards_layout.addWidget(tariffmill_time_card)
+        savings_cards_layout.addWidget(time_saved_card)
+        savings_cards_layout.addWidget(money_saved_card)
+        savings_layout.addLayout(savings_cards_layout)
+
+        # Benchmark assumptions
+        benchmark_label = QLabel("Industry Benchmarks (adjustable)")
+        benchmark_label.setStyleSheet("font-weight: bold; margin-top: 10px;")
+        savings_layout.addWidget(benchmark_label)
+
+        benchmark_form = QFormLayout()
+        benchmark_form.setSpacing(8)
+
+        # Minutes per line item (manual)
+        mins_per_line_spin = QDoubleSpinBox()
+        mins_per_line_spin.setRange(0.5, 10.0)
+        mins_per_line_spin.setValue(2.0)  # Industry average: 2 min per line item
+        mins_per_line_spin.setSingleStep(0.5)
+        mins_per_line_spin.setSuffix(" min")
+        mins_per_line_spin.setToolTip("Average time for manual entry of one line item including HTS lookup, value entry, and verification")
+        mins_per_line_spin.setStyleSheet("background: #2a2a3e; color: #fff; border: 1px solid #3c3c3c; padding: 4px;")
+        benchmark_form.addRow("Time per line (manual):", mins_per_line_spin)
+
+        # Hourly labor rate
+        hourly_rate_spin = QDoubleSpinBox()
+        hourly_rate_spin.setRange(15.0, 150.0)
+        hourly_rate_spin.setValue(35.0)  # Average entry writer rate
+        hourly_rate_spin.setSingleStep(5.0)
+        hourly_rate_spin.setPrefix("$")
+        hourly_rate_spin.setSuffix("/hr")
+        hourly_rate_spin.setToolTip("Average hourly rate for customs entry writer labor")
+        hourly_rate_spin.setStyleSheet("background: #2a2a3e; color: #fff; border: 1px solid #3c3c3c; padding: 4px;")
+        benchmark_form.addRow("Labor rate:", hourly_rate_spin)
+
+        savings_layout.addLayout(benchmark_form)
+
+        # Detailed breakdown table
+        breakdown_label = QLabel("Monthly Breakdown")
+        breakdown_label.setStyleSheet("font-weight: bold; margin-top: 10px;")
+        savings_layout.addWidget(breakdown_label)
+
+        breakdown_table = QTableWidget()
+        breakdown_table.setColumnCount(6)
+        breakdown_table.setHorizontalHeaderLabels([
+            "Month", "Exports", "Line Items", "Manual Est.", "TariffMill", "Saved"
+        ])
+        breakdown_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        for i in range(1, 6):
+            breakdown_table.horizontalHeader().setSectionResizeMode(i, QHeaderView.Stretch)
+        breakdown_table.setAlternatingRowColors(True)
+        breakdown_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        breakdown_table.verticalHeader().setVisible(False)
+        breakdown_table.setMaximumHeight(150)
+        self._apply_stats_table_style(breakdown_table)
+        savings_layout.addWidget(breakdown_table)
+
+        scroll_layout.addWidget(savings_group)
+
         scroll_layout.addStretch()
         scroll.setWidget(scroll_widget)
         layout.addWidget(scroll, 1)
@@ -14617,6 +15922,118 @@ EXPORT DETAILS
                         template_table.setItem(row, 6, QTableWidgetItem(last_used))
                 except Exception as e:
                     logger.error(f"Error loading OCRMill stats: {e}")
+
+            # === Time Savings Calculation ===
+            try:
+                mins_per_line = mins_per_line_spin.value()
+                hourly_rate = hourly_rate_spin.value()
+
+                # Get processing data from billing_records
+                total_lines = 0
+                total_processing_ms = 0
+                monthly_data = []
+
+                if hasattr(self, 'db') and self.db:
+                    cursor = self.db.cursor()
+
+                    # Get totals
+                    cursor.execute("""
+                        SELECT COALESCE(SUM(line_count), 0), COALESCE(SUM(processing_time_ms), 0)
+                        FROM billing_records
+                    """)
+                    row = cursor.fetchone()
+                    total_lines = row[0] or 0
+                    total_processing_ms = row[1] or 0
+
+                    # Get monthly breakdown (last 6 months)
+                    cursor.execute("""
+                        SELECT invoice_month,
+                               COUNT(*) as exports,
+                               COALESCE(SUM(line_count), 0) as lines,
+                               COALESCE(SUM(processing_time_ms), 0) as processing_ms
+                        FROM billing_records
+                        WHERE invoice_month IS NOT NULL
+                        GROUP BY invoice_month
+                        ORDER BY invoice_month DESC
+                        LIMIT 6
+                    """)
+                    monthly_data = cursor.fetchall()
+
+                # Calculate time savings
+                # Manual time = lines * minutes_per_line
+                manual_minutes = total_lines * mins_per_line
+                manual_hours = manual_minutes / 60
+
+                # TariffMill time (convert ms to minutes)
+                tariffmill_minutes = total_processing_ms / 60000
+                tariffmill_hours = tariffmill_minutes / 60
+
+                # Time saved
+                time_saved_minutes = manual_minutes - tariffmill_minutes
+                time_saved_hours = time_saved_minutes / 60
+
+                # Percentage reduction
+                reduction_pct = (time_saved_minutes / manual_minutes * 100) if manual_minutes > 0 else 0
+
+                # Labor cost savings
+                labor_saved = time_saved_hours * hourly_rate
+
+                # Update cards
+                if manual_hours >= 1:
+                    self._update_stats_dialog_card(manual_time_card, f"{manual_hours:.1f} hrs", f"{total_lines:,} line items")
+                else:
+                    self._update_stats_dialog_card(manual_time_card, f"{manual_minutes:.0f} min", f"{total_lines:,} line items")
+
+                if tariffmill_minutes >= 60:
+                    self._update_stats_dialog_card(tariffmill_time_card, f"{tariffmill_hours:.1f} hrs", "actual processing")
+                elif tariffmill_minutes >= 1:
+                    self._update_stats_dialog_card(tariffmill_time_card, f"{tariffmill_minutes:.1f} min", "actual processing")
+                else:
+                    self._update_stats_dialog_card(tariffmill_time_card, f"{total_processing_ms/1000:.1f} sec", "actual processing")
+
+                if time_saved_hours >= 1:
+                    self._update_stats_dialog_card(time_saved_card, f"{time_saved_hours:.1f} hrs", f"{reduction_pct:.0f}% reduction")
+                else:
+                    self._update_stats_dialog_card(time_saved_card, f"{time_saved_minutes:.0f} min", f"{reduction_pct:.0f}% reduction")
+
+                self._update_stats_dialog_card(money_saved_card, f"${labor_saved:,.2f}", f"at ${hourly_rate:.0f}/hr rate")
+
+                # Populate monthly breakdown table
+                breakdown_table.setRowCount(len(monthly_data))
+                for row_idx, (month, exports, lines, proc_ms) in enumerate(monthly_data):
+                    # Month
+                    breakdown_table.setItem(row_idx, 0, QTableWidgetItem(month or ""))
+                    # Exports
+                    breakdown_table.setItem(row_idx, 1, QTableWidgetItem(str(exports)))
+                    # Line Items
+                    breakdown_table.setItem(row_idx, 2, QTableWidgetItem(f"{lines:,}"))
+                    # Manual Est.
+                    month_manual_mins = lines * mins_per_line
+                    if month_manual_mins >= 60:
+                        breakdown_table.setItem(row_idx, 3, QTableWidgetItem(f"{month_manual_mins/60:.1f} hrs"))
+                    else:
+                        breakdown_table.setItem(row_idx, 3, QTableWidgetItem(f"{month_manual_mins:.0f} min"))
+                    # TariffMill time
+                    month_tm_mins = proc_ms / 60000
+                    if month_tm_mins >= 60:
+                        breakdown_table.setItem(row_idx, 4, QTableWidgetItem(f"{month_tm_mins/60:.1f} hrs"))
+                    elif month_tm_mins >= 1:
+                        breakdown_table.setItem(row_idx, 4, QTableWidgetItem(f"{month_tm_mins:.1f} min"))
+                    else:
+                        breakdown_table.setItem(row_idx, 4, QTableWidgetItem(f"{proc_ms/1000:.1f} sec"))
+                    # Saved
+                    month_saved_mins = month_manual_mins - month_tm_mins
+                    if month_saved_mins >= 60:
+                        breakdown_table.setItem(row_idx, 5, QTableWidgetItem(f"{month_saved_mins/60:.1f} hrs"))
+                    else:
+                        breakdown_table.setItem(row_idx, 5, QTableWidgetItem(f"{month_saved_mins:.0f} min"))
+
+            except Exception as e:
+                logger.error(f"Error calculating time savings: {e}")
+
+        # Connect benchmark spinboxes to refresh
+        mins_per_line_spin.valueChanged.connect(refresh_stats)
+        hourly_rate_spin.valueChanged.connect(refresh_stats)
 
         refresh_btn.clicked.connect(refresh_stats)
 
@@ -14924,6 +16341,114 @@ EXPORT DETAILS
     def _on_template_double_clicked(self, item):
         """Handle double-click on template (same as single click for now)."""
         self._on_template_selected(item)
+
+    def _on_template_context_menu(self, position):
+        """Show context menu for template list."""
+        item = self.ocrmill_templates_list.itemAt(position)
+        if not item:
+            return
+
+        # Find the template info for this item
+        idx = self.ocrmill_templates_list.row(item)
+        if idx < 0 or idx >= len(self.ocrmill_templates_data):
+            return
+
+        template_info = self.ocrmill_templates_data[idx]
+
+        menu = QMenu(self)
+
+        # Edit action (always available)
+        edit_action = menu.addAction("Edit Template")
+        edit_action.triggered.connect(lambda: self._load_template_for_editing(template_info))
+
+        # Duplicate action
+        duplicate_action = menu.addAction("Duplicate Template")
+        duplicate_action.triggered.connect(self._duplicate_template)
+
+        # Copy to Local action (only for shared templates)
+        if template_info.get('is_shared', False):
+            menu.addSeparator()
+            copy_local_action = menu.addAction("Copy to Local Templates")
+            copy_local_action.setToolTip("Create a local copy you can edit")
+            copy_local_action.triggered.connect(lambda: self._copy_shared_to_local(template_info))
+
+        menu.addSeparator()
+
+        # Delete action (not for shared templates)
+        if not template_info.get('is_shared', False):
+            delete_action = menu.addAction("Delete Template")
+            delete_action.triggered.connect(self._delete_template)
+        else:
+            # Show disabled delete with explanation
+            delete_action = menu.addAction("Delete Template (Local only)")
+            delete_action.setEnabled(False)
+
+        menu.exec_(self.ocrmill_templates_list.mapToGlobal(position))
+
+    def _copy_shared_to_local(self, template_info):
+        """Copy a shared template to the local templates folder."""
+        import shutil
+
+        source_path = Path(template_info['file_path'])
+        if not source_path.exists():
+            QMessageBox.warning(self, "Error", f"Source template not found: {source_path}")
+            return
+
+        # Determine local templates directory
+        source_templates_dir = Path(__file__).parent / "templates"
+        install_templates_dir = BASE_DIR / "templates"
+
+        if source_templates_dir.exists():
+            local_dir = source_templates_dir
+        elif install_templates_dir.exists():
+            local_dir = install_templates_dir
+        else:
+            # Create source directory
+            local_dir = source_templates_dir
+            local_dir.mkdir(parents=True, exist_ok=True)
+
+        # Generate a unique filename if needed
+        dest_filename = source_path.name
+        dest_path = local_dir / dest_filename
+
+        if dest_path.exists():
+            # Ask user if they want to overwrite or create new name
+            reply = QMessageBox.question(
+                self, "Template Exists",
+                f"A local template named '{dest_filename}' already exists.\n\nDo you want to overwrite it?",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel
+            )
+
+            if reply == QMessageBox.Cancel:
+                return
+            elif reply == QMessageBox.No:
+                # Generate unique name
+                base_name = source_path.stem
+                counter = 1
+                while dest_path.exists():
+                    dest_filename = f"{base_name}_copy{counter}.py"
+                    dest_path = local_dir / dest_filename
+                    counter += 1
+
+        try:
+            shutil.copy2(source_path, dest_path)
+
+            # Also copy AI metadata if exists
+            source_meta = source_path.with_suffix('.ai_meta.json')
+            if source_meta.exists():
+                dest_meta = dest_path.with_suffix('.ai_meta.json')
+                shutil.copy2(source_meta, dest_meta)
+
+            QMessageBox.information(
+                self, "Success",
+                f"Template copied to local templates folder:\n{dest_path.name}\n\nYou can now edit this local copy."
+            )
+
+            # Refresh templates list
+            self.ocrmill_refresh_templates()
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to copy template: {e}")
 
     def _load_template_for_editing(self, template_info):
         """Load a template into the editor."""
@@ -16578,28 +18103,68 @@ Please fix this error in the template code. Return the complete corrected templa
         self.ocrmill_templates_list.clear()
         self.ocrmill_templates_data = []
 
-        # Templates directory
-        templates_dir = BASE_DIR / "templates"
-        if not templates_dir.exists():
-            return
+        # Templates directory - check both source and install locations
+        source_templates_dir = Path(__file__).parent / "templates"
+        install_templates_dir = BASE_DIR / "templates"
+
+        # Use source directory if it exists (development), otherwise use install directory
+        if source_templates_dir.exists():
+            templates_dir = source_templates_dir
+        elif install_templates_dir.exists():
+            templates_dir = install_templates_dir
+        else:
+            templates_dir = None
 
         # Excluded files
         excluded = {'__init__.py', 'base_template.py', 'sample_template.py', '__pycache__'}
 
-        for file_path in sorted(templates_dir.glob("*.py")):
-            if file_path.name in excluded:
-                continue
+        # Load local templates first
+        if templates_dir and templates_dir.exists():
+            for file_path in sorted(templates_dir.glob("*.py")):
+                if file_path.name in excluded:
+                    continue
 
-            template_info = self._extract_template_info_from_file(file_path)
-            if template_info:
-                self.ocrmill_templates_data.append(template_info)
+                template_info = self._extract_template_info_from_file(file_path)
+                if template_info:
+                    template_info['is_shared'] = False
+                    self.ocrmill_templates_data.append(template_info)
 
-                # Create list item with template name
-                display_text = template_info['name']
+                    # Create list item with template name
+                    display_text = template_info['name']
 
-                item = QListWidgetItem(display_text)
-                item.setToolTip(f"Supplier: {template_info['supplier']}\nClient: {template_info['client']}\nCountry: {template_info['country']}")
-                self.ocrmill_templates_list.addItem(item)
+                    item = QListWidgetItem(display_text)
+                    item.setToolTip(f"Supplier: {template_info['supplier']}\nClient: {template_info['client']}\nCountry: {template_info['country']}")
+                    self.ocrmill_templates_list.addItem(item)
+
+        # Load shared templates if configured
+        shared_folder = self.get_billing_setting('shared_templates_folder', '')
+        if shared_folder:
+            shared_path = Path(shared_folder)
+            if shared_path.exists() and shared_path.is_dir():
+                # Track local template names to avoid duplicates
+                local_names = {t['file_name'] for t in self.ocrmill_templates_data}
+
+                for file_path in sorted(shared_path.glob("*.py")):
+                    if file_path.name in excluded:
+                        continue
+
+                    # Skip if a local template with the same filename exists
+                    if file_path.stem in local_names:
+                        continue
+
+                    template_info = self._extract_template_info_from_file(file_path)
+                    if template_info:
+                        template_info['is_shared'] = True
+                        self.ocrmill_templates_data.append(template_info)
+
+                        # Create list item with shared indicator
+                        display_text = f"{template_info['name']} (Shared)"
+
+                        item = QListWidgetItem(display_text)
+                        item.setToolTip(f"Supplier: {template_info['supplier']}\nClient: {template_info['client']}\nCountry: {template_info['country']}\n\nShared template from: {shared_folder}")
+                        # Use slightly different style for shared templates
+                        item.setForeground(QColor("#6B7280"))  # Gray text for shared
+                        self.ocrmill_templates_list.addItem(item)
 
     def _extract_template_info_from_file(self, file_path: Path) -> dict:
         """Extract template metadata from a template file."""
@@ -16701,8 +18266,11 @@ Please fix this error in the template code. Return the complete corrected templa
             QMessageBox.warning(self, "Invalid Name", "Template name must contain only letters, numbers, and underscores.")
             return
 
-        # Check if template already exists
-        templates_dir = BASE_DIR / "templates"
+        # Check if template already exists - use source directory for development
+        source_templates_dir = Path(__file__).parent / "templates"
+        install_templates_dir = BASE_DIR / "templates"
+        templates_dir = source_templates_dir if source_templates_dir.exists() else install_templates_dir
+
         new_template_path = templates_dir / f"{name}.py"
         if new_template_path.exists():
             QMessageBox.warning(self, "Template Exists", f"A template named '{name}' already exists.")
@@ -20336,18 +21904,48 @@ Please fix this error in the template code. Return the complete corrected templa
     def final_export(self):
         if self.last_processed_df is None:
             return
-        
+
+        # Get file number and validate BEFORE any export
+        file_number = self.file_number_input.text().strip() if hasattr(self, 'file_number_input') else ""
+        file_name = self.last_output_filename or f"Upload_Sheet_{datetime.now():%Y%m%d_%H%M}.xlsx"
+
+        # Validate file number format
+        is_valid, error_msg = self.validate_file_number(file_number)
+        if not is_valid:
+            # Log the failed attempt
+            self.log_export_audit(
+                event_type="EXPORT_BLOCKED_NO_FILE_NUMBER",
+                file_number=file_number,
+                file_name=file_name,
+                line_count=self.table.rowCount(),
+                success=False,
+                failure_reason=error_msg
+            )
+            # Highlight the file number field
+            if hasattr(self, 'file_number_input'):
+                self.file_number_input.setStyleSheet("border: 2px solid #ff4444; background-color: #ffebee;")
+                QTimer.singleShot(2000, lambda: self.file_number_input.setStyleSheet(""))
+                self.file_number_input.setFocus()
+            QMessageBox.warning(self, "File Number Required", error_msg)
+            return
+
         # Check if table has rows before attempting export
         if self.table.rowCount() == 0:
+            self.log_export_audit(
+                event_type="EXPORT_BLOCKED_EMPTY",
+                file_number=file_number,
+                success=False,
+                failure_reason="No data to export"
+            )
             QMessageBox.warning(self, "Empty Preview", "No data to export. Please process a shipment file first.")
             return
-            
+
         # Ensure totals match prior to export
         running_total = 0.0
         for i in range(self.table.rowCount()):
             cell = self.table.item(i, 1)
             running_total += (cell.data(Qt.UserRole) or 0.0) if cell else 0.0
-        
+
         # Compare against CI input value (what user entered/approved)
         ci_text = self.ci_input.text().replace(',', '').strip()
         try:
@@ -20356,6 +21954,15 @@ Please fix this error in the template code. Return the complete corrected templa
             target_value = self.csv_total_value
         
         if abs(running_total - target_value) > 0.05:
+            self.log_export_audit(
+                event_type="EXPORT_BLOCKED_TOTALS_MISMATCH",
+                file_number=file_number,
+                file_name=file_name,
+                line_count=self.table.rowCount(),
+                total_value=running_total,
+                success=False,
+                failure_reason=f"Totals mismatch: Preview ${running_total:,.2f} vs Target ${target_value:,.2f}"
+            )
             QMessageBox.warning(self, "Totals Mismatch", f"Values don't match invoice total.\nPreview: ${running_total:,.2f}\nTarget: ${target_value:,.2f}")
             return
 
@@ -20892,6 +22499,7 @@ Please fix this error in the template code. Return the complete corrected templa
             added_parts_count = self.add_not_found_parts_to_db()
 
             # Record billing event for this export
+            billing_recorded = False
             try:
                 hts_codes = [row.get('HTSCode', '') for row in export_data if row.get('HTSCode')]
                 processing_time_ms = int((time.time() - t_start) * 1000) if 't_start' in dir() else 0
@@ -20902,9 +22510,23 @@ Please fix this error in the template code. Return the complete corrected templa
                     hts_codes=hts_codes,
                     processing_time_ms=processing_time_ms
                 )
+                billing_recorded = True
                 logger.info(f"Recorded billing event for {out.name}: {len(export_data)} lines, ${running_total:,.2f}")
             except Exception as billing_err:
                 logger.warning(f"Failed to record billing event: {billing_err}")
+
+            # Log successful export to audit log
+            file_number = self.file_number_input.text().strip() if hasattr(self, 'file_number_input') else ""
+            self.log_export_audit(
+                event_type="EXPORT_SUCCESS",
+                file_number=file_number,
+                file_name=out.name,
+                line_count=len(export_data),
+                total_value=running_total,
+                success=True,
+                billing_recorded=billing_recorded,
+                additional_info=f"HTS codes: {len(hts_codes)}, Processing time: {processing_time_ms}ms"
+            )
 
             # Hide progress indicator after brief delay
             QTimer.singleShot(500, self.export_progress_widget.hide)
