@@ -7250,17 +7250,21 @@ class TariffMill(QMainWindow):
         dialog.exec_()
 
     def _copy_pip_install_command(self, dialog):
-        """Copy the pip install command to clipboard for Linux/macOS users"""
-        pip_command = "pip install --upgrade git+https://github.com/ProcessLogicLabs/TariffMill.git"
+        """Copy the pipx install command to clipboard for Linux/macOS users"""
+        pipx_command = "pipx install git+https://github.com/ProcessLogicLabs/TariffMill.git"
+        pipx_upgrade = "pipx upgrade tariffmill"
         clipboard = QApplication.clipboard()
-        clipboard.setText(pip_command)
+        clipboard.setText(pipx_command)
 
-        # Show confirmation
+        # Show confirmation with pipx instructions
         QMessageBox.information(
             dialog,
             "Command Copied",
-            f"The following command has been copied to your clipboard:\n\n{pip_command}\n\n"
-            "Paste this in your terminal to update TariffMill via pip."
+            f"The install command has been copied to your clipboard:\n\n"
+            f"{pipx_command}\n\n"
+            f"If TariffMill is already installed, use:\n{pipx_upgrade}\n\n"
+            f"Note: pipx is recommended for Linux. Install it first with:\n"
+            f"sudo apt install pipx && pipx ensurepath"
         )
 
     def check_for_updates_startup(self):
