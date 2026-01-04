@@ -7231,6 +7231,12 @@ class TariffMill(QMainWindow):
             download_btn.clicked.connect(lambda: self._download_and_install_update(download_url, dialog))
             btn_layout.addWidget(download_btn)
 
+        # Add pip install button for Linux/macOS users
+        pip_btn = QPushButton("Copy pip Command")
+        pip_btn.setToolTip("Copy the pip install command for Linux/macOS users")
+        pip_btn.clicked.connect(lambda: self._copy_pip_install_command(dialog))
+        btn_layout.addWidget(pip_btn)
+
         view_btn = QPushButton("View on GitHub")
         view_btn.clicked.connect(lambda: (webbrowser.open(release_url), dialog.accept()))
         btn_layout.addWidget(view_btn)
@@ -7242,6 +7248,20 @@ class TariffMill(QMainWindow):
         layout.addLayout(btn_layout)
         self.center_dialog(dialog)
         dialog.exec_()
+
+    def _copy_pip_install_command(self, dialog):
+        """Copy the pip install command to clipboard for Linux/macOS users"""
+        pip_command = "pip install --upgrade git+https://github.com/ProcessLogicLabs/TariffMill.git"
+        clipboard = QApplication.clipboard()
+        clipboard.setText(pip_command)
+
+        # Show confirmation
+        QMessageBox.information(
+            dialog,
+            "Command Copied",
+            f"The following command has been copied to your clipboard:\n\n{pip_command}\n\n"
+            "Paste this in your terminal to update TariffMill via pip."
+        )
 
     def check_for_updates_startup(self):
         """Check for updates on startup (runs in background thread)"""
