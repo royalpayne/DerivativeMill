@@ -123,7 +123,7 @@ if __name__ == "__main__":
     update_splash("Loading PyQt5 components...")
 
 from PyQt5.QtWidgets import *
-from PyQt5.QtCore import Qt, QMimeData, pyqtSignal, QTimer, QSize, QEventLoop, QRect, QSettings, QThread, QThreadPool, QRunnable, QObject, QUrl
+from PyQt5.QtCore import Qt, QMimeData, pyqtSignal, QTimer, QSize, QEventLoop, QRect, QSettings, QThread, QThreadPool, QRunnable, QObject, QUrl, QTime
 from PyQt5.QtGui import QColor, QFont, QDrag, QKeySequence, QIcon, QPixmap, QPainter, QDoubleValidator, QCursor, QPen, QTextCursor, QTextCharFormat, QSyntaxHighlighter, QTextFormat, QDesktopServices
 from PyQt5.QtSvg import QSvgRenderer
 
@@ -1307,7 +1307,7 @@ def get_backup_settings():
     Get database backup settings from shared config.
 
     Returns:
-        Dict with backup configuration: enabled, folder, schedule, keep_count, backup_machine
+        Dict with backup configuration: enabled, folder, schedule, keep_count, backup_machine, backup_time
     """
     config = load_shared_config()
     return {
@@ -1317,6 +1317,7 @@ def get_backup_settings():
         'keep_count': config.getint('Backup', 'keep_count', fallback=7),
         'last_backup': config.get('Backup', 'last_backup', fallback=''),
         'backup_machine': config.get('Backup', 'backup_machine', fallback=''),  # hostname of designated backup machine
+        'backup_time': config.get('Backup', 'backup_time', fallback='02:00'),  # time of day for daily/weekly backups (HH:MM)
     }
 
 
@@ -1336,7 +1337,7 @@ def is_backup_machine():
     return current == backup_machine
 
 
-def set_backup_settings(enabled: bool, folder: str, schedule: str, keep_count: int, backup_machine: str = ''):
+def set_backup_settings(enabled: bool, folder: str, schedule: str, keep_count: int, backup_machine: str = '', backup_time: str = '02:00'):
     """
     Save database backup settings to shared config.
 
@@ -1346,6 +1347,7 @@ def set_backup_settings(enabled: bool, folder: str, schedule: str, keep_count: i
         schedule: Backup schedule - 'daily', 'weekly', or 'startup'
         keep_count: Number of backup files to keep (older ones are deleted)
         backup_machine: Hostname of the designated backup machine (only this machine runs backups)
+        backup_time: Time of day for daily/weekly backups (HH:MM format, 24-hour)
     """
     config = load_shared_config()
     if not config.has_section('Backup'):
@@ -1356,6 +1358,7 @@ def set_backup_settings(enabled: bool, folder: str, schedule: str, keep_count: i
     config.set('Backup', 'schedule', schedule)
     config.set('Backup', 'keep_count', str(keep_count))
     config.set('Backup', 'backup_machine', backup_machine)
+    config.set('Backup', 'backup_time', backup_time)
     save_shared_config(config)
 
 
@@ -3578,14 +3581,14 @@ class TariffMill(QMainWindow):
 
 
 
-        # Add a native menu bar with Settings and Log View actions
+        # Add a native menu bar
         menubar = QMenuBar(self)
-        settings_menu = menubar.addMenu("Settings")
+        preferences_menu = menubar.addMenu("Preferences")
         # Use a standard gear icon from QStyle
         gear_icon = self.style().standardIcon(QStyle.SP_FileDialogDetailedView)
-        settings_action = QAction(gear_icon, "Settings", self)
-        settings_action.triggered.connect(self.show_settings_dialog)
-        settings_menu.addAction(settings_action)
+        preferences_action = QAction(gear_icon, "Preferences...", self)
+        preferences_action.triggered.connect(self.show_settings_dialog)
+        preferences_menu.addAction(preferences_action)
 
         # Add Account menu
         account_menu = menubar.addMenu("Account")
@@ -3594,24 +3597,17 @@ class TariffMill(QMainWindow):
         self.account_user_action.setEnabled(False)
         account_menu.addAction(self.account_user_action)
         account_menu.addSeparator()
+        # Statistics action
+        stats_icon = self.style().standardIcon(QStyle.SP_ComputerIcon)
+        stats_action = QAction(stats_icon, "Statistics...", self)
+        stats_action.triggered.connect(self.show_statistics_dialog)
+        account_menu.addAction(stats_action)
+        account_menu.addSeparator()
         # Sign out action
         signout_icon = self.style().standardIcon(QStyle.SP_DialogCloseButton)
         signout_action = QAction(signout_icon, "Sign Out", self)
         signout_action.triggered.connect(self._sign_out)
         account_menu.addAction(signout_action)
-
-        # Add Log View menu
-        log_menu = menubar.addMenu("Log View")
-        log_icon = self.style().standardIcon(QStyle.SP_FileDialogContentsView)
-        log_action = QAction(log_icon, "View Log", self)
-        log_action.triggered.connect(self.show_log_dialog)
-        log_menu.addAction(log_action)
-
-        # Add Statistics action to Log View menu
-        stats_icon = self.style().standardIcon(QStyle.SP_ComputerIcon)
-        stats_action = QAction(stats_icon, "Statistics...", self)
-        stats_action.triggered.connect(self.show_statistics_dialog)
-        log_menu.addAction(stats_action)
 
         # Add References menu
         references_menu = menubar.addMenu("References")
@@ -3620,12 +3616,12 @@ class TariffMill(QMainWindow):
         references_action.triggered.connect(self.show_references_dialog)
         references_menu.addAction(references_action)
 
-        # Add Configuration menu
-        config_menu = menubar.addMenu("Configuration")
-        config_icon = self.style().standardIcon(QStyle.SP_FileDialogDetailedView)
-        config_action = QAction(config_icon, "Configuration...", self)
-        config_action.triggered.connect(self.show_configuration_dialog)
-        config_menu.addAction(config_action)
+        # Add Profiles menu
+        profiles_menu = menubar.addMenu("Profiles")
+        profiles_icon = self.style().standardIcon(QStyle.SP_FileDialogDetailedView)
+        profiles_action = QAction(profiles_icon, "Profiles...", self)
+        profiles_action.triggered.connect(self.show_configuration_dialog)
+        profiles_menu.addAction(profiles_action)
 
         # TODO: Export menu - To be implemented at a later date
         # export_menu = menubar.addMenu("Export")
@@ -3663,7 +3659,15 @@ class TariffMill(QMainWindow):
         help_menu.addAction(update_action)
 
         help_menu.addSeparator()
-        
+
+        # View Log action
+        log_icon = self.style().standardIcon(QStyle.SP_FileDialogContentsView)
+        log_action = QAction(log_icon, "View Log", self)
+        log_action.triggered.connect(self.show_log_dialog)
+        help_menu.addAction(log_action)
+
+        help_menu.addSeparator()
+
         # About action
         about_icon = self.style().standardIcon(QStyle.SP_MessageBoxInformation)
         about_action = QAction(about_icon, "About", self)
@@ -3671,7 +3675,7 @@ class TariffMill(QMainWindow):
         help_menu.addAction(about_action)
         
         layout.setMenuBar(menubar)
-        self.settings_action = settings_action
+        self.preferences_action = preferences_action
 
         # Hidden admin shortcut (Ctrl+Shift+A)
         from PyQt5.QtWidgets import QShortcut
@@ -4315,19 +4319,19 @@ class TariffMill(QMainWindow):
         dialog.exec_()
 
     def show_references_dialog(self):
-        """Show the References dialog with Customs Config, Section 232 Actions, and HTS Database tabs"""
+        """Show the References dialog with HTS Database, Customs Config, and Section 232 Actions tabs"""
         dialog = QDialog()  # No parent - allows independent movement from main window
         dialog.setWindowTitle("References")
-        dialog.resize(2000, 700)
+        dialog.resize(1200, 700)
         layout = QVBoxLayout(dialog)
 
         # Create tab widget
         tabs = QTabWidget()
 
         # Create new tab widgets for the dialog
+        tab_hts = QWidget()
         tab_config = QWidget()
         tab_actions = QWidget()
-        tab_hts = QWidget()
 
         # Temporarily swap the instance variables so setup methods populate the new widgets
         original_tab_config = self.tab_config
@@ -4337,18 +4341,18 @@ class TariffMill(QMainWindow):
         self.tab_actions = tab_actions
 
         # Setup the tabs
+        self.setup_hts_database_tab(tab_hts)
         self.setup_config_tab()
         self.setup_actions_tab()
-        self.setup_hts_database_tab(tab_hts)
 
         # Restore original references (though they may be deleted)
         self.tab_config = original_tab_config
         self.tab_actions = original_tab_actions
 
-        # Add the new tabs to the dialog
+        # Add the new tabs to the dialog (HTS Database first)
+        tabs.addTab(tab_hts, "HTS Database")
         tabs.addTab(tab_config, "Customs Config")
         tabs.addTab(tab_actions, "Section 232 Actions")
-        tabs.addTab(tab_hts, "HTS Database")
 
         layout.addWidget(tabs)
 
@@ -5694,6 +5698,31 @@ class TariffMill(QMainWindow):
 
         schedule_row.addSpacing(20)
 
+        # Backup time (for daily/weekly schedules)
+        time_label = QLabel("at")
+        schedule_row.addWidget(time_label)
+
+        backup_time_edit = QTimeEdit()
+        backup_time_str = backup_settings.get('backup_time', '02:00')
+        try:
+            hour, minute = map(int, backup_time_str.split(':'))
+            backup_time_edit.setTime(QTime(hour, minute))
+        except Exception:
+            backup_time_edit.setTime(QTime(2, 0))
+        backup_time_edit.setDisplayFormat("HH:mm")
+        backup_time_edit.setToolTip("Time of day to run backup (for Daily/Weekly schedules)")
+        schedule_row.addWidget(backup_time_edit)
+
+        # Enable/disable time based on schedule
+        def update_time_enabled():
+            is_scheduled = schedule_combo.currentIndex() > 0  # Daily or Weekly
+            backup_time_edit.setEnabled(is_scheduled)
+            time_label.setEnabled(is_scheduled)
+        schedule_combo.currentIndexChanged.connect(update_time_enabled)
+        update_time_enabled()
+
+        schedule_row.addSpacing(20)
+
         keep_label = QLabel("Keep backups:")
         schedule_row.addWidget(keep_label)
 
@@ -5788,8 +5817,9 @@ class TariffMill(QMainWindow):
             schedule_values = ['startup', 'daily', 'weekly']
             schedule = schedule_values[schedule_combo.currentIndex()]
             keep_count = keep_spin.value()
+            backup_time = backup_time_edit.time().toString("HH:mm")
 
-            set_backup_settings(enabled, folder, schedule, keep_count, backup_machine)
+            set_backup_settings(enabled, folder, schedule, keep_count, backup_machine, backup_time)
 
             # Update the backup scheduler if window has one
             if hasattr(self, '_setup_backup_scheduler'):
@@ -5804,11 +5834,12 @@ class TariffMill(QMainWindow):
                 machine_status_label.setText(f"<small>This machine ({current}) is NOT the backup machine. Backups managed by: {backup_machine}</small>")
                 machine_status_label.setStyleSheet(f"color:{info_text_color};")
 
+            time_info = f" at {backup_time}" if schedule in ['daily', 'weekly'] else ""
             QMessageBox.information(dialog, "Saved",
                 f"Backup settings saved.\n\n"
                 f"Enabled: {'Yes' if enabled else 'No'}\n"
                 f"Folder: {folder or '(not set)'}\n"
-                f"Schedule: {schedule.capitalize()}\n"
+                f"Schedule: {schedule.capitalize()}{time_info}\n"
                 f"Keep: {keep_count} backups\n"
                 f"Backup Machine: {backup_machine or '(not set)'}")
         save_backup_btn.clicked.connect(save_backup_settings_func)
@@ -7272,6 +7303,7 @@ class TariffMill(QMainWindow):
         schedule = backup_settings.get('schedule', 'daily')
         keep_count = backup_settings.get('keep_count', 7)
         last_backup_str = backup_settings.get('last_backup', '')
+        backup_time_str = backup_settings.get('backup_time', '02:00')
 
         # Determine if backup is needed
         need_backup = False
@@ -7281,28 +7313,46 @@ class TariffMill(QMainWindow):
             need_backup = True
             logger.info("Backup scheduled: on startup")
         else:
+            # For daily/weekly, check if we're within the scheduled time window
+            now = datetime.now()
+            try:
+                backup_hour, backup_minute = map(int, backup_time_str.split(':'))
+                scheduled_time_today = now.replace(hour=backup_hour, minute=backup_minute, second=0, microsecond=0)
+
+                # Allow a 2-hour window after the scheduled time for the backup to run
+                # This handles cases where app isn't running at exact scheduled time
+                time_window_start = scheduled_time_today
+                time_window_end = scheduled_time_today + timedelta(hours=2)
+
+                in_backup_window = time_window_start <= now <= time_window_end
+            except Exception as e:
+                logger.warning(f"Could not parse backup time '{backup_time_str}': {e}, using immediate check")
+                in_backup_window = True  # Fall back to checking without time constraint
+
             # Check last backup time
             if not last_backup_str:
-                need_backup = True
-                logger.info("Backup needed: no previous backup found")
+                if in_backup_window:
+                    need_backup = True
+                    logger.info("Backup needed: no previous backup found and within scheduled time window")
             else:
                 try:
                     last_backup = datetime.fromisoformat(last_backup_str)
-                    now = datetime.now()
 
                     if schedule == 'daily':
-                        # Backup if last backup was more than 24 hours ago
-                        if (now - last_backup).total_seconds() > 24 * 60 * 60:
+                        # Backup if last backup was more than 20 hours ago AND we're in the backup window
+                        # (20 hours instead of 24 to allow for some timing flexibility)
+                        if (now - last_backup).total_seconds() > 20 * 60 * 60 and in_backup_window:
                             need_backup = True
-                            logger.info("Backup needed: daily schedule, last backup > 24 hours ago")
+                            logger.info(f"Backup needed: daily schedule at {backup_time_str}, last backup > 20 hours ago")
                     elif schedule == 'weekly':
-                        # Backup if last backup was more than 7 days ago
-                        if (now - last_backup).total_seconds() > 7 * 24 * 60 * 60:
+                        # Backup if last backup was more than 6 days ago AND we're in the backup window
+                        if (now - last_backup).total_seconds() > 6 * 24 * 60 * 60 and in_backup_window:
                             need_backup = True
-                            logger.info("Backup needed: weekly schedule, last backup > 7 days ago")
+                            logger.info(f"Backup needed: weekly schedule at {backup_time_str}, last backup > 6 days ago")
                 except Exception as e:
                     logger.warning(f"Could not parse last backup time: {e}")
-                    need_backup = True
+                    if in_backup_window:
+                        need_backup = True
 
         if need_backup:
             # Run backup in background thread
@@ -15937,27 +15987,80 @@ class TariffMill(QMainWindow):
         dialog = QDialog(self)
         dialog.setWindowTitle("TariffMill Statistics")
         dialog.setMinimumSize(900, 700)
-        dialog.setStyleSheet("""
-            QDialog {
-                background-color: #1a1a2e;
-            }
-            QGroupBox {
+
+        # Detect current theme and set appropriate colors
+        theme = self._detect_current_theme()
+
+        if theme == "light_cyan":
+            dialog_bg = "#e0f6f7"
+            group_border = "#b8d4dc"
+            text_color = "#1a5a6e"
+            label_color = "#2a6a7e"
+            accent_color = "#00b4d8"
+            card_bg = "#c8eef2"
+            card_border = "#90d0dc"
+            card_title_color = "#5a8a98"
+            card_value_color = "#0096c7"
+            card_subtitle_color = "#7aa0a8"
+        elif theme == "muted_cyan":
+            dialog_bg = "#f5f8f9"
+            group_border = "#b0c4c8"
+            text_color = "#2d3a41"
+            label_color = "#3d4a51"
+            accent_color = "#4a7880"
+            card_bg = "#e8f0f2"
+            card_border = "#b0c4c8"
+            card_title_color = "#5a7078"
+            card_value_color = "#4a7880"
+            card_subtitle_color = "#7a8a90"
+        else:  # dark/ocean
+            dialog_bg = "#1a1a2e"
+            group_border = "#3c3c3c"
+            text_color = "#cccccc"
+            label_color = "#cccccc"
+            accent_color = "#00d4ff"
+            card_bg = "#1e3a5f"
+            card_border = "#2a5a8f"
+            card_title_color = "#aaaaaa"
+            card_value_color = "#00d4ff"
+            card_subtitle_color = "#888888"
+
+        # Store theme colors for use by helper methods
+        self._stats_theme_colors = {
+            'theme': theme,
+            'dialog_bg': dialog_bg,
+            'group_border': group_border,
+            'text_color': text_color,
+            'label_color': label_color,
+            'accent_color': accent_color,
+            'card_bg': card_bg,
+            'card_border': card_border,
+            'card_title_color': card_title_color,
+            'card_value_color': card_value_color,
+            'card_subtitle_color': card_subtitle_color,
+        }
+
+        dialog.setStyleSheet(f"""
+            QDialog {{
+                background-color: {dialog_bg};
+            }}
+            QGroupBox {{
                 font-weight: bold;
                 font-size: 12px;
-                color: #cccccc;
-                border: 1px solid #3c3c3c;
+                color: {text_color};
+                border: 1px solid {group_border};
                 border-radius: 6px;
                 margin-top: 10px;
                 padding-top: 10px;
-            }
-            QGroupBox::title {
+            }}
+            QGroupBox::title {{
                 subcontrol-origin: margin;
                 left: 10px;
                 padding: 0 5px;
-            }
-            QLabel {
-                color: #cccccc;
-            }
+            }}
+            QLabel {{
+                color: {label_color};
+            }}
         """)
 
         layout = QVBoxLayout(dialog)
@@ -15967,7 +16070,7 @@ class TariffMill(QMainWindow):
         # Header with title and refresh button
         header_layout = QHBoxLayout()
         title_label = QLabel("TariffMill Statistics")
-        title_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #00d4ff;")
+        title_label.setStyleSheet(f"font-size: 18px; font-weight: bold; color: {accent_color};")
         header_layout.addWidget(title_label)
         header_layout.addStretch()
 
@@ -16076,7 +16179,7 @@ class TariffMill(QMainWindow):
         savings_info = QLabel(
             "Compares TariffMill processing time against industry benchmarks for manual entry processing."
         )
-        savings_info.setStyleSheet("color: #888; font-size: 10px; margin-bottom: 10px;")
+        savings_info.setStyleSheet(f"color: {card_subtitle_color}; font-size: 10px; margin-bottom: 10px;")
         savings_info.setWordWrap(True)
         savings_layout.addWidget(savings_info)
 
@@ -16100,6 +16203,12 @@ class TariffMill(QMainWindow):
         benchmark_form = QFormLayout()
         benchmark_form.setSpacing(8)
 
+        # Theme-aware spinbox style
+        if theme in ["light_cyan", "muted_cyan"]:
+            spinbox_style = f"background: #ffffff; color: {text_color}; border: 1px solid {group_border}; padding: 4px;"
+        else:
+            spinbox_style = f"background: #2a2a3e; color: #fff; border: 1px solid {group_border}; padding: 4px;"
+
         # Minutes per line item (manual)
         mins_per_line_spin = QDoubleSpinBox()
         mins_per_line_spin.setRange(0.5, 10.0)
@@ -16107,7 +16216,7 @@ class TariffMill(QMainWindow):
         mins_per_line_spin.setSingleStep(0.5)
         mins_per_line_spin.setSuffix(" min")
         mins_per_line_spin.setToolTip("Average time for manual entry of one line item including HTS lookup, value entry, and verification")
-        mins_per_line_spin.setStyleSheet("background: #2a2a3e; color: #fff; border: 1px solid #3c3c3c; padding: 4px;")
+        mins_per_line_spin.setStyleSheet(spinbox_style)
         benchmark_form.addRow("Time per line (manual):", mins_per_line_spin)
 
         # Hourly labor rate
@@ -16118,7 +16227,7 @@ class TariffMill(QMainWindow):
         hourly_rate_spin.setPrefix("$")
         hourly_rate_spin.setSuffix("/hr")
         hourly_rate_spin.setToolTip("Average hourly rate for customs entry writer labor")
-        hourly_rate_spin.setStyleSheet("background: #2a2a3e; color: #fff; border: 1px solid #3c3c3c; padding: 4px;")
+        hourly_rate_spin.setStyleSheet(spinbox_style)
         benchmark_form.addRow("Labor rate:", hourly_rate_spin)
 
         savings_layout.addLayout(benchmark_form)
@@ -16144,6 +16253,48 @@ class TariffMill(QMainWindow):
         savings_layout.addWidget(breakdown_table)
 
         scroll_layout.addWidget(savings_group)
+
+        # === Statistics by Entry Writer Section ===
+        writer_group = QGroupBox("Statistics by Entry Writer")
+        writer_layout = QVBoxLayout(writer_group)
+
+        writer_table = QTableWidget()
+        writer_table.setColumnCount(5)
+        writer_table.setHorizontalHeaderLabels([
+            "Entry Writer", "Total Exports", "Line Items", "Total Value", "Last Export"
+        ])
+        writer_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        for i in range(1, 5):
+            writer_table.horizontalHeader().setSectionResizeMode(i, QHeaderView.ResizeToContents)
+        writer_table.setAlternatingRowColors(True)
+        writer_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        writer_table.verticalHeader().setVisible(False)
+        writer_table.setMaximumHeight(180)
+        self._apply_stats_table_style(writer_table)
+        writer_layout.addWidget(writer_table)
+
+        scroll_layout.addWidget(writer_group)
+
+        # === Statistics by Client Section ===
+        client_group = QGroupBox("Statistics by Client")
+        client_layout = QVBoxLayout(client_group)
+
+        client_table = QTableWidget()
+        client_table.setColumnCount(5)
+        client_table.setHorizontalHeaderLabels([
+            "Client", "Total Exports", "Line Items", "Total Value", "Last Export"
+        ])
+        client_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        for i in range(1, 5):
+            client_table.horizontalHeader().setSectionResizeMode(i, QHeaderView.ResizeToContents)
+        client_table.setAlternatingRowColors(True)
+        client_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        client_table.verticalHeader().setVisible(False)
+        client_table.setMaximumHeight(180)
+        self._apply_stats_table_style(client_table)
+        client_layout.addWidget(client_table)
+
+        scroll_layout.addWidget(client_group)
 
         scroll_layout.addStretch()
         scroll.setWidget(scroll_widget)
@@ -16366,6 +16517,60 @@ class TariffMill(QMainWindow):
             except Exception as e:
                 logger.error(f"Error calculating time savings: {e}")
 
+            # === Statistics by Entry Writer ===
+            try:
+                writer_table.setRowCount(0)
+                if hasattr(self, 'db') and self.db:
+                    cursor = self.db.cursor()
+                    cursor.execute("""
+                        SELECT user_name,
+                               COUNT(*) as export_count,
+                               COALESCE(SUM(line_count), 0) as total_lines,
+                               COALESCE(SUM(total_value), 0) as total_value,
+                               MAX(export_date || ' ' || COALESCE(export_time, '')) as last_export
+                        FROM billing_records
+                        WHERE user_name IS NOT NULL AND user_name != ''
+                        GROUP BY user_name
+                        ORDER BY total_lines DESC
+                    """)
+                    writer_data = cursor.fetchall()
+                    writer_table.setRowCount(len(writer_data))
+                    for row_idx, (user_name, exports, lines, value, last_export) in enumerate(writer_data):
+                        writer_table.setItem(row_idx, 0, QTableWidgetItem(user_name or "Unknown"))
+                        writer_table.setItem(row_idx, 1, QTableWidgetItem(str(exports)))
+                        writer_table.setItem(row_idx, 2, QTableWidgetItem(f"{lines:,}"))
+                        writer_table.setItem(row_idx, 3, QTableWidgetItem(f"${value:,.2f}"))
+                        writer_table.setItem(row_idx, 4, QTableWidgetItem(last_export.strip() if last_export else ""))
+            except Exception as e:
+                logger.error(f"Error loading entry writer stats: {e}")
+
+            # === Statistics by Client ===
+            try:
+                client_table.setRowCount(0)
+                if hasattr(self, 'db') and self.db:
+                    cursor = self.db.cursor()
+                    cursor.execute("""
+                        SELECT folder_profile,
+                               COUNT(*) as export_count,
+                               COALESCE(SUM(line_count), 0) as total_lines,
+                               COALESCE(SUM(total_value), 0) as total_value,
+                               MAX(export_date || ' ' || COALESCE(export_time, '')) as last_export
+                        FROM billing_records
+                        WHERE folder_profile IS NOT NULL AND folder_profile != ''
+                        GROUP BY folder_profile
+                        ORDER BY total_lines DESC
+                    """)
+                    client_data = cursor.fetchall()
+                    client_table.setRowCount(len(client_data))
+                    for row_idx, (client, exports, lines, value, last_export) in enumerate(client_data):
+                        client_table.setItem(row_idx, 0, QTableWidgetItem(client or "Unknown"))
+                        client_table.setItem(row_idx, 1, QTableWidgetItem(str(exports)))
+                        client_table.setItem(row_idx, 2, QTableWidgetItem(f"{lines:,}"))
+                        client_table.setItem(row_idx, 3, QTableWidgetItem(f"${value:,.2f}"))
+                        client_table.setItem(row_idx, 4, QTableWidgetItem(last_export.strip() if last_export else ""))
+            except Exception as e:
+                logger.error(f"Error loading client stats: {e}")
+
         # Connect benchmark spinboxes to refresh
         mins_per_line_spin.valueChanged.connect(refresh_stats)
         hourly_rate_spin.valueChanged.connect(refresh_stats)
@@ -16379,13 +16584,21 @@ class TariffMill(QMainWindow):
 
     def _create_stats_dialog_card(self, title: str, value: str, subtitle: str) -> QFrame:
         """Create a statistics card for the Statistics dialog."""
+        # Get theme colors (set by show_statistics_dialog)
+        colors = getattr(self, '_stats_theme_colors', {})
+        card_bg = colors.get('card_bg', '#1e3a5f')
+        card_border = colors.get('card_border', '#2a5a8f')
+        card_title_color = colors.get('card_title_color', '#aaaaaa')
+        card_value_color = colors.get('card_value_color', '#00d4ff')
+        card_subtitle_color = colors.get('card_subtitle_color', '#888888')
+
         card = QFrame()
-        card.setStyleSheet("""
-            QFrame {
-                background-color: #1e3a5f;
-                border: 1px solid #2a5a8f;
+        card.setStyleSheet(f"""
+            QFrame {{
+                background-color: {card_bg};
+                border: 1px solid {card_border};
                 border-radius: 6px;
-            }
+            }}
         """)
         card_layout = QVBoxLayout(card)
         card_layout.setSpacing(2)
@@ -16393,17 +16606,17 @@ class TariffMill(QMainWindow):
 
         title_lbl = QLabel(title)
         title_lbl.setObjectName("title")
-        title_lbl.setStyleSheet("color: #aaaaaa; font-size: 10px; background: transparent;")
+        title_lbl.setStyleSheet(f"color: {card_title_color}; font-size: 10px; background: transparent;")
         card_layout.addWidget(title_lbl)
 
         value_lbl = QLabel(value)
         value_lbl.setObjectName("value")
-        value_lbl.setStyleSheet("color: #00d4ff; font-size: 20px; font-weight: bold; background: transparent;")
+        value_lbl.setStyleSheet(f"color: {card_value_color}; font-size: 20px; font-weight: bold; background: transparent;")
         card_layout.addWidget(value_lbl)
 
         subtitle_lbl = QLabel(subtitle)
         subtitle_lbl.setObjectName("subtitle")
-        subtitle_lbl.setStyleSheet("color: #888888; font-size: 9px; background: transparent;")
+        subtitle_lbl.setStyleSheet(f"color: {card_subtitle_color}; font-size: 9px; background: transparent;")
         card_layout.addWidget(subtitle_lbl)
 
         return card
@@ -16418,30 +16631,93 @@ class TariffMill(QMainWindow):
             subtitle_lbl.setText(subtitle)
 
     def _apply_stats_table_style(self, table: QTableWidget):
-        """Apply dark theme styling to a statistics table."""
-        table.setStyleSheet("""
-            QTableWidget {
-                background-color: #1e1e1e;
-                color: #cccccc;
-                gridline-color: #3c3c3c;
-                border: 1px solid #3c3c3c;
-                border-radius: 4px;
-            }
-            QTableWidget::item {
-                padding: 4px;
-            }
-            QTableWidget::item:selected {
-                background-color: #264f78;
-            }
-            QHeaderView::section {
-                background-color: #2d2d2d;
-                color: #cccccc;
-                padding: 6px;
-                border: none;
-                border-right: 1px solid #3c3c3c;
-                border-bottom: 1px solid #3c3c3c;
-            }
-        """)
+        """Apply theme-aware styling to a statistics table."""
+        # Get theme colors (set by show_statistics_dialog)
+        colors = getattr(self, '_stats_theme_colors', {})
+        theme = colors.get('theme', 'dark')
+
+        if theme == "light_cyan":
+            table.setStyleSheet("""
+                QTableWidget {
+                    background-color: #f0f9fa;
+                    color: #1a5a6e;
+                    gridline-color: #d0e8ec;
+                    border: 1px solid #b8d4dc;
+                    border-radius: 4px;
+                }
+                QTableWidget::item {
+                    padding: 4px;
+                }
+                QTableWidget::item:alternate {
+                    background-color: #e0f2f4;
+                }
+                QTableWidget::item:selected {
+                    background-color: #00b4d8;
+                    color: #ffffff;
+                }
+                QHeaderView::section {
+                    background-color: #d0e8ec;
+                    color: #1a5a6e;
+                    padding: 6px;
+                    border: none;
+                    border-right: 1px solid #b8d4dc;
+                    border-bottom: 1px solid #b8d4dc;
+                    font-weight: bold;
+                }
+            """)
+        elif theme == "muted_cyan":
+            table.setStyleSheet("""
+                QTableWidget {
+                    background-color: #ffffff;
+                    color: #2d3a41;
+                    gridline-color: #d0e0e4;
+                    border: 1px solid #b0c4c8;
+                    border-radius: 4px;
+                }
+                QTableWidget::item {
+                    padding: 4px;
+                }
+                QTableWidget::item:alternate {
+                    background-color: #f5f8f9;
+                }
+                QTableWidget::item:selected {
+                    background-color: #4a7880;
+                    color: #ffffff;
+                }
+                QHeaderView::section {
+                    background-color: #e8f0f2;
+                    color: #2d3a41;
+                    padding: 6px;
+                    border: none;
+                    border-right: 1px solid #b0c4c8;
+                    border-bottom: 1px solid #b0c4c8;
+                    font-weight: bold;
+                }
+            """)
+        else:  # dark/ocean
+            table.setStyleSheet("""
+                QTableWidget {
+                    background-color: #1e1e1e;
+                    color: #cccccc;
+                    gridline-color: #3c3c3c;
+                    border: 1px solid #3c3c3c;
+                    border-radius: 4px;
+                }
+                QTableWidget::item {
+                    padding: 4px;
+                }
+                QTableWidget::item:selected {
+                    background-color: #264f78;
+                }
+                QHeaderView::section {
+                    background-color: #2d2d2d;
+                    color: #cccccc;
+                    padding: 6px;
+                    border: none;
+                    border-right: 1px solid #3c3c3c;
+                    border-bottom: 1px solid #3c3c3c;
+                }
+            """)
 
     def _on_ocrmill_item_changed(self, item: QTableWidgetItem):
         """Handle item changes in the OCRMill preview table for learning from corrections."""
@@ -23788,7 +24064,8 @@ Please fix this error in the template code. Return the complete corrected templa
         except Exception as e:
             logger.error(f"Cleanup old exports failed: {e}")
 
-if __name__ == "__main__":
+def main():
+    """Main entry point for TariffMill application."""
     # Prevent PyInstaller multiprocessing from spawning console windows on Windows
     import multiprocessing
     multiprocessing.freeze_support()
@@ -24067,3 +24344,7 @@ if __name__ == "__main__":
         except Exception:
             pass
         sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

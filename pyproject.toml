@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tariffmill"
+version = "0.97.23"
+description = "TariffMill - Customs Entry Processing and HTS Classification Tool"
+readme = "README.md"
+license = {text = "Proprietary"}
+requires-python = ">=3.8"
+authors = [
+    {name = "TariffMill"}
+]
+keywords = ["customs", "tariff", "hts", "import", "export", "classification"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: X11 Applications :: Qt",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business",
+]
+
+dependencies = [
+    "PyQt5>=5.15.0",
+    "pandas>=1.3.0",
+    "openpyxl>=3.0.0",
+    "pdfplumber>=0.10.0",
+    "Pillow>=9.0.0",
+    "reportlab>=3.6.0",
+    "requests>=2.25.0",
+    "pywin32>=300; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pyinstaller>=6.0.0",
+    "black",
+    "pytest",
+]
+
+[project.urls]
+Homepage = "https://github.com/glroland/tariffmill"
+Repository = "https://github.com/glroland/tariffmill"
+
+[project.scripts]
+tariffmill = "Tariffmill.tariffmill:main"
+
+[project.gui-scripts]
+tariffmill-gui = "Tariffmill.tariffmill:main"
+
+[tool.setuptools]
+packages = ["Tariffmill", "Tariffmill.templates"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+Tariffmill = ["Resources/*", "templates/*.py"]
