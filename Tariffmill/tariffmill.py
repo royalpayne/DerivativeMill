@@ -5148,7 +5148,7 @@ class TariffMill(QMainWindow):
         
         # Use local variable instead of instance variable
         theme_combo = QComboBox()
-        theme_combo.addItems(["System Default", "Fusion (Light)", "macOS", "Fusion (Dark)", "Ocean", "Light Cyan"])
+        theme_combo.addItems(["System Default", "Fusion (Light)", "macOS", "Fusion (Dark)", "Ocean", "Light Cyan", "Muted Cyan"])
         
         # Load saved theme preference from per-user settings
         saved_theme = get_user_setting('theme', 'Fusion (Light)')
@@ -6114,7 +6114,11 @@ class TariffMill(QMainWindow):
             app.setStyle("Fusion")
             teal_palette = self.get_teal_professional_palette()
             app.setPalette(teal_palette)
-        
+        elif theme_name == "Muted Cyan":
+            app.setStyle("Fusion")
+            muted_cyan_palette = self.get_muted_cyan_palette()
+            app.setPalette(muted_cyan_palette)
+
         # Apply global stylesheet for QGroupBox and other widgets that don't fully respect QPalette
         is_dark = theme_name in ["Fusion (Dark)", "Ocean"]
         if theme_name == "Ocean":
@@ -6766,6 +6770,247 @@ class TariffMill(QMainWindow):
                     background: #007aff;
                     border: 5px solid #ffffff;
                     outline: 1px solid #007aff;
+                }
+            """)
+        elif theme_name == "Muted Cyan":
+            # Muted Cyan theme - professional balanced cyan inspired by enterprise software
+            app.setStyleSheet("""
+                QGroupBox {
+                    font-weight: normal;
+                    border: 1px solid #b0c4c8;
+                    border-radius: 6px;
+                    margin-top: 12px;
+                    padding-top: 10px;
+                    background-color: #f5f8f9;
+                }
+                QGroupBox::title {
+                    subcontrol-origin: margin;
+                    subcontrol-position: top left;
+                    left: 12px;
+                    padding: 2px 8px;
+                    color: #4a7880;
+                    background: #e8f0f2;
+                    border-radius: 4px;
+                }
+                QTabWidget::pane {
+                    border: 1px solid #b0c4c8;
+                    border-radius: 6px;
+                    background: #ffffff;
+                }
+                QTabBar::tab {
+                    background: #e8f0f2;
+                    color: #4a6870;
+                    padding: 8px 16px;
+                    border: 1px solid #b0c4c8;
+                    border-bottom: none;
+                    border-top-left-radius: 6px;
+                    border-top-right-radius: 6px;
+                    margin-right: 2px;
+                }
+                QTabBar::tab:selected {
+                    background: #4a7880;
+                    color: #ffffff;
+                    border-bottom: 2px solid #4a7880;
+                }
+                QTabBar::tab:hover:!selected {
+                    background: #d0e0e4;
+                }
+                QLineEdit, QSpinBox, QDoubleSpinBox {
+                    background: #ffffff;
+                    color: #2d3a41;
+                    border: 1px solid #b0c4c8;
+                    border-radius: 4px;
+                    padding: 5px 8px;
+                    selection-background-color: #4a7880;
+                    selection-color: #ffffff;
+                }
+                QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {
+                    border: 2px solid #4a7880;
+                }
+                QComboBox {
+                    background: #ffffff;
+                    color: #2d3a41;
+                    border: 1px solid #b0c4c8;
+                    border-radius: 4px;
+                    padding: 5px 8px;
+                    padding-right: 25px;
+                }
+                QComboBox:focus {
+                    border: 2px solid #4a7880;
+                }
+                QComboBox::drop-down {
+                    border: none;
+                    width: 20px;
+                }
+                QComboBox::down-arrow {
+                    image: none;
+                    border-left: 5px solid transparent;
+                    border-right: 5px solid transparent;
+                    border-top: 6px solid #6a8c94;
+                    margin-right: 5px;
+                }
+                QComboBox QAbstractItemView {
+                    background-color: #ffffff;
+                    color: #2d3a41;
+                    selection-background-color: #4a7880;
+                    selection-color: #ffffff;
+                    border: 1px solid #b0c4c8;
+                    border-radius: 4px;
+                }
+                QListWidget {
+                    background: #ffffff;
+                    color: #2d3a41;
+                    border: 1px solid #b0c4c8;
+                    border-radius: 4px;
+                    alternate-background-color: #f5f8f9;
+                }
+                QListWidget::item {
+                    padding: 5px;
+                    border-radius: 3px;
+                }
+                QListWidget::item:selected {
+                    background: #4a7880;
+                    color: #ffffff;
+                }
+                QListWidget::item:hover:!selected {
+                    background: #e0eaec;
+                }
+                QPushButton {
+                    background: #4a7880;
+                    color: #ffffff;
+                    border: 1px solid #3a6870;
+                    border-radius: 4px;
+                    padding: 6px 14px;
+                    font-weight: normal;
+                }
+                QPushButton:hover {
+                    background: #5a8890;
+                    border: 1px solid #4a7880;
+                }
+                QPushButton:pressed {
+                    background: #3a6870;
+                }
+                QScrollBar:vertical {
+                    background: #e8f0f2;
+                    width: 12px;
+                    border-radius: 6px;
+                }
+                QScrollBar::handle:vertical {
+                    background: #8aa8b0;
+                    border-radius: 5px;
+                    min-height: 30px;
+                    margin: 2px;
+                }
+                QScrollBar::handle:vertical:hover {
+                    background: #6a8c94;
+                }
+                QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                    height: 0px;
+                }
+                QScrollBar:horizontal {
+                    background: #e8f0f2;
+                    height: 12px;
+                    border-radius: 6px;
+                }
+                QScrollBar::handle:horizontal {
+                    background: #8aa8b0;
+                    border-radius: 5px;
+                    min-width: 30px;
+                    margin: 2px;
+                }
+                QScrollBar::handle:horizontal:hover {
+                    background: #6a8c94;
+                }
+                QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+                    width: 0px;
+                }
+                QHeaderView::section {
+                    background: #4a7880;
+                    color: #ffffff;
+                    padding: 6px;
+                    border: none;
+                    border-right: 1px solid #3a6870;
+                    border-bottom: 1px solid #3a6870;
+                    font-weight: normal;
+                }
+                QTableWidget {
+                    background-color: #ffffff;
+                    alternate-background-color: #f5f8f9;
+                    gridline-color: #d0e0e4;
+                    color: #2d3a41;
+                    border: 1px solid #b0c4c8;
+                    border-radius: 4px;
+                }
+                QTableWidget::item:selected {
+                    background-color: #4a7880;
+                    color: #ffffff;
+                }
+                QLabel {
+                    color: #2d3a41;
+                }
+                QMenu {
+                    background-color: #ffffff;
+                    color: #2d3a41;
+                    border: 1px solid #b0c4c8;
+                    border-radius: 4px;
+                }
+                QMenu::item:selected {
+                    background-color: #4a7880;
+                    color: #ffffff;
+                }
+                QMenuBar {
+                    background: #4a7880;
+                    color: #ffffff;
+                }
+                QMenuBar::item:selected {
+                    background: #5a8890;
+                    border-radius: 4px;
+                }
+                QTextEdit, QPlainTextEdit {
+                    background: #ffffff;
+                    color: #2d3a41;
+                    border: 1px solid #b0c4c8;
+                    border-radius: 4px;
+                }
+                QCheckBox {
+                    color: #2d3a41;
+                }
+                QCheckBox::indicator {
+                    width: 16px;
+                    height: 16px;
+                    border-radius: 3px;
+                    border: 1px solid #b0c4c8;
+                    background: #ffffff;
+                }
+                QCheckBox::indicator:checked {
+                    background: #4a7880;
+                    border: 1px solid #4a7880;
+                }
+                QRadioButton {
+                    color: #2d3a41;
+                }
+                QRadioButton::indicator {
+                    width: 16px;
+                    height: 16px;
+                    border-radius: 8px;
+                    border: 1px solid #b0c4c8;
+                    background: #ffffff;
+                }
+                QRadioButton::indicator:checked {
+                    background: #4a7880;
+                    border: 4px solid #ffffff;
+                    outline: 1px solid #4a7880;
+                }
+                QProgressBar {
+                    background: #e8f0f2;
+                    border: 1px solid #b0c4c8;
+                    border-radius: 4px;
+                    text-align: center;
+                    color: #2d3a41;
+                }
+                QProgressBar::chunk {
+                    background: #4a7880;
+                    border-radius: 3px;
                 }
             """)
         else:
@@ -7958,6 +8203,36 @@ class TariffMill(QMainWindow):
 
         return palette
 
+    def get_muted_cyan_palette(self):
+        """Create a Muted Cyan palette - professional muted cyan inspired by enterprise software"""
+        from PyQt5.QtGui import QPalette, QColor
+        from PyQt5.QtWidgets import QApplication
+
+        # Get user's saved highlight color for this theme (balanced cyan)
+        highlight_color = get_theme_color('preview_highlight_color', '#4A7880', 'Muted Cyan')
+
+        palette = QPalette()
+        # Balanced muted cyan colors - between green-teal and blue
+        palette.setColor(QPalette.Window, QColor(245, 248, 249))  # Light gray with cyan tint (#F5F8F9)
+        palette.setColor(QPalette.WindowText, QColor(45, 58, 65))  # Dark cyan-gray text (#2D3A41)
+        palette.setColor(QPalette.Base, QColor(255, 255, 255))  # White for inputs
+        palette.setColor(QPalette.AlternateBase, QColor(245, 248, 249))  # Subtle alternating (#F5F8F9)
+        palette.setColor(QPalette.ToolTipBase, QColor(255, 255, 255))  # White tooltips
+        palette.setColor(QPalette.ToolTipText, QColor(45, 58, 65))  # Dark tooltip text
+        palette.setColor(QPalette.Text, QColor(45, 58, 65))  # Primary text (#2D3A41)
+        palette.setColor(QPalette.Button, QColor(232, 240, 242))  # Light cyan-gray for buttons (#E8F0F2)
+        palette.setColor(QPalette.ButtonText, QColor(45, 58, 65))  # Dark button text
+        palette.setColor(QPalette.BrightText, QColor(200, 80, 80))  # Muted red for alerts
+        palette.setColor(QPalette.Link, QColor(74, 120, 128))  # Muted cyan links (#4A7880)
+        palette.setColor(QPalette.Highlight, QColor(highlight_color))  # Muted cyan selection
+        palette.setColor(QPalette.HighlightedText, QColor(255, 255, 255))  # White on selection
+        palette.setColor(QPalette.Light, QColor(255, 255, 255))  # White
+        palette.setColor(QPalette.Midlight, QColor(232, 240, 242))  # Light cyan-gray (#E8F0F2)
+        palette.setColor(QPalette.Mid, QColor(176, 196, 200))  # Mid cyan-gray (#B0C4C8)
+        palette.setColor(QPalette.Dark, QColor(138, 168, 176))  # Darker cyan-gray (#8AA8B0)
+        palette.setColor(QPalette.Shadow, QColor(106, 140, 148))  # Shadow cyan (#6A8C94)
+        return palette
+
     def get_macos_palette(self):
         """Create a macOS-inspired light palette with Apple's signature aesthetic"""
         from PyQt5.QtGui import QPalette, QColor
@@ -8002,6 +8277,10 @@ class TariffMill(QMainWindow):
         if r > 200 and g > 230 and b > 230:
             return "light_cyan"
 
+        # Muted Cyan: Window = (245, 248, 248) - light gray with slight cyan tint
+        if r > 240 and g > 245 and b > 245 and g == b:
+            return "muted_cyan"
+
         # Ocean: Window = (26, 48, 80) - dark blue, blue > red significantly
         if b > r + 30 and window_color.lightness() < 80:
             return "ocean"
@@ -8042,6 +8321,37 @@ class TariffMill(QMainWindow):
                     background-color: #d0e8ec;
                     padding: 6px;
                     border: 1px solid #b8d4dc;
+                    font-weight: bold;
+                }
+            """)
+        elif theme == "muted_cyan":
+            self.ocrmill_templates_table.setStyleSheet("""
+                QTableWidget {
+                    background: #ffffff;
+                    border: 1px solid #b0c4c8;
+                    border-radius: 6px;
+                    gridline-color: #d0e0e4;
+                    font-size: 13px;
+                }
+                QTableWidget::item {
+                    padding: 8px;
+                    background-color: #ffffff;
+                }
+                QTableWidget::item:alternate {
+                    background-color: #f5f8f9;
+                }
+                QTableWidget::item:selected {
+                    background-color: #4a7880;
+                    color: #ffffff;
+                }
+                QTableWidget::item:hover:!selected {
+                    background-color: #e0eaec;
+                }
+                QHeaderView::section {
+                    background-color: #4a7880;
+                    color: #ffffff;
+                    padding: 6px;
+                    border: 1px solid #3a6870;
                     font-weight: bold;
                 }
             """)
@@ -15244,11 +15554,6 @@ class TariffMill(QMainWindow):
         btn_test.clicked.connect(self._ai_test_template)
         action_layout.addWidget(btn_test)
 
-        btn_format = QPushButton("Format Code")
-        btn_format.setStyleSheet(self._get_small_button_style("default"))
-        btn_format.clicked.connect(self._ai_format_code)
-        action_layout.addWidget(btn_format)
-
         action_layout.addStretch()
 
         self.ai_save_btn = QPushButton("Save Template")
@@ -15456,6 +15761,27 @@ class TariffMill(QMainWindow):
                 'user_bubble_text': '#ffffff',
                 'ai_bubble': '#d0ecf0',
                 'ai_bubble_text': '#1a3a3a',
+            }
+        elif theme == "Muted Cyan":
+            return {
+                'bg_primary': '#f5f8f9',
+                'bg_secondary': '#e8f0f2',
+                'bg_input': '#ffffff',
+                'bg_code': '#f0f6f7',
+                'border': '#b0c4c8',
+                'border_focus': '#4a7880',
+                'text': '#2d3a41',
+                'text_muted': '#6a8c94',
+                'text_header': '#2d3a41',
+                'accent': '#4a7880',
+                'success': '#3a7870',
+                'danger': '#9c4850',
+                'warning': '#9c7848',
+                'selection': '#d0e0e4',
+                'user_bubble': '#4a7880',
+                'user_bubble_text': '#ffffff',
+                'ai_bubble': '#e0eaec',
+                'ai_bubble_text': '#2d3a41',
             }
         elif theme == "macOS":
             return {
@@ -16890,14 +17216,6 @@ Please fix this error in the template code. Return the complete corrected templa
 
         # Automatically send to AI
         self._ai_send_message()
-
-    def _ai_format_code(self):
-        """Format the template code."""
-        if not self.ai_code_edit.toPlainText().strip():
-            return
-        success, message = self.ai_code_edit.format_code()
-        if not success:
-            QMessageBox.warning(self, "Format Error", message)
 
     def _ai_get_api_key(self, provider: str) -> str:
         """Get API key for the provider from the AI Agents configuration."""
