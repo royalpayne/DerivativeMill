@@ -14,7 +14,7 @@ TariffMill is a desktop application for import/export businesses, customs broker
 - Split exports by invoice number
 
 ### PDF Processing - Invoice OCR
-- AI-powered PDF invoice text extraction
+- AI-powered PDF invoice text extraction using Anthropic Claude
 - Customizable template system for different invoice formats
 - Automatic field mapping and data extraction
 - Dynamic template discovery and hot-reload
@@ -32,11 +32,22 @@ TariffMill is a desktop application for import/export businesses, customs broker
 - Color-coded indicators for quick identification
 - Material classification with customizable colors
 
+### HTS Database Reference
+- Built-in searchable HTS database
+- Quick lookup of tariff codes and descriptions
+- Quantity unit information for CBP compliance
+
 ### Flexible Configuration
 - Save and reuse invoice mapping profiles for different suppliers
 - Customizable output column mapping
 - Export profiles for different broker requirements
-- Theme support (Light/Dark modes)
+- Multiple theme options (Light, Dark, Ocean, Muted Cyan, macOS)
+- Configurable backup schedules with time selection
+
+### Usage Statistics
+- Track processing metrics by entry writer
+- Monitor usage by client
+- View historical processing data
 
 ## Presentation
 
@@ -59,11 +70,13 @@ The application features:
 
 ## Installation
 
-### Windows Executable (Recommended)
+### Windows Installer (Recommended)
 
-Download the latest `TariffMill.exe` from the [Releases](https://github.com/ProcessLogicLabs/TariffMill/releases) page.
+Download `TariffMill_Setup_x.xx.xx.exe` from the [Releases](https://github.com/ProcessLogicLabs/TariffMill/releases) page and run the installer.
 
-No installation required - just run the executable.
+### Windows Portable Executable
+
+Download `TariffMill.exe` from the [Releases](https://github.com/ProcessLogicLabs/TariffMill/releases) page. No installation required - just run the executable.
 
 #### Windows SmartScreen Warning
 
@@ -74,6 +87,18 @@ On first run, Windows may show a "Windows protected your PC" warning because the
 2. Click **"Run anyway"**
 
 The application is safe to use. This warning will decrease as more users download and run the software.
+
+### Linux/macOS (pip install)
+
+Install directly from GitHub:
+```bash
+pip install git+https://github.com/ProcessLogicLabs/TariffMill.git
+```
+
+Then run:
+```bash
+tariffmill
+```
 
 ### From Source
 
@@ -87,6 +112,7 @@ cd TariffMill
 ```bash
 python -m venv venv
 .\venv\Scripts\activate  # Windows
+source venv/bin/activate  # Linux/macOS
 ```
 
 3. **Install dependencies:**
@@ -103,7 +129,7 @@ python Tariffmill/tariffmill.py
 
 ### Basic Workflow
 
-1. **Configure Input/Output Folders** - Settings menu to set your working directories
+1. **Configure Input/Output Folders** - Use Preferences menu to set your working directories
 2. **Load Invoice** - Select a CSV or XLSX invoice file
 3. **Map Columns** - Create or select a mapping profile for the invoice format
 4. **Enter Values** - Set commercial invoice total and select MID
@@ -121,7 +147,7 @@ python Tariffmill/tariffmill.py
 ### Output Mapping
 
 Customize which columns appear in your export:
-1. Go to Configuration → Output Mapping tab
+1. Go to Profiles → Output Mapping tab
 2. Drag columns to reorder
 3. Check/uncheck columns to include/exclude
 4. Save as a profile for reuse
@@ -151,25 +177,46 @@ Settings are stored in:
 
 - Input/Output directory locations
 - Preview table row colors (per material type)
-- Font size and theme
+- Font size and theme (Light, Dark, Ocean, Muted Cyan, macOS)
 - Column visibility
 - Auto-refresh interval
 - Excel viewer application
+- Backup schedule time
 
 ## Technology Stack
 
+- **Python 3.12**: Core language
 - **PyQt5**: Desktop GUI framework
 - **Pandas**: Data processing
 - **SQLite**: Local database
 - **OpenPyXL**: Excel file handling
+- **pdfminer**: PDF text extraction
+- **Anthropic Claude**: AI-powered template generation
+- **PyInstaller**: Executable packaging
+- **Inno Setup**: Windows installer
 
 ## Version
 
-**Current Version**: v0.96
+**Current Version**: v0.97.24
 
 Version is automatically derived from git tags. See [version.py](Tariffmill/version.py) for details.
 
 ## Recent Changes
+
+### v0.97.24
+- **Muted Cyan Theme**: Updated color palette to be more blue-toned for better appearance on Windows 11
+
+### v0.97.23
+- **pip Installation**: Added support for installing via pip directly from GitHub for Linux/Ubuntu users
+- **UI Improvements**: Various interface refinements
+
+### v0.97.22
+- **Muted Cyan Theme**: Added new professional blue-cyan theme option
+- **UI Cleanup**: Removed Format Code button, streamlined interface
+
+### v0.97.21
+- **Shared Templates**: Added debug logging for template discovery
+- **Template Fixes**: Restored template functionality
 
 ### v0.96
 - **Tab Reorganization**: Renamed tabs to Invoice Processing, PDF Processing, and Parts View
@@ -182,32 +229,6 @@ Version is automatically derived from git tags. See [version.py](Tariffmill/vers
 - **Dark Theme Improvements**: Enhanced dark theme styling consistency
 - **Result Preview Enhancements**: Improved column layout and value rounding fixes
 - **Material Percentage Row Splitting**: Fixed value rounding errors in split calculations
-
-### v0.93.3
-- Fix startup ghost window flash and update column names
-- Remove required field restriction from MID and Steel % in Parts Import
-- Remove Export Profile dropdown and MID Management menu item
-- Rename Net Wt/Pcs columns to Qty1/Qty2 in Result Preview
-- Add profile linking, MID/Tariff tabs, and preview table enhancements
-
-### v0.90.2
-- Add landscape page setup for exported Excel files
-- Add reprocess button for re-processing after database changes
-- Fix merge strategy to prefer database values over invoice values
-- Add animated spinner to splash screen
-- Add license system framework (disabled, for future use)
-
-### v0.90.1
-- Export profiles and output column mapping
-- Section 301 exclusion tariff tracking
-- Theme-specific color settings
-- UI improvements and bug fixes
-
-### v0.90.0
-- Major refactoring and modernization
-- Improved Parts Master management
-- Query builder for advanced searches
-- Multiple invoice mapping profiles
 
 ## Support
 

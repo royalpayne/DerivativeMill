@@ -10,9 +10,10 @@ flowchart TD
         A --> C[PDF Processing Tab]
         A --> D[Parts View Tab]
         A --> E[Menu Bar]
-        E --> F[Settings]
-        E --> G[Configuration]
-        E --> H[Help]
+        E --> F[Preferences]
+        E --> G[Profiles]
+        E --> H[Account]
+        E --> I2[Help]
     end
 
     subgraph Business["Business Logic Layer"]
@@ -62,7 +63,7 @@ flowchart TD
 | Invoice Processing | Invoice processing and export functionality (CSV/Excel files) |
 | PDF Processing | OCR processing with AI template system for PDF invoices |
 | Parts View | Database management for parts inventory |
-| Menu Bar | Application settings and configuration |
+| Menu Bar | Preferences, Profiles, Account, and Help menus |
 
 ### Business Logic Layer
 
@@ -150,11 +151,12 @@ Tariffmill/
 
 | Technology | Purpose |
 |------------|---------|
-| Python 3.x | Core language |
+| Python 3.12 | Core language |
 | PyQt5 | Desktop GUI framework |
 | Pandas | Data processing and manipulation |
 | SQLite | Embedded database |
 | OpenPyXL | Excel file read/write |
 | pdfminer | PDF text extraction |
+| Anthropic Claude | AI-powered template generation |
 | PyInstaller | Executable packaging |
 | Inno Setup | Windows installer |

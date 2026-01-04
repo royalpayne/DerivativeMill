@@ -34,4 +34,4 @@ Copy the Mermaid code blocks to [Mermaid Live Editor](https://mermaid.live/).
 
 ## Version
 
-Documentation updated for TariffMill v0.96
+Documentation updated for TariffMill v0.97.24
