@@ -8567,16 +8567,21 @@ class TariffMill(QMainWindow):
 
         # Define theme-specific color palettes
         if current_theme in ["Light Cyan", "Muted Cyan"]:
-            # Cyan/Teal theme colors - unified muted cyan (matches tab color)
-            tab_color = (QColor(141, 178, 188), QColor(120, 158, 168))  # Muted cyan - matches tab color
+            # Cyan/Teal theme colors - matches PDF Processing tab colors from _get_ai_theme_colors()
+            # Light Cyan: accent=#00a8b8, success=#107c50, danger=#c43838
+            # Muted Cyan: accent=#4a7088, success=#3a7080, danger=#9c4850
+            if current_theme == "Light Cyan":
+                accent_color = (QColor(0, 168, 184), QColor(0, 140, 156))      # #00a8b8
+            else:  # Muted Cyan
+                accent_color = (QColor(74, 112, 136), QColor(60, 95, 115))     # #4a7088
             colors = {
-                "default": tab_color,
-                "primary": tab_color,
-                "secondary": tab_color,
-                "success": tab_color,
-                "danger": tab_color,
-                "warning": tab_color,
-                "info": tab_color,
+                "default": accent_color,
+                "primary": accent_color,
+                "secondary": accent_color,
+                "success": accent_color,
+                "danger": accent_color,
+                "warning": accent_color,
+                "info": accent_color,
             }
         elif current_theme == "Ocean":
             # Ocean theme - deep blues
