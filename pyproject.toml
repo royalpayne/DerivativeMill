@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tariffmill"
-version = "0.97.29"
+version = "0.97.30"
 description = "TariffMill - Customs Entry Processing and HTS Classification Tool"
 readme = "README.md"
 license = {text = "Proprietary"}
