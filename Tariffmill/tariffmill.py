@@ -8567,15 +8567,16 @@ class TariffMill(QMainWindow):
 
         # Define theme-specific color palettes
         if current_theme in ["Light Cyan", "Muted Cyan"]:
-            # Cyan/Teal theme colors
+            # Cyan/Teal theme colors - unified cyan-blue for all buttons
+            cyan_blue = (QColor(80, 150, 170), QColor(60, 130, 150))  # Cyan-blue
             colors = {
-                "default": (QColor(141, 178, 188), QColor(120, 158, 168)),    # Muted cyan
-                "primary": (QColor(70, 160, 170), QColor(55, 140, 150)),      # Teal
-                "secondary": (QColor(120, 150, 160), QColor(100, 130, 140)),  # Muted blue-gray
-                "success": (QColor(46, 160, 130), QColor(36, 140, 110)),      # Teal-green
-                "danger": (QColor(200, 85, 85), QColor(180, 65, 65)),         # Muted red
-                "warning": (QColor(200, 160, 60), QColor(180, 140, 40)),      # Muted amber
-                "info": (QColor(80, 150, 170), QColor(60, 130, 150)),         # Cyan-blue
+                "default": cyan_blue,
+                "primary": cyan_blue,
+                "secondary": cyan_blue,
+                "success": cyan_blue,
+                "danger": cyan_blue,
+                "warning": cyan_blue,
+                "info": cyan_blue,
             }
         elif current_theme == "Ocean":
             # Ocean theme - deep blues
