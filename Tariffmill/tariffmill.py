@@ -3613,6 +3613,13 @@ class TariffMill(QMainWindow):
         stats_action = QAction(stats_icon, "Statistics...", self)
         stats_action.triggered.connect(self.show_statistics_dialog)
         account_menu.addAction(stats_action)
+
+        # Division User Management (for division_admin role)
+        self.division_users_action = QAction("Manage Division Users...", self)
+        self.division_users_action.triggered.connect(self._show_division_user_management)
+        self.division_users_action.setVisible(False)  # Hidden by default, shown for division_admin
+        account_menu.addAction(self.division_users_action)
+
         account_menu.addSeparator()
         # Sign out action
         signout_icon = self.style().standardIcon(QStyle.SP_DialogCloseButton)
@@ -3966,11 +3973,15 @@ class TariffMill(QMainWindow):
         self.mid_combo.currentTextChanged.connect(self.on_mid_changed)
         values_layout.addRow(self.mid_label, self.mid_combo)
 
-        # Division selector (for file number pattern enforcement)
+        # Division selector (for file number pattern enforcement) - hidden if no divisions configured
+        self.division_label = QLabel("Division:")
         self.division_combo = QComboBox()
         self.division_combo.setToolTip("Select a division to enforce file number pattern (prefix + length)")
         self.division_combo.currentIndexChanged.connect(self._on_division_changed)
-        values_layout.addRow("Division:", self.division_combo)
+        values_layout.addRow(self.division_label, self.division_combo)
+        # Initially hide - will be shown when divisions are loaded
+        self.division_label.setVisible(False)
+        self.division_combo.setVisible(False)
 
         # File Number (mandatory billing reference)
         self.file_number_input = ForceEditableLineEdit("")
@@ -3981,9 +3992,10 @@ class TariffMill(QMainWindow):
         self.file_number_input.textChanged.connect(self._update_file_number_validation)
         values_layout.addRow("File Number *:", self.file_number_input)
 
-        # File number validation indicator
+        # File number validation indicator - hidden if no divisions configured
         self.file_number_validation_label = QLabel("")
         self.file_number_validation_label.setStyleSheet("font-size: 11px;")
+        self.file_number_validation_label.setVisible(False)
         values_layout.addRow("", self.file_number_validation_label)
 
         # TODO: Customer Reference - To be implemented with XML export at a later date
@@ -5489,6 +5501,32 @@ class TariffMill(QMainWindow):
         
         columns_group.setLayout(columns_layout)
         appearance_layout.addWidget(columns_group)
+
+        # Workflow Options Group
+        workflow_group = QGroupBox("Workflow Options")
+        workflow_layout = QFormLayout()
+
+        # Show Division Selector checkbox
+        show_division_checkbox = QCheckBox("Show Division selector on Invoice Processing tab")
+        show_division_checkbox.setChecked(get_user_setting_bool('show_division_selector', True))
+        show_division_checkbox.setToolTip("When unchecked, the Division field will be hidden even if divisions are configured")
+
+        def save_division_visibility(checked):
+            set_user_setting('show_division_selector', checked)
+            # Apply immediately
+            if hasattr(self, 'division_combo'):
+                self._refresh_division_combo()
+
+        show_division_checkbox.stateChanged.connect(lambda state: save_division_visibility(state == Qt.Checked))
+        workflow_layout.addRow("", show_division_checkbox)
+
+        workflow_info = QLabel("<small>Division selector allows enforcing file number patterns per division.</small>")
+        workflow_info.setWordWrap(True)
+        workflow_info.setStyleSheet(f"color:{info_text_color}; padding:5px;")
+        workflow_layout.addRow("", workflow_info)
+
+        workflow_group.setLayout(workflow_layout)
+        appearance_layout.addWidget(workflow_group)
 
         # Add stretch to appearance tab
         appearance_layout.addStretch()
@@ -12719,10 +12757,444 @@ class TariffMill(QMainWindow):
         if hasattr(self, 'account_user_action') and hasattr(self, 'auth_manager'):
             if self.auth_manager and self.auth_manager.is_authenticated:
                 user_display = self.auth_manager.current_user
-                role_badge = " [Admin]" if self.auth_manager.current_role == 'admin' else ""
+                role = self.auth_manager.current_role
+                if role == 'admin':
+                    role_badge = " [Admin]"
+                elif role == 'division_admin':
+                    role_badge = " [Division Admin]"
+                else:
+                    role_badge = ""
                 self.account_user_action.setText(f"Signed in as: {user_display}{role_badge}")
+
+                # Show Division User Management for division_admin role
+                if hasattr(self, 'division_users_action'):
+                    self.division_users_action.setVisible(role == 'division_admin')
             else:
                 self.account_user_action.setText("Not signed in")
+                if hasattr(self, 'division_users_action'):
+                    self.division_users_action.setVisible(False)
+
+    def _show_division_user_management(self):
+        """Show the Division User Management dialog for division admins."""
+        if not hasattr(self, 'auth_manager') or not self.auth_manager:
+            return
+
+        # Get current user's managed divisions
+        users = self._load_auth_users()
+        current_user = self.auth_manager.current_user.lower()
+        current_user_data = None
+        for email, data in users.items():
+            if email.lower() == current_user:
+                current_user_data = data
+                break
+
+        if not current_user_data:
+            QMessageBox.warning(self, "Error", "Could not find your user data.")
+            return
+
+        managed_divisions = current_user_data.get('managed_divisions', [])
+        if not managed_divisions:
+            QMessageBox.information(self, "No Divisions Assigned",
+                "You don't have any divisions assigned to manage.\n\n"
+                "Please contact an administrator to assign divisions to your account.")
+            return
+
+        # Get division names for display
+        all_divisions = self._get_divisions()
+        managed_division_names = {}
+        for div_id, name, prefix, length in all_divisions:
+            if div_id in managed_divisions:
+                managed_division_names[div_id] = (name, prefix)
+
+        # Create the dialog
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Division User Management")
+        dialog.resize(650, 500)
+        layout = QVBoxLayout(dialog)
+
+        # Header
+        header_label = QLabel(f"<b>Manage Users in Your Divisions</b>")
+        layout.addWidget(header_label)
+
+        div_names = ", ".join([f"{n} ({p}*)" for n, p in managed_division_names.values()])
+        divisions_label = QLabel(f"<small>You can manage users assigned to: {div_names}</small>")
+        divisions_label.setWordWrap(True)
+        divisions_label.setStyleSheet("color: #666; margin-bottom: 10px;")
+        layout.addWidget(divisions_label)
+
+        # User table
+        user_table = QTableWidget()
+        user_table.setColumnCount(4)
+        user_table.setHorizontalHeaderLabels(["Email/Username", "Name", "Division", "Actions"])
+        user_table.horizontalHeader().setStretchLastSection(False)
+        user_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        user_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Fixed)
+        user_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Fixed)
+        user_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Fixed)
+        user_table.setColumnWidth(1, 100)
+        user_table.setColumnWidth(2, 120)
+        user_table.setColumnWidth(3, 100)
+        user_table.setSelectionBehavior(QTableWidget.SelectRows)
+        user_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        layout.addWidget(user_table)
+
+        def refresh_division_users():
+            """Refresh the user list showing only users in managed divisions."""
+            user_table.setRowCount(0)
+            all_users = self._load_auth_users()
+
+            for user_key, data in all_users.items():
+                # Skip admins and other division_admins - cannot manage them
+                if data.get('role') in ['admin', 'division_admin']:
+                    continue
+
+                # Check if user has a default_division in our managed divisions
+                user_division = data.get('default_division')
+                if user_division not in managed_divisions:
+                    continue
+
+                row = user_table.rowCount()
+                user_table.insertRow(row)
+
+                # User identifier
+                user_item = QTableWidgetItem(user_key)
+                is_windows_user = '\\' in user_key or data.get('auth_type') == 'windows'
+                if is_windows_user:
+                    user_item.setForeground(QColor("#28a745"))
+                    user_item.setToolTip("Windows Domain User")
+                user_table.setItem(row, 0, user_item)
+
+                # Name
+                user_table.setItem(row, 1, QTableWidgetItem(data.get('name', '')))
+
+                # Division
+                div_name = managed_division_names.get(user_division, ('Unknown', ''))[0]
+                user_table.setItem(row, 2, QTableWidgetItem(div_name))
+
+                # Actions
+                actions_widget = QWidget()
+                actions_layout = QHBoxLayout(actions_widget)
+                actions_layout.setContentsMargins(4, 2, 4, 2)
+                actions_layout.setSpacing(4)
+
+                style = self.style()
+
+                # Edit button
+                btn_edit = QPushButton()
+                edit_icon = QIcon.fromTheme("document-edit", style.standardIcon(QStyle.SP_FileDialogDetailedView))
+                btn_edit.setIcon(edit_icon)
+                btn_edit.setFixedSize(26, 24)
+                btn_edit.setToolTip("Edit user")
+                btn_edit.clicked.connect(lambda checked, e=user_key: edit_division_user(e))
+                actions_layout.addWidget(btn_edit)
+
+                # Reset password (only for non-Windows users)
+                if not is_windows_user:
+                    btn_reset = QPushButton()
+                    reset_icon = QIcon.fromTheme("view-refresh", style.standardIcon(QStyle.SP_BrowserReload))
+                    btn_reset.setIcon(reset_icon)
+                    btn_reset.setFixedSize(26, 24)
+                    btn_reset.setToolTip("Reset password")
+                    btn_reset.clicked.connect(lambda checked, e=user_key: reset_division_user_password(e))
+                    actions_layout.addWidget(btn_reset)
+
+                actions_layout.addStretch()
+                user_table.setCellWidget(row, 3, actions_widget)
+
+        def edit_division_user(user_key: str):
+            """Edit a user in the division admin's scope."""
+            all_users = self._load_auth_users()
+            if user_key not in all_users:
+                QMessageBox.warning(dialog, "Error", "User not found.")
+                return
+
+            user_data = all_users[user_key]
+
+            edit_dialog = QDialog(dialog)
+            edit_dialog.setWindowTitle(f"Edit User: {user_key}")
+            edit_dialog.setFixedSize(380, 200)
+
+            edit_layout = QVBoxLayout(edit_dialog)
+            form = QFormLayout()
+
+            email_label = QLabel(user_key)
+            email_label.setStyleSheet("font-weight: bold;")
+            form.addRow("User:", email_label)
+
+            name_input = QLineEdit()
+            name_input.setText(user_data.get('name', ''))
+            form.addRow("Name:", name_input)
+
+            # Division selector - only show divisions this admin manages
+            division_combo = QComboBox()
+            for div_id in managed_divisions:
+                if div_id in managed_division_names:
+                    name, prefix = managed_division_names[div_id]
+                    division_combo.addItem(f"{name} ({prefix}*)", div_id)
+            # Set current division
+            current_div = user_data.get('default_division')
+            if current_div:
+                for i in range(division_combo.count()):
+                    if division_combo.itemData(i) == current_div:
+                        division_combo.setCurrentIndex(i)
+                        break
+            form.addRow("Division:", division_combo)
+
+            edit_layout.addLayout(form)
+
+            # Buttons
+            btn_layout = QHBoxLayout()
+            btn_cancel = QPushButton("Cancel")
+            btn_cancel.clicked.connect(edit_dialog.reject)
+            btn_layout.addWidget(btn_cancel)
+
+            btn_save = QPushButton("Save")
+            btn_save.setStyleSheet(self.get_button_style("primary"))
+            btn_layout.addWidget(btn_save)
+
+            edit_layout.addLayout(btn_layout)
+
+            def save_changes():
+                all_users[user_key]['name'] = name_input.text().strip()
+                all_users[user_key]['default_division'] = division_combo.currentData()
+                if self._save_auth_users(all_users):
+                    edit_dialog.accept()
+                    refresh_division_users()
+
+            btn_save.clicked.connect(save_changes)
+            edit_dialog.exec_()
+
+        def reset_division_user_password(user_key: str):
+            """Reset password for a user in the division admin's scope."""
+            all_users = self._load_auth_users()
+            if user_key not in all_users:
+                QMessageBox.warning(dialog, "Error", "User not found.")
+                return
+
+            # Show password reset dialog
+            reset_dialog = QDialog(dialog)
+            reset_dialog.setWindowTitle(f"Reset Password: {user_key}")
+            reset_dialog.setFixedSize(350, 180)
+
+            reset_layout = QVBoxLayout(reset_dialog)
+            form = QFormLayout()
+
+            new_password = QLineEdit()
+            new_password.setEchoMode(QLineEdit.Password)
+            new_password.setPlaceholderText("New password")
+            form.addRow("New Password:", new_password)
+
+            confirm_password = QLineEdit()
+            confirm_password.setEchoMode(QLineEdit.Password)
+            confirm_password.setPlaceholderText("Confirm password")
+            form.addRow("Confirm:", confirm_password)
+
+            reset_layout.addLayout(form)
+
+            btn_layout = QHBoxLayout()
+            btn_cancel = QPushButton("Cancel")
+            btn_cancel.clicked.connect(reset_dialog.reject)
+            btn_layout.addWidget(btn_cancel)
+
+            btn_reset = QPushButton("Reset Password")
+            btn_reset.setStyleSheet(self.get_button_style("primary"))
+            btn_layout.addWidget(btn_reset)
+
+            reset_layout.addLayout(btn_layout)
+
+            def do_reset():
+                if not new_password.text():
+                    QMessageBox.warning(reset_dialog, "Error", "Please enter a password.")
+                    return
+                if new_password.text() != confirm_password.text():
+                    QMessageBox.warning(reset_dialog, "Error", "Passwords do not match.")
+                    return
+
+                password_hash, salt = self._generate_password_hash(new_password.text())
+                all_users[user_key]['password_hash'] = password_hash
+                all_users[user_key]['salt'] = salt
+                if self._save_auth_users(all_users):
+                    QMessageBox.information(reset_dialog, "Success", f"Password reset for {user_key}.")
+                    reset_dialog.accept()
+
+            btn_reset.clicked.connect(do_reset)
+            reset_dialog.exec_()
+
+        def add_division_user():
+            """Add a new user to one of the managed divisions."""
+            add_dialog = QDialog(dialog)
+            add_dialog.setWindowTitle("Add User to Division")
+            add_dialog.setFixedSize(400, 320)
+
+            add_layout = QVBoxLayout(add_dialog)
+            form = QFormLayout()
+
+            # User type
+            user_type_combo = QComboBox()
+            user_type_combo.addItems(["Email/Password User", "Windows Domain User"])
+            form.addRow("User Type:", user_type_combo)
+
+            # Email/Username input
+            email_input = QLineEdit()
+            email_input.setPlaceholderText("user@example.com")
+            email_label = QLabel("Email:")
+            form.addRow(email_label, email_input)
+
+            # Windows domain
+            domain_input = QLineEdit()
+            configured_domains = self.get_billing_setting('allowed_domains', '')
+            first_domain = configured_domains.split(',')[0].strip() if configured_domains else ''
+            domain_input.setPlaceholderText("MYDOMAIN")
+            domain_input.setText(first_domain)
+            domain_label = QLabel("Domain:")
+            domain_input.setVisible(False)
+            domain_label.setVisible(False)
+            form.addRow(domain_label, domain_input)
+
+            name_input = QLineEdit()
+            name_input.setPlaceholderText("Display Name")
+            form.addRow("Name:", name_input)
+
+            # Division selector
+            division_combo = QComboBox()
+            for div_id in managed_divisions:
+                if div_id in managed_division_names:
+                    name, prefix = managed_division_names[div_id]
+                    division_combo.addItem(f"{name} ({prefix}*)", div_id)
+            form.addRow("Division:", division_combo)
+
+            password_input = QLineEdit()
+            password_input.setEchoMode(QLineEdit.Password)
+            password_input.setPlaceholderText("Password")
+            password_label = QLabel("Password:")
+            form.addRow(password_label, password_input)
+
+            confirm_input = QLineEdit()
+            confirm_input.setEchoMode(QLineEdit.Password)
+            confirm_input.setPlaceholderText("Confirm Password")
+            confirm_label = QLabel("Confirm:")
+            form.addRow(confirm_label, confirm_input)
+
+            # Toggle visibility based on user type
+            def on_user_type_changed(index):
+                is_windows = index == 1
+                domain_input.setVisible(is_windows)
+                domain_label.setVisible(is_windows)
+                password_input.setVisible(not is_windows)
+                password_label.setVisible(not is_windows)
+                confirm_input.setVisible(not is_windows)
+                confirm_label.setVisible(not is_windows)
+                if is_windows:
+                    email_label.setText("Username:")
+                    email_input.setPlaceholderText("username (without domain)")
+                else:
+                    email_label.setText("Email:")
+                    email_input.setPlaceholderText("user@example.com")
+
+            user_type_combo.currentIndexChanged.connect(on_user_type_changed)
+
+            add_layout.addLayout(form)
+
+            btn_layout = QHBoxLayout()
+            btn_cancel = QPushButton("Cancel")
+            btn_cancel.clicked.connect(add_dialog.reject)
+            btn_layout.addWidget(btn_cancel)
+
+            btn_add = QPushButton("Add User")
+            btn_add.setStyleSheet(self.get_button_style("primary"))
+            btn_layout.addWidget(btn_add)
+
+            add_layout.addLayout(btn_layout)
+
+            def do_add():
+                is_windows = user_type_combo.currentIndex() == 1
+                name = name_input.text().strip()
+                division = division_combo.currentData()
+
+                all_users = self._load_auth_users()
+
+                if is_windows:
+                    username = email_input.text().strip().lower()
+                    domain = domain_input.text().strip().upper()
+                    if not username:
+                        QMessageBox.warning(add_dialog, "Error", "Please enter a username.")
+                        return
+                    if not domain:
+                        QMessageBox.warning(add_dialog, "Error", "Please enter a domain.")
+                        return
+
+                    user_key = f"{domain}\\{username}"
+                    if user_key in all_users or user_key.upper() in [k.upper() for k in all_users.keys()]:
+                        QMessageBox.warning(add_dialog, "Error", "User already exists.")
+                        return
+
+                    all_users[user_key] = {
+                        "role": "user",
+                        "name": name or username,
+                        "auth_type": "windows",
+                        "default_division": division
+                    }
+                else:
+                    email = email_input.text().strip().lower()
+                    password = password_input.text()
+                    confirm = confirm_input.text()
+
+                    if not email or '@' not in email:
+                        QMessageBox.warning(add_dialog, "Error", "Please enter a valid email.")
+                        return
+                    if not password:
+                        QMessageBox.warning(add_dialog, "Error", "Please enter a password.")
+                        return
+                    if password != confirm:
+                        QMessageBox.warning(add_dialog, "Error", "Passwords do not match.")
+                        return
+                    if email in all_users:
+                        QMessageBox.warning(add_dialog, "Error", "User already exists.")
+                        return
+
+                    password_hash, salt = self._generate_password_hash(password)
+                    user_key = email
+                    all_users[email] = {
+                        "password_hash": password_hash,
+                        "salt": salt,
+                        "role": "user",
+                        "name": name or email,
+                        "auth_type": "password",
+                        "default_division": division
+                    }
+
+                if self._save_auth_users(all_users):
+                    QMessageBox.information(add_dialog, "Success", f"User {user_key} added successfully.")
+                    add_dialog.accept()
+                    refresh_division_users()
+
+            btn_add.clicked.connect(do_add)
+            add_dialog.exec_()
+
+        # Buttons
+        btn_layout = QHBoxLayout()
+
+        btn_refresh = QPushButton("Refresh")
+        btn_refresh.clicked.connect(refresh_division_users)
+        btn_layout.addWidget(btn_refresh)
+
+        btn_add = QPushButton("Add User")
+        btn_add.setStyleSheet(self.get_button_style("primary"))
+        btn_add.clicked.connect(add_division_user)
+        btn_layout.addWidget(btn_add)
+
+        btn_layout.addStretch()
+
+        btn_close = QPushButton("Close")
+        btn_close.clicked.connect(dialog.accept)
+        btn_layout.addWidget(btn_close)
+
+        layout.addLayout(btn_layout)
+
+        # Load users initially
+        refresh_division_users()
+
+        dialog.exec_()
 
     def _sign_out(self):
         """Sign out current user and show login dialog."""
@@ -12938,16 +13410,18 @@ class TariffMill(QMainWindow):
 
         # User table
         self.user_table = QTableWidget()
-        self.user_table.setColumnCount(4)
-        self.user_table.setHorizontalHeaderLabels(["Email", "Name", "Role", "Actions"])
+        self.user_table.setColumnCount(5)
+        self.user_table.setHorizontalHeaderLabels(["Email", "Name", "Role", "Division", "Actions"])
         self.user_table.horizontalHeader().setStretchLastSection(False)
         self.user_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)  # Email stretches
         self.user_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Fixed)
         self.user_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Fixed)
         self.user_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Fixed)
+        self.user_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Fixed)
         self.user_table.setColumnWidth(1, 110)  # Name
-        self.user_table.setColumnWidth(2, 90)   # Role
-        self.user_table.setColumnWidth(3, 120)  # Actions - symbol buttons
+        self.user_table.setColumnWidth(2, 100)  # Role
+        self.user_table.setColumnWidth(3, 100)  # Division
+        self.user_table.setColumnWidth(4, 100)  # Actions - symbol buttons
         self.user_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.user_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.user_table.setMinimumHeight(180)
@@ -13357,12 +13831,49 @@ class TariffMill(QMainWindow):
         for div_id, name, prefix, length in divisions:
             self.division_combo.addItem(f"{name} ({prefix}*, {length} chars)", (div_id, prefix, length))
 
+        # Show/hide division row and validation label based on:
+        # 1. Whether there are divisions configured
+        # 2. Whether the user has enabled the setting to show divisions
+        has_divisions = len(divisions) > 0
+        show_division_setting = get_user_setting_bool('show_division_selector', True)
+        show_division = has_divisions and show_division_setting
+
+        if hasattr(self, 'division_label'):
+            self.division_label.setVisible(show_division)
+        self.division_combo.setVisible(show_division)
+        if hasattr(self, 'file_number_validation_label'):
+            self.file_number_validation_label.setVisible(show_division)
+
         # Restore selection if possible
         if current_selection:
             for i in range(self.division_combo.count()):
                 if self.division_combo.itemData(i) and self.division_combo.itemData(i)[0] == current_selection[0]:
                     self.division_combo.setCurrentIndex(i)
                     break
+
+    def _apply_user_default_division(self):
+        """Apply the current user's default division setting."""
+        if not hasattr(self, 'division_combo') or not hasattr(self, 'auth_manager'):
+            return
+
+        if not self.auth_manager or not self.auth_manager.current_user:
+            return
+
+        # Load users and find current user's default division
+        users = self._load_auth_users()
+        current_user = self.auth_manager.current_user.lower()
+
+        for email, data in users.items():
+            if email.lower() == current_user:
+                default_div = data.get('default_division')
+                if default_div:
+                    # Find and select the division in the combo
+                    for i in range(self.division_combo.count()):
+                        item_data = self.division_combo.itemData(i)
+                        if item_data and item_data[0] == default_div:
+                            self.division_combo.setCurrentIndex(i)
+                            break
+                break
 
     def _validate_file_number(self, file_number: str) -> tuple:
         """
@@ -13406,6 +13917,15 @@ class TariffMill(QMainWindow):
         if not users:
             return
 
+        # Load divisions for lookup
+        divisions_map = {}
+        try:
+            divisions = self._get_divisions()
+            for div_id, name, prefix, length in divisions:
+                divisions_map[div_id] = name
+        except:
+            pass
+
         for user_key, data in users.items():
             row = self.user_table.rowCount()
             self.user_table.insertRow(row)
@@ -13430,7 +13950,14 @@ class TariffMill(QMainWindow):
             role_item = QTableWidgetItem(role_text)
             if data.get('role') == 'admin':
                 role_item.setForeground(QColor("#0078d4"))
+            elif data.get('role') == 'division_admin':
+                role_item.setForeground(QColor("#6f42c1"))  # Purple for division_admin
             self.user_table.setItem(row, 2, role_item)
+
+            # Division
+            default_div = data.get('default_division')
+            div_name = divisions_map.get(default_div, '') if default_div else ''
+            self.user_table.setItem(row, 3, QTableWidgetItem(div_name))
 
             # Actions buttons with standard icons
             actions_widget = QWidget()
@@ -13472,7 +13999,7 @@ class TariffMill(QMainWindow):
                     actions_layout.addWidget(btn_delete)
 
             actions_layout.addStretch()
-            self.user_table.setCellWidget(row, 3, actions_widget)
+            self.user_table.setCellWidget(row, 4, actions_widget)
 
     def _load_auth_users(self) -> dict:
         """Load users from local auth_users.json file."""
@@ -13588,8 +14115,30 @@ class TariffMill(QMainWindow):
         form.addRow("Name:", name_input)
 
         role_combo = QComboBox()
-        role_combo.addItems(["user", "admin"])
+        role_combo.addItems(["user", "division_admin", "admin"])
         form.addRow("Role:", role_combo)
+
+        # Divisions selector for division_admin role
+        divisions_label = QLabel("Managed Divisions:")
+        divisions_list = QListWidget()
+        divisions_list.setSelectionMode(QListWidget.MultiSelection)
+        divisions_list.setMaximumHeight(80)
+        divisions = self._get_divisions()
+        for div_id, name, prefix, length in divisions:
+            item = QListWidgetItem(f"{name} ({prefix}*)")
+            item.setData(Qt.UserRole, div_id)
+            divisions_list.addItem(item)
+        divisions_label.setVisible(False)
+        divisions_list.setVisible(False)
+        form.addRow(divisions_label, divisions_list)
+
+        # Show/hide divisions based on role
+        def on_role_changed(role_text):
+            is_div_admin = role_text == "division_admin"
+            divisions_label.setVisible(is_div_admin)
+            divisions_list.setVisible(is_div_admin)
+
+        role_combo.currentTextChanged.connect(on_role_changed)
 
         password_input = QLineEdit()
         password_input.setEchoMode(QLineEdit.Password)
@@ -13668,6 +14217,13 @@ class TariffMill(QMainWindow):
                     "auth_type": "windows"
                 }
 
+                # Add managed divisions for division_admin
+                if role == "division_admin":
+                    managed_divs = [divisions_list.item(i).data(Qt.UserRole)
+                                    for i in range(divisions_list.count())
+                                    if divisions_list.item(i).isSelected()]
+                    users[user_key]["managed_divisions"] = managed_divs
+
                 if self._save_auth_users(users):
                     QMessageBox.information(dialog, "Success", f"Windows user {user_key} added successfully.\n\nThis user will auto-login when logged into the {domain} domain.")
                     dialog.accept()
@@ -13703,6 +14259,13 @@ class TariffMill(QMainWindow):
                     "auth_type": "password"
                 }
 
+                # Add managed divisions for division_admin
+                if role == "division_admin":
+                    managed_divs = [divisions_list.item(i).data(Qt.UserRole)
+                                    for i in range(divisions_list.count())
+                                    if divisions_list.item(i).isSelected()]
+                    users[email]["managed_divisions"] = managed_divs
+
                 if self._save_auth_users(users):
                     QMessageBox.information(dialog, "Success", f"User {email} added successfully.")
                     dialog.accept()
@@ -13722,7 +14285,7 @@ class TariffMill(QMainWindow):
 
         dialog = QDialog(self)
         dialog.setWindowTitle(f"Edit User: {email}")
-        dialog.setFixedSize(400, 200)
+        dialog.setFixedSize(400, 350)
 
         layout = QVBoxLayout(dialog)
         form = QFormLayout()
@@ -13736,9 +14299,49 @@ class TariffMill(QMainWindow):
         form.addRow("Name:", name_input)
 
         role_combo = QComboBox()
-        role_combo.addItems(["user", "admin"])
+        role_combo.addItems(["user", "division_admin", "admin"])
         role_combo.setCurrentText(user_data.get('role', 'user'))
         form.addRow("Role:", role_combo)
+
+        # Managed Divisions selector for division_admin role
+        managed_divisions_label = QLabel("Managed Divisions:")
+        managed_divisions_list = QListWidget()
+        managed_divisions_list.setSelectionMode(QListWidget.MultiSelection)
+        managed_divisions_list.setMaximumHeight(80)
+        divisions = self._get_divisions()
+        current_managed = user_data.get('managed_divisions', [])
+        for div_id, name, prefix, length in divisions:
+            item = QListWidgetItem(f"{name} ({prefix}*)")
+            item.setData(Qt.UserRole, div_id)
+            managed_divisions_list.addItem(item)
+            if div_id in current_managed:
+                item.setSelected(True)
+        is_div_admin = user_data.get('role') == 'division_admin'
+        managed_divisions_label.setVisible(is_div_admin)
+        managed_divisions_list.setVisible(is_div_admin)
+        form.addRow(managed_divisions_label, managed_divisions_list)
+
+        # Show/hide managed divisions based on role
+        def on_role_changed(role_text):
+            is_div_admin = role_text == "division_admin"
+            managed_divisions_label.setVisible(is_div_admin)
+            managed_divisions_list.setVisible(is_div_admin)
+
+        role_combo.currentTextChanged.connect(on_role_changed)
+
+        # Default Division selector
+        division_combo = QComboBox()
+        division_combo.addItem("-- No Default --", None)
+        for div_id, name, prefix, length in divisions:
+            division_combo.addItem(f"{name} ({prefix}*)", div_id)
+        # Set current default division if exists
+        current_div = user_data.get('default_division')
+        if current_div:
+            for i in range(division_combo.count()):
+                if division_combo.itemData(i) == current_div:
+                    division_combo.setCurrentIndex(i)
+                    break
+        form.addRow("Default Division:", division_combo)
 
         layout.addLayout(form)
 
@@ -13757,11 +14360,26 @@ class TariffMill(QMainWindow):
         def save_changes():
             users[email]['name'] = name_input.text().strip() or email
             users[email]['role'] = role_combo.currentText()
+            users[email]['default_division'] = division_combo.currentData()
+
+            # Save managed divisions for division_admin
+            if role_combo.currentText() == "division_admin":
+                managed_divs = [managed_divisions_list.item(i).data(Qt.UserRole)
+                                for i in range(managed_divisions_list.count())
+                                if managed_divisions_list.item(i).isSelected()]
+                users[email]["managed_divisions"] = managed_divs
+            else:
+                # Remove managed_divisions if not a division_admin
+                users[email].pop("managed_divisions", None)
 
             if self._save_auth_users(users):
                 QMessageBox.information(dialog, "Success", "User updated successfully.")
                 dialog.accept()
                 self._refresh_user_list()
+                # If editing current user, apply the default division
+                if hasattr(self, 'auth_manager') and self.auth_manager:
+                    if self.auth_manager.current_user and self.auth_manager.current_user.lower() == email.lower():
+                        self._apply_user_default_division()
 
         btn_save.clicked.connect(save_changes)
         dialog.exec_()
@@ -24374,8 +24992,9 @@ Please fix this error in the template code. Return the complete corrected templa
 
     def load_available_mids(self):
         try:
-            # Also load divisions combo
+            # Also load divisions combo and apply user's default
             self._refresh_division_combo()
+            self._apply_user_default_division()
 
             # Preserve current selection before reloading
             current_selection = self.selected_mid
