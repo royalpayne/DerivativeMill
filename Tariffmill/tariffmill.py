@@ -9198,13 +9198,22 @@ class TariffMill(QMainWindow):
             QMessageBox.warning(self, "MID Required", "Please select a MID (Manufacturer ID) before processing.")
             return
 
-        # Verify File Number is entered (mandatory for billing)
+        # Verify File Number is entered and valid (mandatory for billing)
         file_number = self.file_number_input.text().strip() if hasattr(self, 'file_number_input') else ""
         if not file_number:
             self.file_number_input.setStyleSheet("border: 2px solid #ff4444; background-color: #ffebee;")
             QTimer.singleShot(1200, lambda: self.file_number_input.setStyleSheet(""))
             self.file_number_input.setFocus()
             QMessageBox.warning(self, "File Number Required", "Please enter a File Number before processing.\n\nThis is required for billing purposes.")
+            return
+
+        # Validate file number format against division rules
+        is_valid, error_msg = self.validate_file_number(file_number)
+        if not is_valid:
+            self.file_number_input.setStyleSheet("border: 2px solid #ff4444; background-color: #ffebee;")
+            QTimer.singleShot(2000, lambda: self.file_number_input.setStyleSheet(""))
+            self.file_number_input.setFocus()
+            QMessageBox.warning(self, "Invalid File Number", f"{error_msg}\n\nPlease correct the file number before processing.")
             return
 
         self.process_btn.setEnabled(False)
