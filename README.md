@@ -49,9 +49,11 @@ TariffMill is a desktop application for import/export businesses, customs broker
 - Monitor usage by client
 - View historical processing data
 
-## Presentation
+## Data Flow
 
-View the interactive [TariffMill Presentation](https://htmlpreview.github.io/?https://raw.githubusercontent.com/ProcessLogicLabs/TariffMill/main/TariffMill_Presentation.html) for a visual overview of the application's purpose, workflow, and capabilities.
+[![TariffMill Data Flow](marketing/data_flow_diagram_static.svg)](https://htmlpreview.github.io/?https://raw.githubusercontent.com/ProcessLogicLabs/TariffMill/main/marketing/TariffMill_Presentation.html)
+
+*Click the diagram to view the full interactive presentation*
 
 ## Screenshots
 
