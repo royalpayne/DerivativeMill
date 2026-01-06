@@ -668,8 +668,156 @@
             </div>
         </div>
 
-        <!-- Slide 4: Workflow -->
+        <!-- Slide 4: Data Flow Diagram -->
         <div class="slide" data-slide="3">
+            <h2>Data Transformation Portal</h2>
+            <div class="data-flow-diagram" style="max-width: 1200px; width: 100%; opacity: 0; transform: scale(0.9); transition: all 0.8s ease;">
+                <svg width="100%" height="100%" viewBox="0 0 1400 550" xmlns="http://www.w3.org/2000/svg" style="max-height: 70vh;">
+                  <defs>
+                    <linearGradient id="portalBg" x1="0%" y1="0%" x2="100%" y2="100%">
+                      <stop offset="0%" style="stop-color:#667eea;stop-opacity:0.15"/>
+                      <stop offset="100%" style="stop-color:#764ba2;stop-opacity:0.15"/>
+                    </linearGradient>
+                    <linearGradient id="streamGradientLeft" x1="0%" y1="0%" x2="100%" y2="0%">
+                      <stop offset="0%" style="stop-color:#3498db"/>
+                      <stop offset="100%" style="stop-color:#9b59b6"/>
+                    </linearGradient>
+                    <linearGradient id="streamGradientRight" x1="0%" y1="0%" x2="100%" y2="0%">
+                      <stop offset="0%" style="stop-color:#9b59b6"/>
+                      <stop offset="100%" style="stop-color:#27ae60"/>
+                    </linearGradient>
+                    <linearGradient id="tariffmillGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                      <stop offset="0%" style="stop-color:#667eea"/>
+                      <stop offset="100%" style="stop-color:#764ba2"/>
+                    </linearGradient>
+                    <filter id="dropShadow" x="-20%" y="-20%" width="140%" height="140%">
+                      <feDropShadow dx="3" dy="3" stdDeviation="4" flood-color="#000" flood-opacity="0.2"/>
+                    </filter>
+                    <filter id="softGlow" x="-30%" y="-30%" width="160%" height="160%">
+                      <feGaussianBlur stdDeviation="2" result="blur"/>
+                      <feMerge>
+                        <feMergeNode in="blur"/>
+                        <feMergeNode in="SourceGraphic"/>
+                      </feMerge>
+                    </filter>
+                  </defs>
+                  <rect width="1400" height="550" fill="transparent"/>
+                  <circle cx="700" cy="275" r="220" fill="url(#portalBg)"/>
+                  <circle cx="700" cy="275" r="180" fill="none" stroke="#667eea" stroke-width="2" stroke-dasharray="10,5" opacity="0.3"/>
+                  <rect x="40" y="80" width="200" height="390" rx="15" fill="rgba(255,255,255,0.1)" stroke="rgba(255,255,255,0.2)" stroke-width="1" filter="url(#dropShadow)"/>
+                  <text x="140" y="60" font-family="Arial, sans-serif" font-size="18" fill="#a0aec0" text-anchor="middle" font-weight="bold">INPUT FILES</text>
+                  <g transform="translate(65, 105)">
+                    <rect width="150" height="90" rx="10" fill="#DC3545" filter="url(#dropShadow)"/>
+                    <rect x="8" y="8" width="134" height="74" rx="6" fill="white"/>
+                    <text x="75" y="38" font-family="Arial Black, sans-serif" font-size="24" fill="#DC3545" text-anchor="middle" font-weight="bold">PDF</text>
+                    <text x="75" y="58" font-family="Arial, sans-serif" font-size="11" fill="#666" text-anchor="middle">Invoices</text>
+                    <text x="75" y="72" font-family="Arial, sans-serif" font-size="10" fill="#999" text-anchor="middle">.pdf</text>
+                  </g>
+                  <g transform="translate(65, 210)">
+                    <rect width="150" height="90" rx="10" fill="#217346" filter="url(#dropShadow)"/>
+                    <rect x="8" y="8" width="134" height="74" rx="6" fill="white"/>
+                    <line x1="8" y1="35" x2="142" y2="35" stroke="#217346" stroke-width="1" opacity="0.5"/>
+                    <line x1="8" y1="55" x2="142" y2="55" stroke="#217346" stroke-width="1" opacity="0.5"/>
+                    <line x1="55" y1="8" x2="55" y2="82" stroke="#217346" stroke-width="1" opacity="0.5"/>
+                    <line x1="100" y1="8" x2="100" y2="82" stroke="#217346" stroke-width="1" opacity="0.5"/>
+                    <text x="75" y="30" font-family="Arial Black, sans-serif" font-size="20" fill="#217346" text-anchor="middle" font-weight="bold">EXCEL</text>
+                    <text x="75" y="50" font-family="Arial, sans-serif" font-size="11" fill="#666" text-anchor="middle">Spreadsheets</text>
+                    <text x="75" y="72" font-family="Arial, sans-serif" font-size="10" fill="#999" text-anchor="middle">.xlsx</text>
+                  </g>
+                  <g transform="translate(65, 315)">
+                    <rect width="150" height="90" rx="10" fill="#28A745" filter="url(#dropShadow)"/>
+                    <rect x="8" y="8" width="134" height="74" rx="6" fill="white"/>
+                    <text x="75" y="30" font-family="Courier New, monospace" font-size="9" fill="#28A745" text-anchor="middle">Part,Qty,Value</text>
+                    <text x="75" y="44" font-family="Courier New, monospace" font-size="9" fill="#28A745" text-anchor="middle">A001,100,500</text>
+                    <text x="75" y="58" font-family="Arial, sans-serif" font-size="11" fill="#666" text-anchor="middle">Data Files</text>
+                    <text x="75" y="72" font-family="Arial, sans-serif" font-size="10" fill="#999" text-anchor="middle">.csv</text>
+                  </g>
+                  <g filter="url(#softGlow)">
+                    <path d="M 240 150 C 320 150, 380 200, 460 230" stroke="url(#streamGradientLeft)" stroke-width="5" fill="none"/>
+                    <circle cx="280" cy="155" r="5" fill="#DC3545"/>
+                    <circle cx="340" cy="170" r="4" fill="#9b59b6"/>
+                    <circle cx="400" cy="200" r="5" fill="#764ba2"/>
+                  </g>
+                  <g filter="url(#softGlow)">
+                    <path d="M 240 255 C 320 255, 380 260, 460 265" stroke="url(#streamGradientLeft)" stroke-width="5" fill="none"/>
+                    <circle cx="290" cy="255" r="5" fill="#217346"/>
+                    <circle cx="350" cy="258" r="4" fill="#9b59b6"/>
+                    <circle cx="410" cy="262" r="5" fill="#764ba2"/>
+                  </g>
+                  <g filter="url(#softGlow)">
+                    <path d="M 240 360 C 320 360, 380 320, 460 300" stroke="url(#streamGradientLeft)" stroke-width="5" fill="none"/>
+                    <circle cx="280" cy="358" r="5" fill="#28A745"/>
+                    <circle cx="340" cy="345" r="4" fill="#9b59b6"/>
+                    <circle cx="400" cy="315" r="5" fill="#764ba2"/>
+                  </g>
+                  <text x="350" y="130" font-family="Arial, sans-serif" font-size="12" fill="#718096" text-anchor="middle" font-style="italic">Raw Data</text>
+                  <g transform="translate(470, 115)">
+                    <rect width="260" height="320" rx="20" fill="rgba(255,255,255,0.1)" stroke="url(#tariffmillGrad)" stroke-width="4" filter="url(#dropShadow)"/>
+                    <rect x="0" y="0" width="260" height="60" rx="20" fill="url(#tariffmillGrad)"/>
+                    <rect x="0" y="40" width="260" height="20" fill="url(#tariffmillGrad)"/>
+                    <g transform="translate(130, 35)">
+                      <circle cx="0" cy="0" r="18" fill="none" stroke="white" stroke-width="3"/>
+                      <circle cx="0" cy="0" r="7" fill="white"/>
+                      <rect x="-3" y="-26" width="6" height="10" rx="1" fill="white"/>
+                      <rect x="-3" y="16" width="6" height="10" rx="1" fill="white"/>
+                      <rect x="-26" y="-3" width="10" height="6" rx="1" fill="white"/>
+                      <rect x="16" y="-3" width="10" height="6" rx="1" fill="white"/>
+                    </g>
+                    <text x="130" y="95" font-family="Arial, sans-serif" font-size="32" fill="#e2e8f0" text-anchor="middle" font-weight="bold">TariffMill</text>
+                    <line x1="30" y1="115" x2="230" y2="115" stroke="rgba(255,255,255,0.2)" stroke-width="2"/>
+                    <g transform="translate(130, 145)">
+                      <circle cx="-85" cy="0" r="8" fill="#667eea"/>
+                      <text x="-70" y="5" font-family="Arial, sans-serif" font-size="13" fill="#e2e8f0">Data Transformation</text>
+                      <circle cx="-85" cy="35" r="8" fill="#764ba2"/>
+                      <text x="-70" y="40" font-family="Arial, sans-serif" font-size="13" fill="#e2e8f0">HTS Classification</text>
+                      <circle cx="-85" cy="70" r="8" fill="#9b59b6"/>
+                      <text x="-70" y="75" font-family="Arial, sans-serif" font-size="13" fill="#e2e8f0">Parts Database</text>
+                      <circle cx="-85" cy="105" r="8" fill="#3498db"/>
+                      <text x="-70" y="110" font-family="Arial, sans-serif" font-size="13" fill="#e2e8f0">Steel/Aluminum Ratios</text>
+                      <circle cx="-85" cy="140" r="8" fill="#27ae60"/>
+                      <text x="-70" y="145" font-family="Arial, sans-serif" font-size="13" fill="#e2e8f0">Export Ready Sheets</text>
+                    </g>
+                  </g>
+                  <rect x="545" y="450" width="110" height="30" rx="15" fill="url(#tariffmillGrad)"/>
+                  <text x="600" y="471" font-family="Arial, sans-serif" font-size="12" fill="white" text-anchor="middle" font-weight="bold">TRANSFORM</text>
+                  <g filter="url(#softGlow)">
+                    <path d="M 750 275 C 850 275, 900 275, 980 275" stroke="url(#streamGradientRight)" stroke-width="8" fill="none"/>
+                    <polygon points="975,255 1010,275 975,295" fill="#27ae60"/>
+                    <circle cx="790" cy="275" r="6" fill="#764ba2"/>
+                    <circle cx="850" cy="275" r="7" fill="#27ae60"/>
+                    <circle cx="910" cy="275" r="6" fill="#2ecc71"/>
+                  </g>
+                  <text x="870" y="250" font-family="Arial, sans-serif" font-size="12" fill="#718096" text-anchor="middle" font-style="italic">Upload Sheet</text>
+                  <g transform="translate(1030, 140)">
+                    <rect width="280" height="270" rx="20" fill="rgba(255,255,255,0.1)" stroke="#0066CC" stroke-width="3" filter="url(#dropShadow)"/>
+                    <rect x="0" y="0" width="280" height="70" rx="20" fill="#0066CC"/>
+                    <rect x="0" y="50" width="280" height="20" fill="#0066CC"/>
+                    <text x="140" y="48" font-family="Arial, sans-serif" font-size="36" fill="white" text-anchor="middle" font-weight="bold">e2open</text>
+                    <g transform="translate(140, 130)">
+                      <circle cx="0" cy="0" r="40" fill="none" stroke="#0066CC" stroke-width="2.5"/>
+                      <ellipse cx="0" cy="0" rx="40" ry="16" fill="none" stroke="#0066CC" stroke-width="1.5"/>
+                      <ellipse cx="0" cy="0" rx="16" ry="40" fill="none" stroke="#0066CC" stroke-width="1.5"/>
+                      <line x1="-40" y1="0" x2="40" y2="0" stroke="#0066CC" stroke-width="1.5"/>
+                      <line x1="0" y1="-40" x2="0" y2="40" stroke="#0066CC" stroke-width="1.5"/>
+                    </g>
+                    <text x="140" y="200" font-family="Arial, sans-serif" font-size="14" fill="#a0aec0" text-anchor="middle">Global Trade</text>
+                    <text x="140" y="220" font-family="Arial, sans-serif" font-size="14" fill="#a0aec0" text-anchor="middle">Management Platform</text>
+                    <rect x="80" y="235" width="120" height="25" rx="12" fill="#0066CC"/>
+                    <text x="140" y="253" font-family="Arial, sans-serif" font-size="11" fill="white" text-anchor="middle" font-weight="bold">CUSTOMS ENTRY</text>
+                  </g>
+                  <text x="1170" y="440" font-family="Arial, sans-serif" font-size="18" fill="#a0aec0" text-anchor="middle" font-weight="bold">EXPORT</text>
+                </svg>
+            </div>
+            <style>
+                .slide.active .data-flow-diagram {
+                    opacity: 1 !important;
+                    transform: scale(1) !important;
+                }
+            </style>
+        </div>
+
+        <!-- Slide 5: Workflow -->
+        <div class="slide" data-slide="4">
             <h2>Processing Workflow</h2>
             <div class="workflow">
                 <div class="workflow-step">
@@ -704,8 +852,8 @@
             </div>
         </div>
 
-        <!-- Slide 5: Section 232 Compliance -->
-        <div class="slide" data-slide="4">
+        <!-- Slide 6: Section 232 Compliance -->
+        <div class="slide" data-slide="5">
             <h2>Section 232 Material Handling</h2>
             <div class="compliance-grid">
                 <div class="compliance-card steel">
@@ -747,8 +895,8 @@
             </div>
         </div>
 
-        <!-- Slide 6: Key Features -->
-        <div class="slide" data-slide="5">
+        <!-- Slide 7: Key Features -->
+        <div class="slide" data-slide="6">
             <h2>Core Capabilities</h2>
             <div class="content-grid">
                 <div class="card">
@@ -814,8 +962,8 @@
             </div>
         </div>
 
-        <!-- Slide 7: Data Privacy -->
-        <div class="slide" data-slide="6">
+        <!-- Slide 8: Data Privacy -->
+        <div class="slide" data-slide="7">
             <h2>Data Privacy by Design</h2>
             <div class="privacy-box">
                 <div class="shield-icon">🛡️</div>
@@ -831,8 +979,8 @@
             </div>
         </div>
 
-        <!-- Slide 8: PDF Processing -->
-        <div class="slide" data-slide="7">
+        <!-- Slide 9: PDF Processing -->
+        <div class="slide" data-slide="8">
             <h2>PDF Processing</h2>
             <div class="content-grid">
                 <div class="card">
@@ -868,8 +1016,8 @@
             </div>
         </div>
 
-        <!-- Slide 9: Closing -->
-        <div class="slide closing-slide" data-slide="8">
+        <!-- Slide 10: Closing -->
+        <div class="slide closing-slide" data-slide="9">
             <h2>Streamline Your Customs Workflow</h2>
             <p style="color: #a0aec0; font-size: 1.3rem; max-width: 800px; line-height: 1.8;">
                 TariffMill bridges the gap between incoming documentation and customs processing systems,
@@ -914,6 +1062,7 @@
         <div class="dot" data-slide="6"></div>
         <div class="dot" data-slide="7"></div>
         <div class="dot" data-slide="8"></div>
+        <div class="dot" data-slide="9"></div>
     </div>
 
     <div class="nav-container">
@@ -923,7 +1072,7 @@
 
     <script>
         let currentSlide = 0;
-        const totalSlides = 9;
+        const totalSlides = 10;
         const slides = document.querySelectorAll('.slide');
         const dots = document.querySelectorAll('.dot');
         const prevBtn = document.getElementById('prevBtn');
