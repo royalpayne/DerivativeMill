@@ -219,6 +219,60 @@ class ToolRegistry:
             "handler": self._query_database
         }
 
+        # Read File Tool - Read any file from the local filesystem
+        tools["read_file"] = {
+            "definition": {
+                "name": "read_file",
+                "description": "Read the contents of a file from the local filesystem. Supports text files (csv, txt, json, xml, py, etc.) and can extract text from PDF files.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "file_path": {
+                            "type": "string",
+                            "description": "The full path to the file to read (e.g., 'C:\\Users\\hpayne\\Downloads\\OCRMill_Output\\invoice.csv')"
+                        },
+                        "max_lines": {
+                            "type": "integer",
+                            "description": "Maximum number of lines to read (default: 500). Use -1 for unlimited."
+                        },
+                        "encoding": {
+                            "type": "string",
+                            "description": "File encoding (default: 'utf-8'). Try 'latin-1' if utf-8 fails."
+                        }
+                    },
+                    "required": ["file_path"]
+                }
+            },
+            "handler": self._read_file
+        }
+
+        # List Directory Tool - List contents of a directory
+        tools["list_directory"] = {
+            "definition": {
+                "name": "list_directory",
+                "description": "List the contents of a directory on the local filesystem. Shows files and subdirectories with their sizes and modification times.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "directory_path": {
+                            "type": "string",
+                            "description": "The full path to the directory to list (e.g., 'C:\\Users\\hpayne\\Downloads\\OCRMill_Output')"
+                        },
+                        "pattern": {
+                            "type": "string",
+                            "description": "Optional glob pattern to filter files (e.g., '*.csv', '*.pdf'). Default shows all files."
+                        },
+                        "recursive": {
+                            "type": "boolean",
+                            "description": "If true, list files in subdirectories too. Default is false."
+                        }
+                    },
+                    "required": ["directory_path"]
+                }
+            },
+            "handler": self._list_directory
+        }
+
         return tools
 
     def _read_template(self, template_name: str) -> Dict[str, Any]:
@@ -660,6 +714,196 @@ class ToolRegistry:
             return {
                 "success": False,
                 "error": str(e),
+                "traceback": traceback.format_exc()
+            }
+
+    def _read_file(self, file_path: str, max_lines: int = 500,
+                   encoding: str = "utf-8") -> Dict[str, Any]:
+        """Read contents of a file from the local filesystem."""
+        from datetime import datetime
+
+        file_path = Path(file_path)
+
+        if not file_path.exists():
+            return {
+                "success": False,
+                "error": f"File not found: {file_path}"
+            }
+
+        if not file_path.is_file():
+            return {
+                "success": False,
+                "error": f"Path is not a file: {file_path}"
+            }
+
+        # Get file info
+        stat = file_path.stat()
+        file_info = {
+            "name": file_path.name,
+            "path": str(file_path),
+            "size_bytes": stat.st_size,
+            "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            "extension": file_path.suffix.lower()
+        }
+
+        # Handle PDF files specially
+        if file_path.suffix.lower() == '.pdf':
+            try:
+                import pdfplumber
+                text_parts = []
+                with pdfplumber.open(file_path) as pdf:
+                    for i, page in enumerate(pdf.pages[:20]):  # Limit to 20 pages
+                        page_text = page.extract_text()
+                        if page_text:
+                            text_parts.append(f"[Page {i+1}]\n{page_text}")
+                content = "\n\n".join(text_parts)
+                return {
+                    "success": True,
+                    "file_info": file_info,
+                    "content_type": "pdf_extracted_text",
+                    "page_count": len(text_parts),
+                    "content": content,
+                    "character_count": len(content)
+                }
+            except ImportError:
+                return {
+                    "success": False,
+                    "error": "pdfplumber not installed - cannot read PDF files"
+                }
+            except Exception as e:
+                return {
+                    "success": False,
+                    "error": f"Error reading PDF: {str(e)}"
+                }
+
+        # Handle text files
+        try:
+            with open(file_path, 'r', encoding=encoding) as f:
+                if max_lines == -1:
+                    content = f.read()
+                    line_count = content.count('\n') + 1
+                else:
+                    lines = []
+                    for i, line in enumerate(f):
+                        if i >= max_lines:
+                            break
+                        lines.append(line)
+                    content = ''.join(lines)
+                    line_count = len(lines)
+
+            return {
+                "success": True,
+                "file_info": file_info,
+                "content_type": "text",
+                "line_count": line_count,
+                "truncated": max_lines != -1 and line_count >= max_lines,
+                "content": content,
+                "character_count": len(content)
+            }
+
+        except UnicodeDecodeError:
+            # Try latin-1 as fallback
+            try:
+                with open(file_path, 'r', encoding='latin-1') as f:
+                    if max_lines == -1:
+                        content = f.read()
+                    else:
+                        lines = [next(f) for _ in range(max_lines) if f]
+                        content = ''.join(lines)
+                return {
+                    "success": True,
+                    "file_info": file_info,
+                    "content_type": "text",
+                    "encoding_used": "latin-1",
+                    "content": content,
+                    "character_count": len(content)
+                }
+            except Exception as e:
+                return {
+                    "success": False,
+                    "error": f"Failed to decode file: {str(e)}"
+                }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Error reading file: {str(e)}",
+                "traceback": traceback.format_exc()
+            }
+
+    def _list_directory(self, directory_path: str, pattern: str = None,
+                        recursive: bool = False) -> Dict[str, Any]:
+        """List contents of a directory."""
+        from datetime import datetime
+
+        dir_path = Path(directory_path)
+
+        if not dir_path.exists():
+            return {
+                "success": False,
+                "error": f"Directory not found: {directory_path}"
+            }
+
+        if not dir_path.is_dir():
+            return {
+                "success": False,
+                "error": f"Path is not a directory: {directory_path}"
+            }
+
+        try:
+            files = []
+            directories = []
+
+            # Get items based on pattern and recursive flag
+            if pattern:
+                if recursive:
+                    items = list(dir_path.rglob(pattern))
+                else:
+                    items = list(dir_path.glob(pattern))
+            else:
+                if recursive:
+                    items = list(dir_path.rglob("*"))
+                else:
+                    items = list(dir_path.iterdir())
+
+            for item in items[:100]:  # Limit to 100 items
+                try:
+                    stat = item.stat()
+                    item_info = {
+                        "name": item.name,
+                        "path": str(item),
+                        "size_bytes": stat.st_size,
+                        "modified": datetime.fromtimestamp(stat.st_mtime).isoformat()
+                    }
+                    if item.is_dir():
+                        item_info["type"] = "directory"
+                        directories.append(item_info)
+                    else:
+                        item_info["type"] = "file"
+                        item_info["extension"] = item.suffix.lower()
+                        files.append(item_info)
+                except (PermissionError, OSError):
+                    continue
+
+            # Sort by modification time (newest first)
+            files.sort(key=lambda x: x["modified"], reverse=True)
+            directories.sort(key=lambda x: x["name"])
+
+            return {
+                "success": True,
+                "directory": str(dir_path),
+                "pattern": pattern,
+                "recursive": recursive,
+                "total_items": len(files) + len(directories),
+                "truncated": len(items) > 100,
+                "directories": directories,
+                "files": files
+            }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Error listing directory: {str(e)}",
                 "traceback": traceback.format_exc()
             }
 
