@@ -9144,9 +9144,12 @@ class TariffMill(QMainWindow):
         logger.info(f"[LOAD DATAFRAME] Loading {file_path} with header_row={header_row}")
         file_path_str = str(file_path)
         if file_path_str.lower().endswith('.xlsx') or file_path_str.lower().endswith('.xls'):
-            return pd.read_excel(file_path_str, dtype=str, keep_default_na=False, header=header_row).fillna("")
+            df = pd.read_excel(file_path_str, dtype=str, keep_default_na=False, header=header_row).fillna("")
         else:
-            return pd.read_csv(file_path_str, dtype=str, keep_default_na=False, header=header_row).fillna("")
+            df = pd.read_csv(file_path_str, dtype=str, keep_default_na=False, header=header_row).fillna("")
+        # Strip whitespace from column names to handle cases like "Item " vs "Item"
+        df.columns = [col.strip() if isinstance(col, str) else col for col in df.columns]
+        return df
 
     def start_processing_with_editable_preview(self):
         if not self.current_csv:
@@ -11835,7 +11838,8 @@ class TariffMill(QMainWindow):
             else:  # .csv
                 df = pd.read_csv(path, nrows=0, dtype=str, header=header_row)
 
-            cols = list(df.columns)
+            # Strip whitespace from column names to handle cases like "Item " vs "Item"
+            cols = [col.strip() if isinstance(col, str) else col for col in df.columns]
 
             # Clear existing labels
             for label in self.shipment_drag_labels:
