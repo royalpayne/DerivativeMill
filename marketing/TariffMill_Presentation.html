@@ -1080,8 +1080,60 @@
             </div>
         </div>
 
-        <!-- Slide 10: Closing -->
-        <div class="slide closing-slide" data-slide="9">
+        <!-- Slide 10: e2Open Column Mapping -->
+        <div class="slide" data-slide="9">
+            <h2>e2Open Upload Mapping Reference</h2>
+            <p style="color: #a0aec0; font-size: 1rem; margin-bottom: 20px;">TariffMill export columns map directly to e2Open's Customs Management Invoice Import</p>
+            <div class="mapping-table" style="display: flex; justify-content: center; gap: 40px; flex-wrap: wrap; max-width: 1200px;">
+                <!-- Commercial Invoice Lines -->
+                <div class="mapping-group" style="background: rgba(255,255,255,0.05); border-radius: 12px; padding: 20px; min-width: 320px;">
+                    <h3 style="color: #667eea; font-size: 1.1rem; margin-bottom: 15px; border-bottom: 2px solid #667eea; padding-bottom: 8px;">Commercial Invoice Lines</h3>
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <tr style="color: #a0aec0; font-size: 0.85rem;">
+                            <th style="text-align: left; padding: 8px 5px; border-bottom: 1px solid #333;">TariffMill Column</th>
+                            <th style="text-align: left; padding: 8px 5px; border-bottom: 1px solid #333;">e2Open Field</th>
+                        </tr>
+                        <tr><td style="padding: 6px 5px; color: #e2e8f0;">Part Number</td><td style="padding: 6px 5px; color: #90cdf4;">Part Number</td></tr>
+                        <tr><td style="padding: 6px 5px; color: #e2e8f0;">Value</td><td style="padding: 6px 5px; color: #90cdf4;">Value</td></tr>
+                        <tr><td style="padding: 6px 5px; color: #e2e8f0;">MID</td><td style="padding: 6px 5px; color: #90cdf4;">Manufacturer</td></tr>
+                    </table>
+                </div>
+                <!-- Tariff Classification Lines -->
+                <div class="mapping-group" style="background: rgba(255,255,255,0.05); border-radius: 12px; padding: 20px; min-width: 320px;">
+                    <h3 style="color: #9b59b6; font-size: 1.1rem; margin-bottom: 15px; border-bottom: 2px solid #9b59b6; padding-bottom: 8px;">Tariff Classification Lines</h3>
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <tr style="color: #a0aec0; font-size: 0.85rem;">
+                            <th style="text-align: left; padding: 8px 5px; border-bottom: 1px solid #333;">TariffMill Column</th>
+                            <th style="text-align: left; padding: 8px 5px; border-bottom: 1px solid #333;">e2Open Field</th>
+                        </tr>
+                        <tr><td style="padding: 6px 5px; color: #e2e8f0;">HTS</td><td style="padding: 6px 5px; color: #d6bcfa;">Tariff No</td></tr>
+                        <tr><td style="padding: 6px 5px; color: #e2e8f0;">Qty 1 Unit</td><td style="padding: 6px 5px; color: #d6bcfa;">Qty 1 Class</td></tr>
+                        <tr><td style="padding: 6px 5px; color: #e2e8f0;">Qty 2 Unit</td><td style="padding: 6px 5px; color: #d6bcfa;">Qty 2 Class</td></tr>
+                    </table>
+                </div>
+                <!-- Additional Declarations -->
+                <div class="mapping-group" style="background: rgba(255,255,255,0.05); border-radius: 12px; padding: 20px; min-width: 320px;">
+                    <h3 style="color: #27ae60; font-size: 1.1rem; margin-bottom: 15px; border-bottom: 2px solid #27ae60; padding-bottom: 8px;">Additional Declarations</h3>
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <tr style="color: #a0aec0; font-size: 0.85rem;">
+                            <th style="text-align: left; padding: 8px 5px; border-bottom: 1px solid #333;">TariffMill Column</th>
+                            <th style="text-align: left; padding: 8px 5px; border-bottom: 1px solid #333;">e2Open Field</th>
+                        </tr>
+                        <tr><td style="padding: 6px 5px; color: #e2e8f0;">Declaration Code</td><td style="padding: 6px 5px; color: #9ae6b4;">Declaration Type Cd</td></tr>
+                        <tr><td style="padding: 6px 5px; color: #e2e8f0;">Country Melt Pour</td><td style="padding: 6px 5px; color: #9ae6b4;">Country Melt Pour Cd</td></tr>
+                        <tr><td style="padding: 6px 5px; color: #e2e8f0;">Country Cast</td><td style="padding: 6px 5px; color: #9ae6b4;">Country Cast</td></tr>
+                        <tr><td style="padding: 6px 5px; color: #e2e8f0;">Primary Country Smelt</td><td style="padding: 6px 5px; color: #9ae6b4;">Primary Country Smelt</td></tr>
+                        <tr><td style="padding: 6px 5px; color: #e2e8f0;">Primary Country Applic</td><td style="padding: 6px 5px; color: #9ae6b4;">Primary Country Applic</td></tr>
+                    </table>
+                </div>
+            </div>
+            <p style="color: #718096; font-size: 0.9rem; margin-top: 25px; font-style: italic;">
+                Upload Type: <span style="color: #4a9eff;">PARTS PLUS</span> — Includes Part Number for derivative line tracking
+            </p>
+        </div>
+
+        <!-- Slide 11: Closing -->
+        <div class="slide closing-slide" data-slide="10">
             <h2>Reduce Work Per Entry File</h2>
             <p style="color: #a0aec0; font-size: 1.2rem; max-width: 900px; line-height: 1.8; margin-bottom: 30px;">
                 TariffMill's export file is pre-mapped to e2Open's Customs Management Invoice Import module,
@@ -1131,6 +1183,7 @@
         <div class="dot" data-slide="7"></div>
         <div class="dot" data-slide="8"></div>
         <div class="dot" data-slide="9"></div>
+        <div class="dot" data-slide="10"></div>
     </div>
 
     <div class="nav-container">
@@ -1140,7 +1193,7 @@
 
     <script>
         let currentSlide = 0;
-        const totalSlides = 10;
+        const totalSlides = 11;
         const slides = document.querySelectorAll('.slide');
         const dots = document.querySelectorAll('.dot');
         const prevBtn = document.getElementById('prevBtn');
