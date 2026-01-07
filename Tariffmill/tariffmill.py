@@ -10261,19 +10261,27 @@ class TariffMill(QMainWindow):
         # Enable reprocess button after data has been populated
         self.reprocess_btn.setEnabled(True)
 
-        # Enable "Add Missing" button if there are "Not Found" parts
-        has_not_found = False
-        if self.last_processed_df is not None and '_not_in_db' in self.last_processed_df.columns:
+        # Enable "Add Missing" button if there are "Not Found" or "Incomplete" parts
+        has_missing_or_incomplete = False
+        if self.last_processed_df is not None:
             try:
-                # Check if any row has _not_in_db == True
-                # Convert to Python bool to avoid numpy.bool TypeError with PyQt
-                has_not_found = bool((self.last_processed_df['_not_in_db'] == True).any())
-                not_found_count = int((self.last_processed_df['_not_in_db'] == True).sum())
-                logger.info(f"Add Missing button: {not_found_count} parts not found in database, button enabled={has_not_found}")
+                not_found_count = 0
+                incomplete_count = 0
+
+                # Check for Not Found parts
+                if '_not_in_db' in self.last_processed_df.columns:
+                    not_found_count = int((self.last_processed_df['_not_in_db'] == True).sum())
+
+                # Check for Incomplete parts (in DB but missing HTS or qty_unit)
+                if '_232_flag' in self.last_processed_df.columns:
+                    incomplete_count = int((self.last_processed_df['_232_flag'] == 'Incomplete').sum())
+
+                has_missing_or_incomplete = (not_found_count + incomplete_count) > 0
+                logger.info(f"Add Missing button: {not_found_count} not found, {incomplete_count} incomplete, button enabled={has_missing_or_incomplete}")
             except Exception as e:
-                logger.warning(f"Error checking _not_in_db column: {e}")
-                has_not_found = False
-        self.add_missing_parts_btn.setEnabled(has_not_found)
+                logger.warning(f"Error checking _not_in_db/_232_flag columns: {e}")
+                has_missing_or_incomplete = False
+        self.add_missing_parts_btn.setEnabled(has_missing_or_incomplete)
 
         # Reset invoice check display after processing is complete
         self.invoice_check_label.setText("No file loaded")
@@ -21391,47 +21399,65 @@ Please fix this error in the template code. Return the complete corrected templa
 
     def show_add_missing_parts_dialog(self):
         """
-        Show a dialog with all 'Not Found' parts from the Result Preview,
-        allowing the user to enter HTS codes and add them to the database.
+        Show a dialog with all 'Not Found' and 'Incomplete' parts from the Result Preview,
+        allowing the user to enter HTS codes and add/update them in the database.
         """
         if self.last_processed_df is None:
             QMessageBox.information(self, "No Data", "No processed invoice data available.")
             return
 
-        # Get rows where _not_in_db is True
-        not_found_df = self.last_processed_df[self.last_processed_df['_not_in_db'] == True].copy()
-        if not_found_df.empty:
-            QMessageBox.information(self, "No Missing Parts", "All parts in the current invoice were found in the database.")
+        # Get rows where _not_in_db is True (Not Found)
+        not_found_mask = self.last_processed_df['_not_in_db'] == True if '_not_in_db' in self.last_processed_df.columns else pd.Series([False] * len(self.last_processed_df))
+
+        # Get rows where _232_flag is 'Incomplete' (in DB but missing data)
+        incomplete_mask = self.last_processed_df['_232_flag'] == 'Incomplete' if '_232_flag' in self.last_processed_df.columns else pd.Series([False] * len(self.last_processed_df))
+
+        # Combine both masks
+        combined_mask = not_found_mask | incomplete_mask
+        missing_df = self.last_processed_df[combined_mask].copy()
+
+        if missing_df.empty:
+            QMessageBox.information(self, "No Missing Parts", "All parts in the current invoice have complete data.")
             return
+
+        # Count each type for display
+        not_found_count = int(not_found_mask.sum())
+        incomplete_count = int(incomplete_mask.sum())
 
         # Create the dialog
         dialog = QDialog(self)
-        dialog.setWindowTitle(f"Add Missing Parts ({len(not_found_df)} parts)")
-        dialog.setMinimumSize(900, 500)
+        title_parts = []
+        if not_found_count > 0:
+            title_parts.append(f"{not_found_count} Not Found")
+        if incomplete_count > 0:
+            title_parts.append(f"{incomplete_count} Incomplete")
+        dialog.setWindowTitle(f"Add/Update Parts ({', '.join(title_parts)})")
+        dialog.setMinimumSize(950, 500)
         dialog.setModal(True)
 
         layout = QVBoxLayout(dialog)
 
         # Instructions
         instructions = QLabel(
-            "Enter HTS codes for the parts below, then click 'Add to Database'.\n"
-            "Parts will be added with 100% Non-232 ratio by default. You can edit them later in Parts View."
+            "Enter HTS codes and other data for the parts below, then click 'Save to Database'.\n"
+            "• Not Found parts will be ADDED to the database with 100% Non-232 ratio.\n"
+            "• Incomplete parts will be UPDATED with the entered HTS code and qty_unit."
         )
         instructions.setWordWrap(True)
         layout.addWidget(instructions)
 
         # Create table for missing parts
         table = QTableWidget()
-        table.setColumnCount(5)
-        table.setHorizontalHeaderLabels(["Part Number", "Value (USD)", "HTS Code", "MID", "Description"])
-        table.setRowCount(len(not_found_df))
+        table.setColumnCount(6)
+        table.setHorizontalHeaderLabels(["Part Number", "Status", "Value (USD)", "HTS Code", "MID", "Description"])
+        table.setRowCount(len(missing_df))
         table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         table.horizontalHeader().setStretchLastSection(True)
         table.setSelectionBehavior(QTableWidget.SelectRows)
         table.setAlternatingRowColors(True)
 
         # Populate the table
-        for row_idx, (df_idx, row) in enumerate(not_found_df.iterrows()):
+        for row_idx, (df_idx, row) in enumerate(missing_df.iterrows()):
             part_number = str(row.get('Product No', '')).strip()
             # Column is named 'ValueUSD' in preview DataFrame
             value_usd = row.get('ValueUSD', row.get('value_usd', 0))
@@ -21439,6 +21465,10 @@ Please fix this error in the template code. Return the complete corrected templa
                 value_display = f"${float(value_usd):,.2f}"
             except:
                 value_display = str(value_usd)
+
+            # Determine status
+            is_not_found = bool(row.get('_not_in_db', False))
+            status = "Not Found" if is_not_found else "Incomplete"
 
             # Get current values from the preview table if available
             hts_code = ""
@@ -21459,30 +21489,40 @@ Please fix this error in the template code. Return the complete corrected templa
             part_item.setFlags(part_item.flags() & ~Qt.ItemIsEditable)
             table.setItem(row_idx, 0, part_item)
 
+            # Status (read-only) - color coded
+            status_item = QTableWidgetItem(status)
+            status_item.setFlags(status_item.flags() & ~Qt.ItemIsEditable)
+            if status == "Not Found":
+                status_item.setForeground(QColor('#ff9800'))  # Orange
+            else:
+                status_item.setForeground(QColor('#e91e63'))  # Pink
+            table.setItem(row_idx, 1, status_item)
+
             # Value (read-only)
             value_item = QTableWidgetItem(value_display)
             value_item.setFlags(value_item.flags() & ~Qt.ItemIsEditable)
-            table.setItem(row_idx, 1, value_item)
+            table.setItem(row_idx, 2, value_item)
 
             # HTS Code (editable)
             hts_item = QTableWidgetItem(hts_code)
-            table.setItem(row_idx, 2, hts_item)
+            table.setItem(row_idx, 3, hts_item)
 
             # MID (editable)
             mid_item = QTableWidgetItem(mid)
-            table.setItem(row_idx, 3, mid_item)
+            table.setItem(row_idx, 4, mid_item)
 
             # Description (editable)
             desc_item = QTableWidgetItem("")
-            table.setItem(row_idx, 4, desc_item)
+            table.setItem(row_idx, 5, desc_item)
 
         # Resize columns
         table.resizeColumnsToContents()
         table.setColumnWidth(0, 150)  # Part Number
-        table.setColumnWidth(1, 100)  # Value
-        table.setColumnWidth(2, 120)  # HTS Code
-        table.setColumnWidth(3, 120)  # MID
-        table.setColumnWidth(4, 250)  # Description
+        table.setColumnWidth(1, 90)   # Status
+        table.setColumnWidth(2, 100)  # Value
+        table.setColumnWidth(3, 120)  # HTS Code
+        table.setColumnWidth(4, 120)  # MID
+        table.setColumnWidth(5, 200)  # Description
 
         layout.addWidget(table)
 
@@ -21490,70 +21530,90 @@ Please fix this error in the template code. Return the complete corrected templa
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
 
-        btn_add = QPushButton("Add to Database")
-        btn_add.setStyleSheet(self.get_button_style("success"))
-        btn_add.setFixedHeight(32)
+        btn_save = QPushButton("Save to Database")
+        btn_save.setStyleSheet(self.get_button_style("success"))
+        btn_save.setFixedHeight(32)
 
         btn_cancel = QPushButton("Cancel")
         btn_cancel.setStyleSheet(self.get_button_style("default"))
         btn_cancel.setFixedHeight(32)
 
-        btn_layout.addWidget(btn_add)
+        btn_layout.addWidget(btn_save)
         btn_layout.addWidget(btn_cancel)
         layout.addLayout(btn_layout)
 
         # Connect buttons
         btn_cancel.clicked.connect(dialog.reject)
 
-        def add_parts_to_database():
-            """Add the parts from the dialog table to the database."""
+        def save_parts_to_database():
+            """Add new parts or update incomplete parts in the database."""
             try:
                 conn = sqlite3.connect(str(DB_PATH))
                 c = conn.cursor()
                 now = datetime.now().isoformat()
                 added_count = 0
+                updated_count = 0
                 added_parts = []
-                skipped_parts = []
+                updated_parts = []
 
                 for row_idx in range(table.rowCount()):
                     part_number = table.item(row_idx, 0).text().strip()
                     if not part_number:
                         continue
 
-                    # Check if part already exists
-                    c.execute("SELECT 1 FROM parts_master WHERE part_number = ?", (part_number.upper(),))
-                    if c.fetchone():
-                        skipped_parts.append(part_number)
-                        continue
-
-                    hts_code = table.item(row_idx, 2).text().strip() if table.item(row_idx, 2) else ""
-                    mid = table.item(row_idx, 3).text().strip() if table.item(row_idx, 3) else ""
-                    description = table.item(row_idx, 4).text().strip() if table.item(row_idx, 4) else ""
+                    status = table.item(row_idx, 1).text().strip() if table.item(row_idx, 1) else ""
+                    hts_code = table.item(row_idx, 3).text().strip() if table.item(row_idx, 3) else ""
+                    mid = table.item(row_idx, 4).text().strip() if table.item(row_idx, 4) else ""
+                    description = table.item(row_idx, 5).text().strip() if table.item(row_idx, 5) else ""
 
                     # Auto-lookup qty_unit from hts_units table based on HTS code
                     qty_unit = get_hts_qty_unit(hts_code) if hts_code else ""
 
-                    # Insert the part with 100% non-232 ratio by default
-                    c.execute("""INSERT INTO parts_master (part_number, description, hts_code, country_origin, mid, client_code,
-                              steel_ratio, non_steel_ratio, last_updated, qty_unit, aluminum_ratio, copper_ratio, wood_ratio, auto_ratio,
-                              Sec301_Exclusion_Tariff)
-                              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                              (part_number.upper(), description, hts_code, '', mid, '', 0.0, 100.0, now, qty_unit, 0.0, 0.0, 0.0, 0.0, ''))
-
-                    if c.rowcount:
-                        added_count += 1
-                        added_parts.append(part_number)
+                    if status == "Not Found":
+                        # Check if part already exists (edge case)
+                        c.execute("SELECT 1 FROM parts_master WHERE part_number = ?", (part_number.upper(),))
+                        if c.fetchone():
+                            # Part now exists, treat as update instead
+                            c.execute("""UPDATE parts_master SET hts_code = ?, mid = ?, description = COALESCE(NULLIF(?, ''), description),
+                                      qty_unit = ?, last_updated = ? WHERE part_number = ?""",
+                                      (hts_code, mid, description, qty_unit, now, part_number.upper()))
+                            if c.rowcount:
+                                updated_count += 1
+                                updated_parts.append(part_number)
+                        else:
+                            # Insert new part with 100% non-232 ratio by default
+                            c.execute("""INSERT INTO parts_master (part_number, description, hts_code, country_origin, mid, client_code,
+                                      steel_ratio, non_steel_ratio, last_updated, qty_unit, aluminum_ratio, copper_ratio, wood_ratio, auto_ratio,
+                                      Sec301_Exclusion_Tariff)
+                                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                                      (part_number.upper(), description, hts_code, '', mid, '', 0.0, 100.0, now, qty_unit, 0.0, 0.0, 0.0, 0.0, ''))
+                            if c.rowcount:
+                                added_count += 1
+                                added_parts.append(part_number)
+                    else:
+                        # Incomplete - update existing part with HTS and qty_unit
+                        c.execute("""UPDATE parts_master SET hts_code = ?, mid = COALESCE(NULLIF(?, ''), mid),
+                                  description = COALESCE(NULLIF(?, ''), description), qty_unit = ?, last_updated = ?
+                                  WHERE part_number = ?""",
+                                  (hts_code, mid, description, qty_unit, now, part_number.upper()))
+                        if c.rowcount:
+                            updated_count += 1
+                            updated_parts.append(part_number)
 
                 conn.commit()
                 conn.close()
 
                 # Show result message
-                if added_count > 0:
-                    logger.info(f"Added {added_count} new parts to database from dialog: {added_parts}")
-                    msg = f"Successfully added {added_count} part(s) to the database."
-                    if skipped_parts:
-                        msg += f"\n\n{len(skipped_parts)} part(s) were skipped (already exist)."
-                    QMessageBox.information(dialog, "Parts Added", msg)
+                total_changes = added_count + updated_count
+                if total_changes > 0:
+                    logger.info(f"Saved parts to database: {added_count} added ({added_parts}), {updated_count} updated ({updated_parts})")
+                    msg_parts = []
+                    if added_count > 0:
+                        msg_parts.append(f"{added_count} part(s) added")
+                    if updated_count > 0:
+                        msg_parts.append(f"{updated_count} part(s) updated")
+                    msg = f"Successfully {' and '.join(msg_parts)}."
+                    QMessageBox.information(dialog, "Parts Saved", msg)
 
                     # Refresh MIDs and close dialog
                     self.load_available_mids()
@@ -21562,24 +21622,20 @@ Please fix this error in the template code. Return the complete corrected templa
                     # Offer to reprocess
                     reply = QMessageBox.question(
                         self, "Reprocess Invoice?",
-                        "Parts have been added to the database.\n\nWould you like to reprocess the invoice to update the preview?",
+                        "Parts have been saved to the database.\n\nWould you like to reprocess the invoice to update the preview?",
                         QMessageBox.Yes | QMessageBox.No,
                         QMessageBox.Yes
                     )
                     if reply == QMessageBox.Yes:
                         self.reprocess_invoice()
                 else:
-                    if skipped_parts:
-                        QMessageBox.information(dialog, "No Parts Added",
-                            f"All {len(skipped_parts)} part(s) already exist in the database.")
-                    else:
-                        QMessageBox.information(dialog, "No Parts Added", "No parts were added.")
+                    QMessageBox.information(dialog, "No Changes", "No parts were added or updated.")
 
             except Exception as e:
-                logger.error(f"Failed to add parts from dialog: {e}")
-                QMessageBox.critical(dialog, "Error", f"Failed to add parts:\n{e}")
+                logger.error(f"Failed to save parts to database: {e}")
+                QMessageBox.critical(dialog, "Error", f"Failed to save parts:\n{e}")
 
-        btn_add.clicked.connect(add_parts_to_database)
+        btn_save.clicked.connect(save_parts_to_database)
 
         dialog.exec_()
 
