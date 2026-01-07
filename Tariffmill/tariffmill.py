@@ -10266,8 +10266,9 @@ class TariffMill(QMainWindow):
         if self.last_processed_df is not None and '_not_in_db' in self.last_processed_df.columns:
             try:
                 # Check if any row has _not_in_db == True
-                has_not_found = (self.last_processed_df['_not_in_db'] == True).any()
-                not_found_count = (self.last_processed_df['_not_in_db'] == True).sum()
+                # Convert to Python bool to avoid numpy.bool TypeError with PyQt
+                has_not_found = bool((self.last_processed_df['_not_in_db'] == True).any())
+                not_found_count = int((self.last_processed_df['_not_in_db'] == True).sum())
                 logger.info(f"Add Missing button: {not_found_count} parts not found in database, button enabled={has_not_found}")
             except Exception as e:
                 logger.warning(f"Error checking _not_in_db column: {e}")
