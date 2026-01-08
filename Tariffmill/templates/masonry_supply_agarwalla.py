@@ -286,17 +286,18 @@ class MasonrySupplyAgarwallaTemplate(BaseTemplate):
         # 2025-0725 CB-2436 GRATE- HVY & 4"FRAME-TRICAST [MSCB2436/4] 30 127.100 3,813.00
         # Pattern with part code in brackets
 
-        # Pattern 1: Lines with [PART_CODE] format
-        # PO_DATE DESCRIPTION [MSI_PART_CODE] SHIPPER_CODE QTY RATE AMOUNT
+        # Pattern 1: Lines with [MSI_PART_CODE] format from COMMERCIAL INVOICE
+        # Format: PO_DATE DESCRIPTION [MSI_PART_CODE] SHIPPER_CODE QTY RATE AMOUNT
+        # Example: 2025-0429 MBX-1118 Flip Reader Ductile Lid [MSMBX-1118-C-RD] D4592-WM-TC 52 17.760 923.52
         # The shipper code (e.g., D4592-WM-TC, N1509-100) appears after brackets and before quantity
         bracket_pattern = re.compile(
-            r'(20\d{2}-\d{4}(?:-NP)?)\s+'          # PO date (2025-0725 or 2025-0725-NP)
-            r'(.+?)\s*'                             # Description (non-greedy)
-            r'\[([A-Z0-9\.\-/]+)\]\s*'             # MSI Part code in brackets [MSMBX-1118-C-RD]
-            r'[A-Z0-9\-]+(?:-[A-Z0-9]+)*\s+'       # Shipper code (D4592-WM-TC, N1509-100) - skip this
-            r'(\d+)\s+'                             # Quantity
-            r'([\d,]+\.\d+)\s+'                    # Unit price
-            r'([\d,]+\.\d+)',                       # Total price
+            r'(20\d{2}-\d{4}(?:-NP)?)\s+'                    # PO date (2025-0725 or 2025-0725-NP)
+            r'(.+?)\s*'                                       # Description (non-greedy)
+            r'\[([A-Z][A-Z0-9\.\-/]+)\]\s*'                  # MSI Part code in brackets [MSMBX-1118-C-RD]
+            r'[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*(?:-TC)?\s+'      # Shipper code (D4592-WM-TC, N1509-100) - skip this
+            r'(\d+)\s+'                                       # Quantity
+            r'([\d,]+\.\d{2,3})\s+'                          # Unit price
+            r'([\d,]+\.\d{2})',                               # Total price
             re.IGNORECASE
         )
 
@@ -329,6 +330,9 @@ class MasonrySupplyAgarwallaTemplate(BaseTemplate):
             except (IndexError, AttributeError, ValueError) as e:
                 continue
 
+        # Debug: log how many items found with bracket pattern
+        print(f"[MasonrySupplyAgarwalla] Bracket pattern found {len(line_items)} items")
+
         # Pattern 2: Lines with N-code at end (e.g., N1523L-F-TC)
         # Looking for lines like: 2025-0725 "840.03 'F' FRAME. GRATE, HOOD" [MS840.03F] 20 190.610 3,812.20
         # followed by: N1523L-F-TC
@@ -336,6 +340,7 @@ class MasonrySupplyAgarwallaTemplate(BaseTemplate):
 
         # If bracket pattern didn't work well, try a simpler approach
         if len(line_items) < 3:
+            print(f"[MasonrySupplyAgarwalla] Bracket pattern found < 3 items, trying simple pattern...")
             # Look for lines with quantity and two prices at the end
             # Pattern: PO_DATE DESCRIPTION QTY RATE AMOUNT
             simple_pattern = re.compile(
@@ -355,13 +360,14 @@ class MasonrySupplyAgarwallaTemplate(BaseTemplate):
                     unit_price = match.group(4).replace(',', '')
                     total_price = match.group(5).replace(',', '')
 
-                    # Extract part code from description if in brackets
-                    part_match = re.search(r'\[([A-Z0-9\-/]+)\]', description)
+                    # Extract MSI part code from description if in brackets
+                    # MSI codes look like: [MSMBX-1118-C-RD], [MS840.03F], [MSCB2436/4]
+                    part_match = re.search(r'\[([A-Z][A-Z0-9\.\-/]+)\]', description, re.IGNORECASE)
                     if part_match:
                         part_number = part_match.group(1)
                     else:
-                        # Use description as part number
-                        part_number = description[:30].replace(' ', '_')
+                        # Skip items without MSI part codes in brackets - they're not from the commercial invoice
+                        continue
 
                     item = {
                         'part_number': part_number,
@@ -381,6 +387,8 @@ class MasonrySupplyAgarwallaTemplate(BaseTemplate):
 
                 except (IndexError, ValueError):
                     continue
+
+            print(f"[MasonrySupplyAgarwalla] Simple pattern found {len(line_items)} items total")
 
         # Convert MSI part numbers to Sigma part numbers
         line_items = self.convert_to_sigma_parts(line_items)
