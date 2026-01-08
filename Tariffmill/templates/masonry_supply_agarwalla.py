@@ -290,56 +290,90 @@ class MasonrySupplyAgarwallaTemplate(BaseTemplate):
         # 2025-0429 MBX-1118 Flip Reader Ductile Lid [MSMBX-1118-C-RD]
         #           WATER METER/TRICAST D4592-WM-TC 52 17.760 923.52
         #
-        # We need to find MSI part codes in brackets and then find the associated prices
+        # OCR may have issues with brackets - try multiple bracket-like characters
 
-        # First, find all MSI part codes with their PO dates
-        # Pattern: PO_DATE ... [MSI_PART_CODE]
-        msi_pattern = re.compile(
-            r'(20\d{2}-\d{4}(?:-NP)?)\s+'           # PO date (2025-0429)
-            r'(.+?)'                                  # Description
-            r'\[([A-Z][A-Z0-9\.\-/]+)\]',            # MSI Part code in brackets
-            re.IGNORECASE
-        )
+        print(f"[MasonrySupplyAgarwalla] Processing text of length {len(text)}")
 
-        # Find all price lines: SHIPPER_CODE QTY RATE AMOUNT
-        # or just: QTY RATE AMOUNT after some text
+        # Debug: Check for bracket patterns in text
+        bracket_count = text.count('[') + text.count(']')
+        paren_count = text.count('(') + text.count(')')
+        print(f"[MasonrySupplyAgarwalla] Found {bracket_count} brackets, {paren_count} parentheses")
+
+        # Try multiple bracket variations due to OCR issues
+        # Brackets may be: [] or () or even {} or misread entirely
+        bracket_pairs = [
+            (r'\[', r'\]'),      # Standard brackets
+            (r'\(', r'\)'),      # Parentheses
+            (r'\{', r'\}'),      # Curly braces
+            (r'\[', r'\)'),      # Mixed
+            (r'\(', r'\]'),      # Mixed
+        ]
+
+        msi_matches = []
+
+        for open_b, close_b in bracket_pairs:
+            # Pattern: PO_DATE ... [MSI_PART_CODE]
+            # MSI codes typically start with MS and contain letters, numbers, dashes
+            msi_pattern = re.compile(
+                r'(20\d{2}-\d{4}(?:-NP)?)\s+'           # PO date (2025-0429)
+                r'(.+?)'                                  # Description (non-greedy)
+                + open_b +                                # Open bracket
+                r'(MS[A-Z0-9\.\-/]+)'                     # MSI Part code (starts with MS)
+                + close_b,                                # Close bracket
+                re.IGNORECASE
+            )
+            matches = list(msi_pattern.finditer(text))
+            if matches:
+                print(f"[MasonrySupplyAgarwalla] Found {len(matches)} MSI codes with bracket pattern {open_b}...{close_b}")
+                msi_matches = matches
+                break
+
+        # If no bracket patterns found, try finding MSI codes without brackets
+        # They might appear as: PO_DATE DESCRIPTION MS_CODE SHIPPER_CODE QTY RATE AMOUNT
+        if not msi_matches:
+            print("[MasonrySupplyAgarwalla] No bracketed MSI codes found, trying alternative pattern")
+            # Look for MS-prefixed codes that appear near PO dates
+            # Pattern: Find lines with PO date and look for MS codes
+            alt_pattern = re.compile(
+                r'(20\d{2}-\d{4}(?:-NP)?)\s+'           # PO date
+                r'[^\n]*?'                               # Any text on same conceptual line
+                r'\b(MS[A-Z0-9\.\-/]{3,})\b',           # MSI Part code (MS followed by 3+ chars)
+                re.IGNORECASE
+            )
+            msi_matches = list(alt_pattern.finditer(text))
+            if msi_matches:
+                print(f"[MasonrySupplyAgarwalla] Found {len(msi_matches)} MSI codes with alternative pattern")
+
+        # Price pattern: QTY RATE AMOUNT at end of line/section
         price_pattern = re.compile(
-            r'[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*(?:-TC|-SWR|-TC)?\s+'  # Shipper code (D4592-WM-TC)
-            r'(\d+)\s+'                                            # Quantity
-            r'([\d,]+\.\d{2,3})\s+'                                # Unit price
-            r'([\d,]+\.\d{2})',                                    # Total price
+            r'(\d+)\s+'                                # Quantity
+            r'([\d,]+\.\d{2,3})\s+'                   # Unit price
+            r'([\d,]+\.\d{2})',                       # Total price
             re.IGNORECASE
         )
-
-        # Alternative: Find lines with QTY RATE AMOUNT pattern (3 numbers at end)
-        alt_price_pattern = re.compile(
-            r'(\d+)\s+([\d,]+\.\d{2,3})\s+([\d,]+\.\d{2})(?:\s|$)'
-        )
-
-        # Extract all MSI codes with their context
-        msi_matches = list(msi_pattern.finditer(text))
 
         for i, msi_match in enumerate(msi_matches):
             try:
                 po_date = msi_match.group(1)
-                description = msi_match.group(2).strip()
-                msi_part = msi_match.group(3)
+                # Group 2 might be description or MSI code depending on pattern used
+                if msi_match.lastindex >= 3:
+                    description = msi_match.group(2).strip()
+                    msi_part = msi_match.group(3)
+                else:
+                    description = ""
+                    msi_part = msi_match.group(2)
 
                 # Look for price information after this MSI code
-                # Search in the text after this match until the next MSI match or end
                 start_pos = msi_match.end()
                 if i + 1 < len(msi_matches):
                     end_pos = msi_matches[i + 1].start()
                 else:
-                    end_pos = min(start_pos + 500, len(text))  # Look ahead max 500 chars
+                    end_pos = min(start_pos + 500, len(text))
 
                 search_text = text[start_pos:end_pos]
 
-                # Try to find price pattern
+                # Find price pattern
                 price_match = price_pattern.search(search_text)
-                if not price_match:
-                    # Try alternative pattern
-                    price_match = alt_price_pattern.search(search_text)
 
                 if price_match:
                     quantity = int(price_match.group(1))
@@ -356,17 +390,18 @@ class MasonrySupplyAgarwallaTemplate(BaseTemplate):
                         'hs_code': '7325.10.00',
                     }
 
-                    # Deduplication key
                     item_key = f"{msi_part}_{quantity}_{total_price}"
 
                     if item_key not in seen_items:
                         seen_items.add(item_key)
                         line_items.append(item)
+                        print(f"[MasonrySupplyAgarwalla] Extracted: {msi_part} qty={quantity} price={total_price}")
 
             except (IndexError, AttributeError, ValueError) as e:
+                print(f"[MasonrySupplyAgarwalla] Error processing match: {e}")
                 continue
 
-        print(f"[MasonrySupplyAgarwalla] Found {len(msi_matches)} MSI codes, extracted {len(line_items)} items")
+        print(f"[MasonrySupplyAgarwalla] Total: Found {len(msi_matches)} MSI codes, extracted {len(line_items)} items")
 
         # Convert MSI part numbers to Sigma part numbers
         line_items = self.convert_to_sigma_parts(line_items)
