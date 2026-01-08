@@ -4330,32 +4330,51 @@ class TariffMill(QMainWindow):
 
         # Button row
         btn_layout = QHBoxLayout()
-        
+
         btn_refresh = QPushButton("Refresh")
         btn_refresh.setStyleSheet("background:#28a745; color:white; font-weight:bold;")
         btn_refresh.clicked.connect(lambda: log_text.setPlainText(logger.get_logs()))
-        
+
         btn_copy = QPushButton("Copy to Clipboard")
         btn_copy.setStyleSheet("background:#0078D7; color:white; font-weight:bold;")
         btn_copy.clicked.connect(lambda: QApplication.clipboard().setText(log_text.toPlainText()))
-        
+
         btn_clear = QPushButton("Clear Log")
         btn_clear.setStyleSheet("background:#dc3545; color:white; font-weight:bold;")
         btn_clear.clicked.connect(lambda: (logger.logs.clear(), log_text.clear()))
-        
+
+        # Auto-refresh checkbox
+        auto_refresh_cb = QCheckBox("Auto-refresh")
+        auto_refresh_cb.setChecked(True)
+        auto_refresh_cb.setToolTip("Uncheck to pause auto-refresh and review the log")
+
         btn_close = QPushButton("Close")
         btn_close.clicked.connect(dialog.accept)
-        
+
         btn_layout.addWidget(btn_refresh)
         btn_layout.addWidget(btn_copy)
         btn_layout.addWidget(btn_clear)
+        btn_layout.addWidget(auto_refresh_cb)
         btn_layout.addStretch()
         btn_layout.addWidget(btn_close)
         layout.addLayout(btn_layout)
 
         # Auto-refresh timer
         refresh_timer = QTimer(dialog)
-        refresh_timer.timeout.connect(lambda: log_text.setPlainText(logger.get_logs()))
+
+        def do_refresh():
+            if auto_refresh_cb.isChecked():
+                # Save scroll position
+                scrollbar = log_text.verticalScrollBar()
+                was_at_bottom = scrollbar.value() >= scrollbar.maximum() - 10
+
+                log_text.setPlainText(logger.get_logs())
+
+                # Auto-scroll to bottom only if user was already at bottom
+                if was_at_bottom:
+                    scrollbar.setValue(scrollbar.maximum())
+
+        refresh_timer.timeout.connect(do_refresh)
         refresh_timer.start(1000)
 
         self.center_dialog(dialog)
