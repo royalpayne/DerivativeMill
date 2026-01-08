@@ -4,9 +4,12 @@ MasonrySupplyAgarwallaTemplate - Template for R. B. Agarwalla & Co. invoices to 
 
 import re
 import sqlite3
+import logging
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 from .base_template import BaseTemplate
+
+logger = logging.getLogger(__name__)
 
 
 def get_sigma_part_number(msi_part: str, db_path: Path) -> Optional[str]:
@@ -142,6 +145,7 @@ def _calculate_similarity(s1: str, s2: str) -> float:
     """
     Calculate similarity between two strings using multiple methods.
     Returns a score between 0.0 and 1.0.
+    Optimized for MSI-to-Sigma part number matching.
     """
     # Exact match
     if s1 == s2:
@@ -162,6 +166,16 @@ def _calculate_similarity(s1: str, s2: str) -> float:
     if s1_clean in s2_clean or s2_clean in s1_clean:
         return 0.85
 
+    # Strip all non-alphanumeric and compare
+    s1_stripped = re.sub(r'[^A-Z0-9]', '', s1)
+    s2_stripped = re.sub(r'[^A-Z0-9]', '', s2)
+
+    if s1_stripped == s2_stripped:
+        return 0.92
+
+    if s1_stripped in s2_stripped or s2_stripped in s1_stripped:
+        return 0.82
+
     # Numeric portion match (for codes like 840.03, 2436, etc.)
     nums1 = re.findall(r'\d+', s1)
     nums2 = re.findall(r'\d+', s2)
@@ -169,6 +183,11 @@ def _calculate_similarity(s1: str, s2: str) -> float:
     if nums1 and nums2:
         # Check if main numeric codes match
         if nums1[0] == nums2[0]:
+            # Also check if there's letter prefix match
+            prefix1 = re.match(r'^[A-Z]+', s1_clean)
+            prefix2 = re.match(r'^[A-Z]+', s2_clean)
+            if prefix1 and prefix2 and prefix1.group() == prefix2.group():
+                return 0.88  # Strong match: same prefix and number
             return 0.8
         # Check if any significant numbers match
         common_nums = set(nums1) & set(nums2)
@@ -292,116 +311,85 @@ class MasonrySupplyAgarwallaTemplate(BaseTemplate):
         #
         # OCR may have issues with brackets - try multiple bracket-like characters
 
-        print(f"[MasonrySupplyAgarwalla] Processing text of length {len(text)}")
+        logger.info(f"[MasonrySupplyAgarwalla] Processing text of length {len(text)}")
 
-        # Debug: Check for bracket patterns in text
-        bracket_count = text.count('[') + text.count(']')
-        paren_count = text.count('(') + text.count(')')
-        print(f"[MasonrySupplyAgarwalla] Found {bracket_count} brackets, {paren_count} parentheses")
-
-        # Try multiple bracket variations due to OCR issues
-        # Brackets may be: [] or () or even {} or misread entirely
-        bracket_pairs = [
-            (r'\[', r'\]'),      # Standard brackets
-            (r'\(', r'\)'),      # Parentheses
-            (r'\{', r'\}'),      # Curly braces
-            (r'\[', r'\)'),      # Mixed
-            (r'\(', r'\]'),      # Mixed
-        ]
+        # OCR often misreads brackets as letters. The actual format from PDF is:
+        # [MSPART-CODE] QTY RATE AMOUNT
+        # But OCR renders [MS... as lMs... or IMS... (bracket becomes I or l)
+        #
+        # Examples from actual OCR output:
+        # - [MSMBX-1118-C-RD] 52 17.760 923.52
+        # - lMs840.03El 8 188.560 1,508.48
+        # - IMSCB,74] 32 190.650 6,100.80
+        #
+        # We only need: MSI part number, quantity, total price (and invoice number from header)
 
         msi_matches = []
 
-        for open_b, close_b in bracket_pairs:
-            # Pattern: PO_DATE ... [MSI_PART_CODE]
-            # MSI codes typically start with MS and contain letters, numbers, dashes
-            msi_pattern = re.compile(
-                r'(20\d{2}-\d{4}(?:-NP)?)\s+'           # PO date (2025-0429)
-                r'(.+?)'                                  # Description (non-greedy)
-                + open_b +                                # Open bracket
-                r'(MS[A-Z0-9\.\-/]+)'                     # MSI Part code (starts with MS)
-                + close_b,                                # Close bracket
-                re.IGNORECASE
-            )
-            matches = list(msi_pattern.finditer(text))
-            if matches:
-                print(f"[MasonrySupplyAgarwalla] Found {len(matches)} MSI codes with bracket pattern {open_b}...{close_b}")
-                msi_matches = matches
-                break
-
-        # If no bracket patterns found, try finding MSI codes without brackets
-        # They might appear as: PO_DATE DESCRIPTION MS_CODE SHIPPER_CODE QTY RATE AMOUNT
-        if not msi_matches:
-            print("[MasonrySupplyAgarwalla] No bracketed MSI codes found, trying alternative pattern")
-            # Look for MS-prefixed codes that appear near PO dates
-            # Pattern: Find lines with PO date and look for MS codes
-            alt_pattern = re.compile(
-                r'(20\d{2}-\d{4}(?:-NP)?)\s+'           # PO date
-                r'[^\n]*?'                               # Any text on same conceptual line
-                r'\b(MS[A-Z0-9\.\-/]{3,})\b',           # MSI Part code (MS followed by 3+ chars)
-                re.IGNORECASE
-            )
-            msi_matches = list(alt_pattern.finditer(text))
-            if msi_matches:
-                print(f"[MasonrySupplyAgarwalla] Found {len(msi_matches)} MSI codes with alternative pattern")
-
-        # Price pattern: QTY RATE AMOUNT at end of line/section
-        price_pattern = re.compile(
+        # Pattern: Look for MSI codes followed by QTY RATE AMOUNT
+        # MSI codes start with [ or l or I (OCR'd bracket), then MS...
+        msi_pattern = re.compile(
+            r'[lI\[\(]\s*'                             # Opening bracket (OCR'd as l, I, [, or ()
+            r'(MS[A-Z0-9\.\-/,]+)'                     # MSI Part code (starts with MS)
+            r'[\]lI1\)]?\s+'                           # Optional closing bracket
             r'(\d+)\s+'                                # Quantity
-            r'([\d,]+\.\d{2,3})\s+'                   # Unit price
-            r'([\d,]+\.\d{2})',                       # Total price
+            r'([\d,]+\.\d{2,3})\s+'                    # Unit price
+            r'([\d,]+\.\d{2})',                        # Total price
             re.IGNORECASE
         )
 
+        msi_matches = list(msi_pattern.finditer(text))
+
+        if msi_matches:
+            logger.info(f"[MasonrySupplyAgarwalla] Found {len(msi_matches)} items with MSI pattern")
+        else:
+            logger.info("[MasonrySupplyAgarwalla] No MSI codes found with primary pattern")
+
+        # Process matches (4 groups: msi, qty, rate, amount)
         for i, msi_match in enumerate(msi_matches):
             try:
-                po_date = msi_match.group(1)
-                # Group 2 might be description or MSI code depending on pattern used
-                if msi_match.lastindex >= 3:
-                    description = msi_match.group(2).strip()
-                    msi_part = msi_match.group(3)
-                else:
-                    description = ""
-                    msi_part = msi_match.group(2)
+                msi_part = msi_match.group(1)
+                quantity = int(msi_match.group(2))
+                unit_price = msi_match.group(3).replace(',', '')
+                total_price = msi_match.group(4).replace(',', '')
 
-                # Look for price information after this MSI code
-                start_pos = msi_match.end()
-                if i + 1 < len(msi_matches):
-                    end_pos = msi_matches[i + 1].start()
-                else:
-                    end_pos = min(start_pos + 500, len(text))
+                # Clean up MSI part code - fix OCR artifacts
+                # 1. Remove trailing characters that are OCR'd brackets
+                msi_part = re.sub(r'[lI1]$', '', msi_part)
+                # 2. Replace commas with hyphens (OCR often reads - as ,)
+                msi_part = msi_part.replace(',', '-')
+                # 3. Replace lowercase 's' at end of numbers with '5' (OCR error)
+                msi_part = re.sub(r'(\d)s\b', r'\g<1>5', msi_part)
+                # 4. Replace 'x' with 'X' for consistency
+                msi_part = msi_part.replace('x', 'X')
+                # 5. Replace '.s' with '.5' (common OCR error for decimals)
+                msi_part = msi_part.replace('.s', '.5')
+                # 6. Convert to uppercase for consistency
+                msi_part = msi_part.upper()
+                # 7. Fix common OCR patterns: rD -> RD, wH -> WH, etc.
+                msi_part = re.sub(r'([A-Z])([a-z])', lambda m: m.group(1) + m.group(2).upper(), msi_part)
 
-                search_text = text[start_pos:end_pos]
+                item = {
+                    'part_number': msi_part,
+                    'quantity': quantity,
+                    'total_price': float(total_price),
+                    'unit_price': unit_price,
+                    'country_origin': 'INDIA',
+                    'hs_code': '7325.10.00',
+                }
 
-                # Find price pattern
-                price_match = price_pattern.search(search_text)
+                item_key = f"{msi_part}_{quantity}_{total_price}"
 
-                if price_match:
-                    quantity = int(price_match.group(1))
-                    unit_price = price_match.group(2).replace(',', '')
-                    total_price = price_match.group(3).replace(',', '')
-
-                    item = {
-                        'part_number': msi_part,
-                        'quantity': quantity,
-                        'total_price': float(total_price),
-                        'po_date': po_date,
-                        'unit_price': unit_price,
-                        'country_origin': 'INDIA',
-                        'hs_code': '7325.10.00',
-                    }
-
-                    item_key = f"{msi_part}_{quantity}_{total_price}"
-
-                    if item_key not in seen_items:
-                        seen_items.add(item_key)
-                        line_items.append(item)
-                        print(f"[MasonrySupplyAgarwalla] Extracted: {msi_part} qty={quantity} price={total_price}")
+                if item_key not in seen_items:
+                    seen_items.add(item_key)
+                    line_items.append(item)
+                    logger.info(f"[MasonrySupplyAgarwalla] Extracted: {msi_part} qty={quantity} price={total_price}")
 
             except (IndexError, AttributeError, ValueError) as e:
-                print(f"[MasonrySupplyAgarwalla] Error processing match: {e}")
+                logger.info(f"[MasonrySupplyAgarwalla] Error processing match: {e}")
                 continue
 
-        print(f"[MasonrySupplyAgarwalla] Total: Found {len(msi_matches)} MSI codes, extracted {len(line_items)} items")
+        logger.info(f"[MasonrySupplyAgarwalla] Total: Found {len(msi_matches)} matches, extracted {len(line_items)} items")
 
         # Convert MSI part numbers to Sigma part numbers
         line_items = self.convert_to_sigma_parts(line_items)
@@ -488,21 +476,37 @@ class MasonrySupplyAgarwallaTemplate(BaseTemplate):
 
                 if not matched:
                     # No match in msi_sigma_parts - try fuzzy matching against parts_master
-                    # This handles cases where the Sigma part exists in parts_master but
-                    # isn't in the MSI-to-Sigma lookup table yet
-                    fuzzy_result = fuzzy_match_part_number(msi_part, db_path, threshold=0.75)
+                    # Use lower threshold (0.5) to catch more potential matches
+                    fuzzy_result = fuzzy_match_part_number(msi_part, db_path, threshold=0.5)
                     if fuzzy_result:
                         matched_part, score = fuzzy_result
                         item['part_number'] = matched_part
                         item['sigma_matched'] = True
                         item['fuzzy_match_score'] = score
                         matched = True
-                        print(f"MSI->Sigma: Fuzzy matched '{msi_part}' to '{matched_part}' (score: {score:.2f})")
+                        logger.info(f"MSI->Sigma: Fuzzy matched '{msi_part}' to '{matched_part}' (score: {score:.2f})")
+
+                if not matched:
+                    # Try matching by extracting core part identifier
+                    # MSI format: MSMBX-1324-C-RD -> try matching "MBX-1324" or "1324"
+                    core_match = re.search(r'MS([A-Z]+)-?(\d+)', msi_upper)
+                    if core_match:
+                        prefix = core_match.group(1)  # e.g., "MBX"
+                        number = core_match.group(2)  # e.g., "1324"
+                        # Search for parts containing this number
+                        fuzzy_result = fuzzy_match_part_number(f"{prefix}-{number}", db_path, threshold=0.5)
+                        if fuzzy_result:
+                            matched_part, score = fuzzy_result
+                            item['part_number'] = matched_part
+                            item['sigma_matched'] = True
+                            item['fuzzy_match_score'] = score
+                            matched = True
+                            logger.info(f"MSI->Sigma: Core matched '{msi_part}' to '{matched_part}' (score: {score:.2f})")
 
                 if not matched:
                     # No match found - keep original part number but log warning
                     item['sigma_matched'] = False
-                    print(f"MSI->Sigma WARNING: No Sigma match found for '{msi_part}' - using original")
+                    logger.warning(f"MSI->Sigma: No match found for '{msi_part}' - using original")
 
         return line_items
 
