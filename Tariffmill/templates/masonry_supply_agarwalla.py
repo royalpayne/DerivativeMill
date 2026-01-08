@@ -287,11 +287,13 @@ class MasonrySupplyAgarwallaTemplate(BaseTemplate):
         # Pattern with part code in brackets
 
         # Pattern 1: Lines with [PART_CODE] format
-        # PO_DATE DESCRIPTION [PART_CODE] QTY RATE AMOUNT
+        # PO_DATE DESCRIPTION [MSI_PART_CODE] SHIPPER_CODE QTY RATE AMOUNT
+        # The shipper code (e.g., D4592-WM-TC, N1509-100) appears after brackets and before quantity
         bracket_pattern = re.compile(
             r'(20\d{2}-\d{4}(?:-NP)?)\s+'          # PO date (2025-0725 or 2025-0725-NP)
             r'(.+?)\s*'                             # Description (non-greedy)
-            r'\[([A-Z0-9\.\-/]+)\]\s+'             # Part code in brackets [MS840.03F]
+            r'\[([A-Z0-9\.\-/]+)\]\s*'             # MSI Part code in brackets [MSMBX-1118-C-RD]
+            r'[A-Z0-9\-]+(?:-[A-Z0-9]+)*\s+'       # Shipper code (D4592-WM-TC, N1509-100) - skip this
             r'(\d+)\s+'                             # Quantity
             r'([\d,]+\.\d+)\s+'                    # Unit price
             r'([\d,]+\.\d+)',                       # Total price
