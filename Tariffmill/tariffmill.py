@@ -1539,7 +1539,7 @@ def get_theme_color_key(base_key, theme_name=None):
         Theme-specific key (e.g., 'preview_steel_color_fusion_dark')
     """
     if theme_name is None:
-        theme_name = get_user_setting('theme', 'Fusion (Light)')
+        theme_name = get_user_setting('theme', 'Muted Cyan')
     # Normalize theme name for use as key suffix
     theme_suffix = theme_name.lower().replace(' ', '_').replace('(', '').replace(')', '')
     return f"{base_key}_{theme_suffix}"
@@ -3865,7 +3865,7 @@ class TariffMill(QMainWindow):
     
     def apply_saved_theme(self):
         """Load and apply the saved theme preference on startup (per-user setting)"""
-        theme = get_user_setting('theme', 'Fusion (Light)')
+        theme = get_user_setting('theme', 'Muted Cyan')
         self.apply_theme(theme)
 
     def apply_saved_font_size(self):
@@ -3921,13 +3921,13 @@ class TariffMill(QMainWindow):
         # Create scroll area for left side content
         left_scroll = QScrollArea()
         left_scroll.setWidgetResizable(True)
-        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)  # Allow horizontal scroll if content is wider
         left_scroll.setFrameShape(QFrame.NoFrame)
 
         left_scroll_widget = QWidget()
         left_side = QVBoxLayout(left_scroll_widget)
-        left_side.setSpacing(10)
-        left_side.setContentsMargins(10, 10, 10, 10)
+        left_side.setSpacing(8)
+        left_side.setContentsMargins(8, 8, 8, 8)
 
         # INPUT FILES LIST — now inside Shipment File group
         self.input_files_list = AutoSelectListWidget()
@@ -3939,6 +3939,9 @@ class TariffMill(QMainWindow):
         self.input_files_list.setFocusPolicy(Qt.StrongFocus)
         # Limit height to show ~4-5 files to save vertical space
         self.input_files_list.setFixedHeight(75)
+        # Enable horizontal scrollbar for long filenames
+        self.input_files_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.input_files_list.setTextElideMode(Qt.ElideMiddle)  # Show start and end of long names
         self.refresh_input_btn = QPushButton("Refresh")
         self.refresh_input_btn.setFixedHeight(25)
         self.refresh_input_btn.clicked.connect(self.refresh_input_files)
@@ -4011,12 +4014,11 @@ class TariffMill(QMainWindow):
 
         # Invoice check label and Edit Values button
         self.invoice_check_label = QLabel("No file loaded")
-        self.invoice_check_label.setWordWrap(False)  # Don't wrap - keep invoice total on one line
+        self.invoice_check_label.setWordWrap(True)  # Allow wrapping for long status text
         font_size = get_user_setting_int('font_size', 9)
         self.invoice_check_label.setStyleSheet(f"font-size: {font_size}pt;")
         self.invoice_check_label.setAlignment(Qt.AlignCenter)
-        self.invoice_check_label.setMinimumWidth(200)  # Wider minimum to fit invoice totals
-        self.invoice_check_label.setMaximumWidth(280)  # Allow more space for larger amounts
+        self.invoice_check_label.setMinimumWidth(150)  # Reasonable minimum
 
         vbox_check = QVBoxLayout()
         vbox_check.setSpacing(12)
@@ -4080,9 +4082,9 @@ class TariffMill(QMainWindow):
         left_side.addWidget(file_group)
         left_side.addWidget(values_group)
 
-        # ACTIONS GROUP — Process/Export + Reprocess + Clear All buttons
+        # ACTIONS GROUP — Process/Export + Reprocess + Add Missing + Clear All buttons (2x2 grid)
         actions_group = QGroupBox("Actions")
-        actions_layout = QHBoxLayout()
+        actions_layout = QGridLayout()
         actions_layout.setContentsMargins(5, 5, 5, 5)
         actions_layout.setSpacing(5)
 
@@ -4114,10 +4116,11 @@ class TariffMill(QMainWindow):
         self.clear_btn.setStyleSheet(self.get_button_style("danger"))
         self.clear_btn.clicked.connect(self.clear_all)
 
-        actions_layout.addWidget(self.process_btn)
-        actions_layout.addWidget(self.reprocess_btn)
-        actions_layout.addWidget(self.add_missing_parts_btn)
-        actions_layout.addWidget(self.clear_btn)
+        # 2x2 grid layout for better fit at narrow widths
+        actions_layout.addWidget(self.process_btn, 0, 0)
+        actions_layout.addWidget(self.reprocess_btn, 0, 1)
+        actions_layout.addWidget(self.add_missing_parts_btn, 1, 0)
+        actions_layout.addWidget(self.clear_btn, 1, 1)
         actions_group.setLayout(actions_layout)
         left_side.addWidget(actions_group)
 
@@ -4134,6 +4137,9 @@ class TariffMill(QMainWindow):
         self.exports_list.setFocusPolicy(Qt.StrongFocus)
         # Limit height to save vertical space
         self.exports_list.setFixedHeight(75)
+        # Enable horizontal scrollbar for long filenames
+        self.exports_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.exports_list.setTextElideMode(Qt.ElideMiddle)  # Show start and end of long names
         exports_layout.addWidget(self.exports_list)
 
         self.refresh_exports_btn = QPushButton("Refresh")
@@ -4161,9 +4167,9 @@ class TariffMill(QMainWindow):
         left_outer_layout.addWidget(left_scroll)
 
         # Set minimum width for left controls - allow user to resize wider via splitter
-        left_outer_box.setMinimumWidth(320)
-        # Use size policy to allow proper resizing - Preferred allows splitter to work
-        left_outer_box.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        left_outer_box.setMinimumWidth(280)  # Allow narrower minimum
+        # Use size policy to allow proper resizing - Minimum allows shrinking, splitter controls actual size
+        left_outer_box.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Expanding)
 
         # Add left_outer_box to splitter
         splitter.addWidget(left_outer_box)
@@ -5228,7 +5234,7 @@ class TariffMill(QMainWindow):
         theme_combo.addItems(["System Default", "Fusion (Light)", "macOS", "Fusion (Dark)", "Ocean", "Light Cyan", "Muted Cyan"])
         
         # Load saved theme preference from per-user settings
-        saved_theme = get_user_setting('theme', 'Fusion (Light)')
+        saved_theme = get_user_setting('theme', 'Muted Cyan')
         index = theme_combo.findText(saved_theme)
         if index >= 0:
             # Block signals to prevent double-applying theme
@@ -8259,7 +8265,7 @@ class TariffMill(QMainWindow):
         """
         if color_hex is None:
             # Get default based on current theme
-            theme = get_user_setting('theme', 'Fusion (Light)')
+            theme = get_user_setting('theme', 'Muted Cyan')
             if 'ocean' in theme.lower():
                 default_highlight = '#1e3c64'
             elif 'dark' in theme.lower():

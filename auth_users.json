@@ -26,24 +26,36 @@
             "auth_type": "windows"
         },
         "DMUSA\\tliles": {
-            "role": "user",
+            "role": "division_admin",
             "name": "Toby Liles",
-            "auth_type": "windows"
+            "auth_type": "windows",
+            "default_division": 1,
+            "managed_divisions": []
         },
         "DMUSA\\bawedward": {
-            "role": "user",
+            "role": "division_admin",
             "name": "Bob Wedward",
-            "auth_type": "windows"
+            "auth_type": "windows",
+            "default_division": 1,
+            "managed_divisions": []
         },
         "DMUSA\\jktaylor": {
             "role": "user",
             "name": "Jhossy Taylor",
-            "auth_type": "windows"
+            "auth_type": "windows",
+            "default_division": 1
         },
         "DMUSA\\aramon": {
             "role": "user",
             "name": "Anthony Ramon",
-            "auth_type": "windows"
+            "auth_type": "windows",
+            "default_division": 1
+        },
+        "DMUSA\\hmmcginnis": {
+            "role": "user",
+            "name": "Holly McGinnis",
+            "auth_type": "windows",
+            "default_division": 1
         }
     }
 }
